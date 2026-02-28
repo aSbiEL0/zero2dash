@@ -11,6 +11,26 @@ Minimal framebuffer-based Pi-hole dashboard for Raspberry Pi (320×240 SPI TFT).
 
 ---
 
+## Suggested project structure
+
+```text
+zero2dash/
+├── scripts/
+│   ├── pihole-display-pre.sh
+│   ├── piholestats_v1.0.py
+│   ├── piholestats_v1.1.py
+│   ├── piholestats_v1.2.py
+│   └── test_placeholder.py
+├── systemd/
+│   ├── pihole-display.service
+│   ├── pihole-display-dark.service
+│   ├── day.timer
+│   └── night.timer
+└── README.md
+```
+
+---
+
 ## Requirements
 
 * Raspberry Pi OS (SPI enabled)
@@ -38,15 +58,25 @@ Reboot → display active on `/dev/fb1`.
 ### 2. Install Python dependency
 
 ```bash
-sudo apt install -y python3-pip
-pip3 install pillow
+sudo apt install -y python3-pip python3-pil
+```
+
+---
+
+### 3. Deploy project files
+
+```bash
+sudo mkdir -p /opt/zero2dash
+sudo cp -r . /opt/zero2dash/
+sudo chmod +x /opt/zero2dash/scripts/pihole-display-pre.sh
+sudo chmod +x /opt/zero2dash/scripts/test_placeholder.py
 ```
 
 ---
 
 ## Configure
 
-Edit in `piholestats_v1.2.py`:
+Edit in `/opt/zero2dash/scripts/piholestats_v1.2.py`:
 
 * `PIHOLE_HOST`
 * `PIHOLE_PASSWORD`
@@ -57,7 +87,7 @@ Edit in `piholestats_v1.2.py`:
 ## Run via systemd
 
 ```bash
-sudo cp pihole-display*.service /etc/systemd/system/
+sudo cp /opt/zero2dash/systemd/pihole-display*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now pihole-display.service
 ```
@@ -66,6 +96,22 @@ Check logs:
 
 ```bash
 journalctl -u pihole-display.service -n 50 --no-pager
+```
+
+---
+
+## Placeholder test script
+
+To verify basic rendering logic:
+
+```bash
+python3 /opt/zero2dash/scripts/test_placeholder.py --fbdev /dev/fb1
+```
+
+Or generate a local preview without touching framebuffer:
+
+```bash
+python3 /opt/zero2dash/scripts/test_placeholder.py --output /tmp/test.png --no-framebuffer
 ```
 
 ---
