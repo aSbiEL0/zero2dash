@@ -148,7 +148,7 @@ def detect_touch_width(device: str, default_width: int) -> int:
 
                 if max_val > min_val:
                     width = max_val - min_val + 1
-                    return max(default_width, width)
+                    return max(100, width)
     except Exception as exc:
         print(f"[rotator] Touch width detection failed ({device}): {exc}", flush=True)
     return default_width
