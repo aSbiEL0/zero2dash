@@ -203,6 +203,12 @@ def main():
     except Exception:
         pass
 
+    hr = time.localtime().tm_hour
+    active = (ACTIVE_HOURS[0] <= hr <= ACTIVE_HOURS[1])
+    temp_c = read_temp_c()
+    uptime = read_uptime_str()
+    fb_write(draw_frame(cached, temp_c, uptime, active))
+
     while True:
         hr = time.localtime().tm_hour
         active = (ACTIVE_HOURS[0] <= hr <= ACTIVE_HOURS[1])

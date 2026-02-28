@@ -26,7 +26,7 @@ from pathlib import Path
 
 
 DEFAULT_PAGES_DIR = "scripts"
-DEFAULT_PAGE_GLOB = "*.py"
+DEFAULT_PAGE_GLOB = "piholestats_v*.py"
 DEFAULT_EXCLUDE_PATTERNS = ["pihole-display-dark*.py"]
 DEFAULT_ROTATE_SECS = 30
 SHUTDOWN_WAIT_SECS = 5
