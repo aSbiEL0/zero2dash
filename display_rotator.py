@@ -14,6 +14,7 @@ from __future__ import annotations
 import fcntl
 import glob
 import os
+import re
 import queue
 import select
 import signal
@@ -33,6 +34,7 @@ SHUTDOWN_WAIT_SECS = 5
 DEFAULT_FBDEV = "/dev/fb1"
 DEFAULT_WIDTH = 320
 DOUBLE_TAP_WINDOW_SECS = 0.35
+TAP_DEBOUNCE_SECS = 0.20
 
 # linux/input-event-codes.h
 EV_SYN = 0x00
@@ -40,6 +42,7 @@ EV_KEY = 0x01
 EV_ABS = 0x03
 ABS_X = 0x00
 ABS_MT_POSITION_X = 0x35
+ABS_MT_TRACKING_ID = 0x39
 BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 
@@ -53,16 +56,64 @@ class ScreenPower:
     def __init__(self, fbdev: str) -> None:
         self.fbdev = fbdev
         self.screen_on = True
+        self._fb_blank_supported = True
+
+    def _toggle_via_fb_blank(self, target: int) -> bool:
+        if not self._fb_blank_supported:
+            return False
+        try:
+            with open(self.fbdev, "rb", buffering=0) as fb:
+                fcntl.ioctl(fb.fileno(), FBIOBLANK, target)
+            return True
+        except OSError as exc:
+            # Some framebuffer drivers (for example fbtft) don't support FBIOBLANK.
+            if exc.errno == 22:
+                self._fb_blank_supported = False
+            raise
+
+    def _toggle_via_sysfs_blank(self, screen_on: bool) -> bool:
+        fb_name = Path(self.fbdev).name
+        blank_path = Path("/sys/class/graphics") / fb_name / "blank"
+        if not blank_path.exists():
+            return False
+        try:
+            blank_path.write_text("0" if screen_on else "1", encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _toggle_via_vcgencmd(screen_on: bool) -> bool:
+        state = "1" if screen_on else "0"
+        cmd = ["vcgencmd", "display_power", state]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            return False
+        return result.returncode == 0
 
     def toggle(self) -> None:
         target = FB_BLANK_POWERDOWN if self.screen_on else FB_BLANK_UNBLANK
         try:
-            with open(self.fbdev, "rb", buffering=0) as fb:
-                fcntl.ioctl(fb.fileno(), FBIOBLANK, target)
+            toggled = self._toggle_via_fb_blank(target)
+        except Exception as exc:
+            toggled = False
+            print(f"[rotator] FBIOBLANK toggle unavailable on {self.fbdev}: {exc}", flush=True)
+
+        if not toggled:
+            toggled = self._toggle_via_sysfs_blank(screen_on=not self.screen_on)
+
+        if not toggled:
+            toggled = self._toggle_via_vcgencmd(screen_on=not self.screen_on)
+
+        if toggled:
             self.screen_on = not self.screen_on
             print(f"[rotator] Screen {'ON' if self.screen_on else 'OFF'}", flush=True)
-        except Exception as exc:
-            print(f"[rotator] Screen toggle failed on {self.fbdev}: {exc}", flush=True)
+        else:
+            print(
+                f"[rotator] Screen toggle failed on {self.fbdev}: no supported power control backend",
+                flush=True,
+            )
 
 
 def parse_exclude_patterns() -> list[str]:
@@ -126,39 +177,75 @@ def parse_width() -> int:
     return max(100, value)
 
 
-def detect_touch_width(device: str, default_width: int) -> int:
-    absinfo_path = Path("/sys/class/input") / Path(device).name / "device" / "absinfo"
+def parse_tap_debounce() -> float:
+    raw = os.environ.get("ROTATOR_TAP_DEBOUNCE_SECS", str(TAP_DEBOUNCE_SECS)).strip()
     try:
-        with open(absinfo_path) as absinfo:
-            for line in absinfo:
-                code_str, _, payload = line.partition(":")
-                if not payload:
-                    continue
-                try:
-                    raw_code = code_str.strip().lower()
-                    code = int(raw_code, 16)
-                except ValueError:
+        value = float(raw)
+    except ValueError:
+        value = TAP_DEBOUNCE_SECS
+    return max(0.0, value)
+
+
+def _candidate_absinfo_paths(device: str) -> list[Path]:
+    event_name = Path(device).name
+    base = Path("/sys/class/input") / event_name
+    candidates = [
+        base / "device" / "absinfo",
+        base / "device" / "device" / "absinfo",
+    ]
+    try:
+        real = base.resolve()
+        candidates.extend([
+            real / "device" / "absinfo",
+            real / "absinfo",
+        ])
+    except Exception:
+        pass
+
+    uniq: list[Path] = []
+    seen: set[Path] = set()
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
+
+
+def detect_touch_width(device: str, default_width: int) -> int:
+    for absinfo_path in _candidate_absinfo_paths(device):
+        try:
+            with open(absinfo_path) as absinfo:
+                for line in absinfo:
+                    code_str, _, payload = line.partition(":")
+                    if not payload:
+                        continue
                     try:
-                        code = int(code_str.strip(), 0)
+                        raw_code = code_str.strip().lower()
+                        code = int(raw_code, 16)
+                    except ValueError:
+                        try:
+                            code = int(code_str.strip(), 0)
+                        except ValueError:
+                            continue
+                    if code not in (ABS_X, ABS_MT_POSITION_X):
+                        continue
+
+                    parts = payload.strip().split()
+                    if len(parts) < 3:
+                        continue
+                    try:
+                        min_val = int(parts[1])
+                        max_val = int(parts[2])
                     except ValueError:
                         continue
-                if code not in (ABS_X, ABS_MT_POSITION_X):
-                    continue
 
-                parts = payload.strip().split()
-                if len(parts) < 3:
-                    continue
-                try:
-                    min_val = int(parts[1])
-                    max_val = int(parts[2])
-                except ValueError:
-                    continue
+                    if max_val > min_val:
+                        width = max_val - min_val + 1
+                        return max(100, width)
+        except Exception:
+            continue
 
-                if max_val > min_val:
-                    width = max_val - min_val + 1
-                    return max(100, width)
-    except Exception as exc:
-        print(f"[rotator] Touch width detection failed ({device}): {exc}", flush=True)
+    print(f"[rotator] Touch width detection failed ({device}); using width {default_width}", flush=True)
     return default_width
 
 
@@ -195,15 +282,65 @@ def launch_page(script_path: str) -> subprocess.Popen[bytes]:
     return subprocess.Popen([sys.executable, "-u", script_path])
 
 
+def _has_touch_abs(event_path: str) -> bool:
+    caps_path = Path("/sys/class/input") / Path(event_path).name / "device" / "capabilities" / "abs"
+    try:
+        raw = caps_path.read_text(encoding="utf-8").strip()
+        mask = int(raw, 16)
+    except Exception:
+        return False
+
+    return bool(mask & (1 << ABS_X) or mask & (1 << ABS_MT_POSITION_X))
+
+
+def _touch_priority(event_path: str) -> tuple[int, int]:
+    base = Path("/sys/class/input") / Path(event_path).name / "device"
+    score = 0
+    try:
+        name = (base / "name").read_text(encoding="utf-8").strip().lower()
+        if "touch" in name:
+            score += 4
+    except Exception:
+        pass
+
+    has_abs = _has_touch_abs(event_path)
+    if has_abs:
+        score += 3
+
+    keycaps = Path("/sys/class/input") / Path(event_path).name / "device" / "capabilities" / "key"
+    try:
+        keymask = int(keycaps.read_text(encoding="utf-8").strip(), 16)
+        if keymask & (1 << BTN_TOUCH):
+            score += 3
+    except Exception:
+        pass
+
+    if not has_abs:
+        score -= 5
+
+    match = re.search(r"event(\d+)$", event_path)
+    index = int(match.group(1)) if match else 999
+    return score, -index
+
+
 def select_touch_device() -> str | None:
     forced = os.environ.get("ROTATOR_TOUCH_DEVICE", "").strip()
     if forced:
         return forced if Path(forced).exists() else None
+
     candidates = sorted(glob.glob("/dev/input/event*"))
-    return candidates[0] if candidates else None
+    if not candidates:
+        return None
+
+    ranked = sorted(((path, _touch_priority(path)) for path in candidates), key=lambda item: item[1], reverse=True)
+    best_path, best_score = ranked[0]
+    if best_score[0] <= 0:
+        print("[rotator] No suitable touch input device detected; touch controls disabled.", flush=True)
+        return None
+    return best_path
 
 
-def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_width: int) -> None:
+def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_width: int, tap_debounce_secs: float) -> None:
     device = select_touch_device()
     if not device:
         print("[rotator] No touch device found; touch controls disabled.", flush=True)
@@ -214,11 +351,20 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
 
     last_x = device_touch_width // 2
     touch_down = False
-    last_tap_ts = 0.0
+    pending_tap: tuple[float, int] | None = None
+    last_emit = 0.0
 
     try:
         with open(device, "rb", buffering=0) as fd:
             while not stop_evt.is_set():
+                if pending_tap is not None:
+                    tap_ts, tap_x = pending_tap
+                    if time.monotonic() - tap_ts > DOUBLE_TAP_WINDOW_SECS:
+                        if (time.monotonic() - last_emit) >= tap_debounce_secs:
+                            cmd_q.put("PREV" if tap_x < (device_touch_width // 2) else "NEXT")
+                            last_emit = time.monotonic()
+                        pending_tap = None
+
                 readable, _, _ = select.select([fd], [], [], 0.2)
                 if not readable:
                     continue
@@ -237,12 +383,26 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
                     elif ev_value == 0 and touch_down:
                         touch_down = False
                         now = time.monotonic()
-                        if now - last_tap_ts <= DOUBLE_TAP_WINDOW_SECS:
-                            cmd_q.put("TOGGLE_SCREEN")
-                            last_tap_ts = 0.0
+                        if pending_tap is not None and now - pending_tap[0] <= DOUBLE_TAP_WINDOW_SECS:
+                            if (time.monotonic() - last_emit) >= tap_debounce_secs:
+                                cmd_q.put("TOGGLE_SCREEN")
+                                last_emit = time.monotonic()
+                            pending_tap = None
                         else:
-                            cmd_q.put("PREV" if last_x < (device_touch_width // 2) else "NEXT")
-                            last_tap_ts = now
+                            pending_tap = (now, last_x)
+                elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                    if ev_value == -1 and touch_down:
+                        touch_down = False
+                        now = time.monotonic()
+                        if pending_tap is not None and now - pending_tap[0] <= DOUBLE_TAP_WINDOW_SECS:
+                            if (time.monotonic() - last_emit) >= tap_debounce_secs:
+                                cmd_q.put("TOGGLE_SCREEN")
+                                last_emit = time.monotonic()
+                            pending_tap = None
+                        else:
+                            pending_tap = (now, last_x)
+                    elif ev_value >= 0:
+                        touch_down = True
                 elif ev_type == EV_SYN:
                     continue
     except Exception as exc:
@@ -253,6 +413,7 @@ def main() -> int:
     base_dir = Path(__file__).resolve().parent
     rotate_secs = parse_rotate_secs()
     touch_width = parse_width()
+    tap_debounce_secs = parse_tap_debounce()
     fbdev = os.environ.get("ROTATOR_FBDEV", DEFAULT_FBDEV)
 
     pages = [
@@ -277,7 +438,7 @@ def main() -> int:
     stop_evt = threading.Event()
     screen = ScreenPower(fbdev)
 
-    worker = threading.Thread(target=touch_worker, args=(cmd_q, stop_evt, touch_width), daemon=True)
+    worker = threading.Thread(target=touch_worker, args=(cmd_q, stop_evt, touch_width, tap_debounce_secs), daemon=True)
     worker.start()
 
     def request_stop(signum: int, _frame: object) -> None:
@@ -302,6 +463,24 @@ def main() -> int:
                     f"[rotator] Page exited early with code {active_child.returncode}: {script}",
                     flush=True,
                 )
+                active_child = None
+                # Keep static pages visible for ROTATOR_SECS even if script exits immediately.
+                while not stop_requested and time.monotonic() < rotate_due:
+                    try:
+                        command = cmd_q.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+
+                    if command == "TOGGLE_SCREEN":
+                        screen.toggle()
+                    elif command == "NEXT":
+                        next_index = (index + 1) % len(pages)
+                        rotate_due = 0
+                        break
+                    elif command == "PREV":
+                        next_index = (index - 1) % len(pages)
+                        rotate_due = 0
+                        break
                 break
 
             if time.monotonic() >= rotate_due:
