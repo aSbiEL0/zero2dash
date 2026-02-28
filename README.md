@@ -12,7 +12,7 @@ zero2dash/
 │   ├── piholestats_v1.2.py
 │   └── test.py
 ├── systemd/
-│   ├── pihole-display.service
+│   ├── display.service
 │   ├── pihole-display-dark.service
 │   ├── day.timer
 │   └── night.timer
@@ -38,18 +38,31 @@ sudo cp -r . /opt/zero2dash/
 sudo chmod +x /opt/zero2dash/scripts/pihole-display-pre.sh
 sudo chmod +x /opt/zero2dash/scripts/test.py
 Configure
-Edit in /opt/zero2dash/scripts/piholestats_v1.2.py:
+Create an environment file and keep secrets out of source control:
+
+cp /opt/zero2dash/.env.example /opt/zero2dash/.env
+chmod 600 /opt/zero2dash/.env
+
+Edit `/opt/zero2dash/.env` and set:
 
 PIHOLE_HOST
 PIHOLE_PASSWORD
 REFRESH_SECS
+ACTIVE_HOURS
 Run via systemd
-sudo cp /opt/zero2dash/systemd/pihole-display*.service /etc/systemd/system/
+If you run scripts manually, load env vars first:
+
+set -a
+source /opt/zero2dash/.env
+set +a
+
+sudo cp /opt/zero2dash/systemd/display.service /etc/systemd/system/
+sudo cp /opt/zero2dash/systemd/pihole-display-dark.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now pihole-display.service
+sudo systemctl enable --now display.service
 Check logs:
 
-journalctl -u pihole-display.service -n 50 --no-pager
+journalctl -u display.service -n 50 --no-pager
 Placeholder test script
 To verify basic rendering logic:
 
