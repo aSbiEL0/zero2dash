@@ -63,40 +63,107 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now display.service
 Check logs:
 
+A lightweight Pi‑hole dashboard designed for small TFT displays (320×240) on a Raspberry Pi. It renders directly to the framebuffer (`/dev/fb1`) without requiring X11 or SDL, making it ideal for headless setups. The project provides a set of dashboard scripts that display Pi‑hole statistics, CPU temperature and device uptime. A companion rotator script allows multiple dashboards to cycle on a timer with simple touch controls for navigation and screen power management.
+
+## Features
+
+- **Direct framebuffer rendering** – uses the Pillow library to draw RGB565 frames directly to `/dev/fb1` with no desktop environment or SDL dependency.
+- **Rotating dashboards** – `display_rotator.py` scans a directory for dashboard scripts and cycles through them on a configurable interval.
+- **Touch navigation** – taps on the left/right side of the screen move to the previous/next dashboard; double‑tapping turns the screen on or off.
+- **Dark and day modes** – separate dashboard scripts and systemd services for day and night display profiles.
+- **Systemd integration** – sample `*.service` and `*.timer` units to start the dashboards on boot and automatically switch between day and night modes.
+- **Test mode** – a `test.py` script renders a placeholder image for quick verification without connecting to the Pi‑hole API.
+
+## Requirements
+
+- Raspberry Pi OS with SPI and the TFT display enabled
+- Python 3
+- [Pillow](https://python-pillow.org/) library
+- `systemd` for service management
+- Pi‑hole v6 API accessible over the network
+
+## Installation
+
+1. **Prepare the TFT display**
+
+   ```sh
+   sudo rm -rf LCD-show
+   git clone https://github.com/goodtft/LCD-show.git
+   cd LCD-show
+   sudo ./LCD24-show
+   # reboot to activate /dev/fb1
+   ```
+
+2. **Install dependencies**
+
+   ```sh
+   sudo apt update
+   sudo apt install -y python3-pip python3-pil
+   ```
+
+3. **Deploy the application**
+
+   ```sh
+   sudo mkdir -p /opt/zero2dash
+   sudo cp -r . /opt/zero2dash/
+   sudo chmod +x /opt/zero2dash/scripts/pihole-display-pre.sh
+   sudo chmod +x /opt/zero2dash/scripts/test.py
+   ```
+
+## Configuration
+
+Edit `scripts/piholestats_v1.2.py` (or the version you use) to point at your Pi‑hole instance:
+
+```python
+PIHOLE_HOST = "192.168.0.x"      # address of your Pi‑hole
+PIHOLE_PASSWORD = "your_password"  # Pi‑hole v6 admin password
+REFRESH_SECS = 3                   # seconds between API updates
+ACTIVE_HOURS = (22, 7)             # hours to run this dark mode dashboard
+```
+
+The `display_rotator.py` script uses environment variables to discover and control dashboards:
+
+- `ROTATOR_PAGES_DIR` – directory containing dashboard scripts (default: `scripts`)
+- `ROTATOR_PAGE_GLOB` – glob pattern for dashboard filenames (default: `piholestats_v*.py`)
+- `ROTATOR_EXCLUDE_PATTERNS` – comma‑separated list of patterns to ignore (default: `pihole-display-dark*.py`)
+- `ROTATOR_SECS` – seconds to show each page before rotating (minimum 5)
+- `ROTATOR_TOUCH_WIDTH` – touch‑sensitive width threshold for navigation
+- `ROTATOR_PAGES` – optional explicit comma‑separated list of scripts to rotate
+
+To experiment locally without a framebuffer, run:
+
+```sh
+python3 scripts/test.py --output /tmp/test.png --no-framebuffer
+```
+
+## Running via systemd
+
+Two service units are provided to run the dashboards:
+
+- **Day display** (`display.service`) – launches `display_rotator.py` and cycles through dashboard pages. A `day.timer` can start this service at 07:00 each day.
+- **Night display** (`pihole-display-dark.service`) – runs the dark‑mode dashboard script. A `night.timer` can start this service at 22:00 each night.
+
+Copy the desired units into `/etc/systemd/system` and enable them:
+
+```sh
+sudo cp /opt/zero2dash/systemd/*.service /etc/systemd/system/
+sudo cp /opt/zero2dash/systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now display.service
+sudo systemctl enable --now day.timer night.timer
+```
+
+Check logs with:
+
+```sh
 journalctl -u display.service -n 50 --no-pager
-Placeholder test script
-To verify basic rendering logic:
+```
 
-python3 /opt/zero2dash/scripts/test.py --fbdev /dev/fb1
-Or generate a local preview without touching framebuffer:
+## Development
 
-python3 /opt/zero2dash/scripts/test.py --output /tmp/test.png --no-framebuffer
-Architecture
-SPI TFT → /dev/fb1 → Python → Pi-hole API
-Notes
-Shows: Total, Blocked, % Blocked, Temp, Uptime
-No hardware backlight control
-Touch not used in UI
-Private project.
+The project is written in Python with an emphasis on readability and minimal dependencies. Dashboard scripts follow a simple pattern: fetch data from the Pi‑hole API, draw onto a PIL `Image`, then write the frame to the framebuffer using the `rgb888_to_rgb565` helper. Additional dashboards can be created by following the structure in `scripts/piholestats_v1.2.py`.
 
-Display rotator configuration
-`display_rotator.py` now supports directory-based page discovery so you do not need to list every script file manually.
-
-Environment variables:
-- `ROTATOR_PAGES_DIR` (default: `scripts`) → directory to scan for pages.
-- `ROTATOR_PAGE_GLOB` (default: `*.py`) → file pattern(s) inside that directory. You can pass a comma-separated list such as `piholestats_v*.py,*-dash.py`.
-- `ROTATOR_EXCLUDE_PATTERNS` (default: `piholestats_v1.2.py`) → comma-separated filename patterns to skip.
-- `ROTATOR_PAGES` → optional legacy explicit page list override.
-
-If you have a dark-mode script such as `pihole-display-dark_v1.2.py`, keep it outside the rotator pages directory or leave it in the directory and rely on `ROTATOR_EXCLUDE_PATTERNS`.
-
-Image background test scripts
-The repository now includes image-only page scripts that can be used while building rotator functionality:
-
-- `scripts/weather-dash.py`
-- `scripts/calendash.py`
-- `scripts/google-photos.py`
-- `scripts/tram-info.py`
+## License
 
 Default backgrounds are loaded from the `images/` directory.
 
