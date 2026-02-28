@@ -91,12 +91,14 @@ def parse_width() -> int:
 
 def resolve_script(path_like: str, base_dir: Path) -> str | None:
     path = Path(path_like)
-    if not path.is_absolute():
-        path = base_dir / path
-    if not path.exists():
-        print(f"[rotator] Skipping missing page: {path}", flush=True)
-        return None
-    return str(path)
+    candidates = [path] if path.is_absolute() else [base_dir / path, base_dir / "scripts" / path]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    print(f"[rotator] Skipping missing page: {candidates[0]}", flush=True)
+    return None
 
 
 def stop_child(child: subprocess.Popen[bytes] | None) -> None:
