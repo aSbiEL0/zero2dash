@@ -1,0 +1,11 @@
+[Unit]
+Description=Start DAY GUI at 07:00
+
+[Timer]
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+AccuracySec=1min
+Unit=day-mode.service
+
+[Install]
+WantedBy=timers.target

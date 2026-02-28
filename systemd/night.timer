@@ -1,0 +1,11 @@
+[Unit]
+Description=Start NIGHT GUI at 22:00
+
+[Timer]
+OnCalendar=*-*-* 22:00:00
+Persistent=true
+AccuracySec=1min
+Unit=dark-mode.service
+
+[Install]
+WantedBy=timers.target
