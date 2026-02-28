@@ -8,6 +8,7 @@ ConditionPathExists=/dev/fb1
 Type=simple
 WorkingDirectory=/opt/zero2dash
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/zero2dash/.env
 
 ExecStartPre=/opt/zero2dash/scripts/pihole-display-pre.sh
 ExecStart=/usr/bin/python3 -u /opt/zero2dash/scripts/piholestats_v1.2.py

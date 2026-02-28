@@ -14,8 +14,8 @@ W, H = 320, 240
 REFRESH_SECS = 3
 ACTIVE_HOURS = (22, 7)
 
-PIHOLE_HOST = "192.168.31.16"
-PIHOLE_PASSWORD = "Unf0rg1v3n2"
+PIHOLE_HOST = os.environ.get("PIHOLE_HOST", "127.0.0.1")
+PIHOLE_PASSWORD = os.environ.get("PIHOLE_PASSWORD", "")
 TITLE = "Pi-hole"
 COL_BG   = (0, 0, 0)
 COL_TXT  = (140,140,140)
@@ -27,6 +27,33 @@ COL_UP   = (24,12,40)
 
 _SID = None
 _SID_EXP = 0.0
+
+
+def _env_int(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _env_hours(name, default):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    parts = [part.strip() for part in raw.split(",")]
+    if len(parts) != 2:
+        return default
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return default
+
+
+REFRESH_SECS = max(1, _env_int("REFRESH_SECS", REFRESH_SECS))
+ACTIVE_HOURS = _env_hours("ACTIVE_HOURS", ACTIVE_HOURS)
 
 # ---------- utils ----------
 def load_font(size, bold=False):
@@ -99,6 +126,8 @@ def _http_json(url, method="GET", body=None, timeout=3):
 
 def _auth_get_sid():
     global _SID, _SID_EXP
+    if not PIHOLE_PASSWORD:
+        raise RuntimeError("Missing PIHOLE_PASSWORD")
     js = _http_json(f"http://{PIHOLE_HOST}/api/auth", method="POST",
                     body={"password": PIHOLE_PASSWORD}, timeout=4)
     sess = js.get("session", {})
