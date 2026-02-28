@@ -1,4 +1,67 @@
-# zero2dash
+Minimal framebuffer-based Pi-hole dashboard for Raspberry Pi (320×240 SPI TFT).
+
+No X11
+No SDL
+Direct /dev/fb1 RGB565 rendering
+Suggested project structure
+zero2dash/
+├── scripts/
+│   ├── pihole-display-pre.sh
+│   ├── piholestats_v1.0.py
+│   ├── piholestats_v1.1.py
+│   ├── piholestats_v1.2.py
+│   └── test.py
+├── systemd/
+│   ├── display.service
+│   ├── pihole-display-dark.service
+│   ├── day.timer
+│   └── night.timer
+└── README.md
+Requirements
+Raspberry Pi OS (SPI enabled)
+Python 3
+Pillow
+systemd
+Install
+1. Install TFT driver
+sudo rm -rf LCD-show
+git clone https://github.com/goodtft/LCD-show.git
+cd LCD-show
+sudo ./LCD24-show
+Reboot → display active on /dev/fb1.
+
+2. Install Python dependency
+sudo apt install -y python3-pip python3-pil
+3. Deploy project files
+sudo mkdir -p /opt/zero2dash
+sudo cp -r . /opt/zero2dash/
+sudo chmod +x /opt/zero2dash/scripts/pihole-display-pre.sh
+sudo chmod +x /opt/zero2dash/scripts/test.py
+Configure
+Create an environment file and keep secrets out of source control:
+
+cp /opt/zero2dash/.env.example /opt/zero2dash/.env
+chmod 600 /opt/zero2dash/.env
+
+Edit `/opt/zero2dash/.env` and set:
+
+PIHOLE_HOST
+PIHOLE_PASSWORD
+PIHOLE_API_TOKEN (optional; enables legacy /admin/api.php fallback)
+REFRESH_SECS
+ACTIVE_HOURS
+Run via systemd
+If you run scripts manually, load env vars first:
+
+set -a
+source /opt/zero2dash/.env
+set +a
+
+sudo cp /opt/zero2dash/systemd/display.service /etc/systemd/system/
+sudo cp /opt/zero2dash/systemd/pihole-display-dark.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now display.service
+Check logs:
 
 A lightweight Pi‑hole dashboard designed for small TFT displays (320×240) on a Raspberry Pi. It renders directly to the framebuffer (`/dev/fb1`) without requiring X11 or SDL, making it ideal for headless setups. The project provides a set of dashboard scripts that display Pi‑hole statistics, CPU temperature and device uptime. A companion rotator script allows multiple dashboards to cycle on a timer with simple touch controls for navigation and screen power management.
 
@@ -102,4 +165,10 @@ The project is written in Python with an emphasis on readability and minimal dep
 
 ## License
 
-This project is provided for personal use without warranty. It is not an official Pi‑hole product. Use at your own risk.
+Default backgrounds are loaded from the `images/` directory.
+
+
+Touch controls and static pages
+- Single tap left/right changes page.
+- Double tap toggles screen power (falls back to `vcgencmd display_power` when framebuffer blanking is unsupported).
+- Image-only scripts can exit immediately; the rotator now keeps each page on-screen for `ROTATOR_SECS` unless you tap to switch.
