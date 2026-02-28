@@ -16,6 +16,7 @@ ACTIVE_HOURS = (7, 22)
 
 PIHOLE_HOST = os.environ.get("PIHOLE_HOST", "127.0.0.1")
 PIHOLE_PASSWORD = os.environ.get("PIHOLE_PASSWORD", "")
+PIHOLE_API_TOKEN = os.environ.get("PIHOLE_API_TOKEN", "")
 TITLE = "Pi-hole"
 # Colours
 COL_BG   = (0, 0, 0)
@@ -126,11 +127,23 @@ def _http_json(url, method="GET", body=None, timeout=3):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
+
+def _normalize_host(raw_host: str) -> str:
+    host = raw_host.strip()
+    if not host:
+        return "http://127.0.0.1"
+    if host.startswith("http://") or host.startswith("https://"):
+        return host.rstrip("/")
+    return f"http://{host.rstrip('/')}"
+
+
+BASE_URL = _normalize_host(PIHOLE_HOST)
+
 def _auth_get_sid():
     global _SID, _SID_EXP
     if not PIHOLE_PASSWORD:
         raise RuntimeError("Missing PIHOLE_PASSWORD")
-    js = _http_json(f"http://{PIHOLE_HOST}/api/auth", method="POST",
+    js = _http_json(f"{BASE_URL}/api/auth", method="POST",
                     body={"password": PIHOLE_PASSWORD}, timeout=4)
     sess = js.get("session", {})
     if not sess.get("valid", False):
@@ -147,18 +160,36 @@ def _ensure_sid():
 def fetch_pihole():
     try:
         sid = _ensure_sid()
-        url = f"http://{PIHOLE_HOST}/api/stats/summary?sid=" + urllib.parse.quote(sid, safe="")
+        url = f"{BASE_URL}/api/stats/summary?sid=" + urllib.parse.quote(sid, safe="")
         d = _http_json(url, timeout=4)
         if d.get("session", {}).get("valid") is False:
             sid = _auth_get_sid()
-            url = f"http://{PIHOLE_HOST}/api/stats/summary?sid=" + urllib.parse.quote(sid, safe="")
+            url = f"{BASE_URL}/api/stats/summary?sid=" + urllib.parse.quote(sid, safe="")
             d = _http_json(url, timeout=4)
         q = d.get("queries", {})
+        total = int(q.get("total", d.get("dns_queries_today", 0)))
+        blocked = int(q.get("blocked", d.get("ads_blocked_today", 0)))
+        percent = float(q.get("percent_blocked", d.get("ads_percentage_today", 0.0)))
         return {
-            "total":   int(q.get("total", 0)),
-            "blocked": int(q.get("blocked", 0)),
-            "percent": float(q.get("percent_blocked", 0.0)),
+            "total": total,
+            "blocked": blocked,
+            "percent": percent,
             "ok": True
+        }
+    except Exception:
+        pass
+
+    try:
+        params = {"summaryRaw": ""}
+        if PIHOLE_API_TOKEN:
+            params["auth"] = PIHOLE_API_TOKEN
+        query = urllib.parse.urlencode(params)
+        legacy = _http_json(f"{BASE_URL}/admin/api.php?{query}", timeout=4)
+        return {
+            "total": int(legacy.get("dns_queries_today", 0)),
+            "blocked": int(legacy.get("ads_blocked_today", 0)),
+            "percent": float(legacy.get("ads_percentage_today", 0.0)),
+            "ok": True,
         }
     except Exception:
         return {"total":0,"blocked":0,"percent":0.0,"ok":False}
@@ -212,7 +243,7 @@ def draw_frame(stats, temp_c, uptime, active):
     if not active:
         d.rounded_rectangle([margin, margin, W-margin, H-margin], radius=12, fill=(20,20,20))
         msg = f"{TITLE}: Sleeping"
-        tw, th = text_size(d, msg, mid_font)
+        tw, th = text_size(d, msg, mid)
         d.text(((W-tw)//2,(H-th)//2), msg, font=mid, fill=(180,180,180))
         return img
 

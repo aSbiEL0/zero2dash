@@ -47,6 +47,7 @@ Edit `/opt/zero2dash/.env` and set:
 
 PIHOLE_HOST
 PIHOLE_PASSWORD
+PIHOLE_API_TOKEN (optional; enables legacy /admin/api.php fallback)
 REFRESH_SECS
 ACTIVE_HOURS
 Run via systemd
@@ -98,3 +99,9 @@ The repository now includes image-only page scripts that can be used while build
 - `scripts/tram-info.py`
 
 Default backgrounds are loaded from the `images/` directory.
+
+
+Touch controls and static pages
+- Single tap left/right changes page.
+- Double tap toggles screen power (falls back to `vcgencmd display_power` when framebuffer blanking is unsupported).
+- Image-only scripts can exit immediately; the rotator now keeps each page on-screen for `ROTATOR_SECS` unless you tap to switch.
