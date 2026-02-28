@@ -75,3 +75,13 @@ Environment variables:
 - `ROTATOR_PAGES` → optional legacy explicit page list override.
 
 If you have a dark-mode script such as `pihole-display-dark_v1.2.py`, keep it outside the rotator pages directory or leave it in the directory and rely on `ROTATOR_EXCLUDE_PATTERNS`.
+
+Image background test scripts
+The repository now includes image-only page scripts that can be used while building rotator functionality:
+
+- `scripts/weather-dash.py`
+- `scripts/calendash.py`
+- `scripts/google-photos.py`
+- `scripts/tram-info.py`
+
+Default backgrounds are loaded from the `images/` directory.
