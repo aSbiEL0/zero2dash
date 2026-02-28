@@ -122,6 +122,38 @@ def parse_width() -> int:
     return max(100, value)
 
 
+def detect_touch_width(device: str, default_width: int) -> int:
+    absinfo_path = Path("/sys/class/input") / Path(device).name / "device" / "absinfo"
+    try:
+        with open(absinfo_path) as absinfo:
+            for line in absinfo:
+                code_str, _, payload = line.partition(":")
+                if not payload:
+                    continue
+                try:
+                    code = int(code_str.strip(), 0)
+                except ValueError:
+                    continue
+                if code not in (ABS_X, ABS_MT_POSITION_X):
+                    continue
+
+                parts = payload.strip().split()
+                if len(parts) < 3:
+                    continue
+                try:
+                    min_val = int(parts[1])
+                    max_val = int(parts[2])
+                except ValueError:
+                    continue
+
+                if max_val > min_val:
+                    width = max_val - min_val + 1
+                    return max(default_width, width)
+    except Exception as exc:
+        print(f"[rotator] Touch width detection failed ({device}): {exc}", flush=True)
+    return default_width
+
+
 def resolve_script(path_like: str, base_dir: Path) -> str | None:
     path = Path(path_like)
     candidates = [path] if path.is_absolute() else [base_dir / path, base_dir / "scripts" / path]
@@ -169,9 +201,10 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
         print("[rotator] No touch device found; touch controls disabled.", flush=True)
         return
 
-    print(f"[rotator] Touch controls listening on {device}", flush=True)
+    device_touch_width = detect_touch_width(device, touch_width)
+    print(f"[rotator] Touch controls listening on {device} (width {device_touch_width})", flush=True)
 
-    last_x = touch_width // 2
+    last_x = device_touch_width // 2
     touch_down = False
     last_tap_ts = 0.0
 
@@ -200,7 +233,7 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
                             cmd_q.put("TOGGLE_SCREEN")
                             last_tap_ts = 0.0
                         else:
-                            cmd_q.put("PREV" if last_x < (touch_width // 2) else "NEXT")
+                            cmd_q.put("PREV" if last_x < (device_touch_width // 2) else "NEXT")
                             last_tap_ts = now
                 elif ev_type == EV_SYN:
                     continue
