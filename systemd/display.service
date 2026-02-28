@@ -1,16 +1,28 @@
 [Unit]
+<<<<<<< HEAD:systemd/pihole-display.service
+Description=Pi-hole TFT Stats Display
+=======
 Description=Pi-hole TFT Day Display Rotator
+>>>>>>> main:systemd/display.service
 After=network-online.target dev-fb1.device
 Wants=network-online.target dev-fb1.device
 ConditionPathExists=/dev/fb1
 
 [Service]
 Type=simple
+<<<<<<< HEAD:systemd/pihole-display.service
+WorkingDirectory=/opt/zero2dash
+Environment=PYTHONUNBUFFERED=1
+
+ExecStartPre=/opt/zero2dash/scripts/pihole-display-pre.sh
+ExecStart=/usr/bin/python3 -u /opt/zero2dash/scripts/piholestats_v1.1.py
+=======
 WorkingDirectory=/home/pihole
 Environment=PYTHONUNBUFFERED=1
 
 ExecStartPre=/usr/local/bin/pihole-display-pre.sh
 ExecStart=/usr/bin/python3 -u /home/pihole/display_rotator.py
+>>>>>>> main:systemd/display.service
 
 Restart=always
 RestartSec=2

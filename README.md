@@ -1,121 +1,66 @@
-# Pi-hole SPI TFT Dashboard
+Minimal framebuffer-based Pi-hole dashboard for Raspberry Pi (320×240 SPI TFT).
 
-[![Platform](https://img.shields.io/badge/Raspberry%20Pi-supported-C51A4A.svg)](https://www.raspberrypi.com/)
-[![Render](https://img.shields.io/badge/render-%2Fdev%2Ffb1-informational.svg)](#)
-
-Framebuffer-based rotating dashboard for Raspberry Pi (320×240 SPI TFT), designed to run separate scripts as pages for different data sets (for example: weather, calendar, Pi-hole stats, RSS feeds, and more).
-
-* No X11
-* No SDL
-* Direct `/dev/fb1` RGB565 rendering
-
----
-
-## Requirements
-
-* Raspberry Pi OS (SPI enabled)
-* Python 3
-* Pillow
-* systemd
-
----
-
-## Install
-
-### 1. Install TFT driver
-
-```bash
+No X11
+No SDL
+Direct /dev/fb1 RGB565 rendering
+Suggested project structure
+zero2dash/
+├── scripts/
+│   ├── pihole-display-pre.sh
+│   ├── piholestats_v1.0.py
+│   ├── piholestats_v1.1.py
+│   ├── piholestats_v1.2.py
+│   └── test.py
+├── systemd/
+│   ├── pihole-display.service
+│   ├── pihole-display-dark.service
+│   ├── day.timer
+│   └── night.timer
+└── README.md
+Requirements
+Raspberry Pi OS (SPI enabled)
+Python 3
+Pillow
+systemd
+Install
+1. Install TFT driver
 sudo rm -rf LCD-show
 git clone https://github.com/goodtft/LCD-show.git
 cd LCD-show
 sudo ./LCD24-show
-```
+Reboot → display active on /dev/fb1.
 
-Reboot → display active on `/dev/fb1`.
+2. Install Python dependency
+sudo apt install -y python3-pip python3-pil
+3. Deploy project files
+sudo mkdir -p /opt/zero2dash
+sudo cp -r . /opt/zero2dash/
+sudo chmod +x /opt/zero2dash/scripts/pihole-display-pre.sh
+sudo chmod +x /opt/zero2dash/scripts/test.py
+Configure
+Edit in /opt/zero2dash/scripts/piholestats_v1.2.py:
 
----
-
-### 2. Install Python dependency
-
-```bash
-sudo apt install -y python3-pip
-pip3 install pillow
-```
-
----
-
-## Configure
-
-Edit in `piholestats_v1.2.py`:
-
-* `PIHOLE_HOST`
-* `PIHOLE_PASSWORD`
-* `REFRESH_SECS`
-
----
-
-## Day mode page rotation
-
-`display.service` starts `display_rotator.py`, which rotates independent page scripts so each page can show a different data set (weather, calendar, Pi-hole, RSS, etc.).
-
-Touch controls in `display_rotator.py`:
-
-* Tap right side — next page/script
-* Tap left side — previous page/script
-* Double tap anywhere — screen off/on
-
-Optional environment variables for the rotator:
-
-* `ROTATOR_PAGES` — comma-separated script list (default: `piholestats_v1.0.py,piholestats_v1.1.py`)
-* `ROTATOR_SECS` — seconds per page (default: `30`, minimum: `5`)
-* `ROTATOR_TOUCH_DEVICE` — explicit `/dev/input/eventX` device for touch input
-* `ROTATOR_TOUCH_WIDTH` — touch X-axis width used to split left/right taps (default: `320`)
-* `ROTATOR_FBDEV` — framebuffer device used for screen blank/unblank (default: `/dev/fb1`)
-
-Example systemd override:
-
-```bash
-sudo systemctl edit display.service
-```
-
-Then add:
-
-```ini
-[Service]
-Environment=ROTATOR_PAGES=piholestats_v1.0.py,piholestats_v1.1.py
-Environment=ROTATOR_SECS=20
-```
-
-## Run via systemd
-
-```bash
-sudo cp systemd/*.service /etc/systemd/system/
+PIHOLE_HOST
+PIHOLE_PASSWORD
+REFRESH_SECS
+Run via systemd
+sudo cp /opt/zero2dash/systemd/pihole-display*.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now display.service
-```
-
+sudo systemctl enable --now pihole-display.service
 Check logs:
 
-```bash
-journalctl -u display.service -n 50 --no-pager
-```
+journalctl -u pihole-display.service -n 50 --no-pager
+Placeholder test script
+To verify basic rendering logic:
 
----
+python3 /opt/zero2dash/scripts/test.py --fbdev /dev/fb1
+Or generate a local preview without touching framebuffer:
 
-## Architecture
-
-```text
+python3 /opt/zero2dash/scripts/test.py --output /tmp/test.png --no-framebuffer
+Architecture
 SPI TFT → /dev/fb1 → Python → Pi-hole API
-```
-
----
-
-## Notes
-
-* Shows: Total, Blocked, % Blocked, Temp, Uptime
-* No hardware backlight control
-* Touch not used in UI
-
----
-
+Notes
+Shows: Total, Blocked, % Blocked, Temp, Uptime
+No hardware backlight control
+Touch not used in UI
 Private project.
