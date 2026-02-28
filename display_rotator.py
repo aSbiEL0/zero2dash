@@ -26,8 +26,8 @@ from pathlib import Path
 
 
 DEFAULT_PAGES_DIR = "scripts"
-DEFAULT_PAGE_GLOB = "piholestats_v*.py"
-DEFAULT_EXCLUDE_PATTERNS = ["pihole-display-dark*.py"]
+DEFAULT_PAGE_GLOB = "*.py"
+DEFAULT_EXCLUDE_PATTERNS = ["piholestats_v1.2.py"]
 DEFAULT_ROTATE_SECS = 30
 SHUTDOWN_WAIT_SECS = 5
 DEFAULT_FBDEV = "/dev/fb1"
@@ -74,7 +74,8 @@ def parse_exclude_patterns() -> list[str]:
 
 def discover_pages(base_dir: Path) -> list[str]:
     page_dir_raw = os.environ.get("ROTATOR_PAGES_DIR", DEFAULT_PAGES_DIR).strip() or DEFAULT_PAGES_DIR
-    page_glob = os.environ.get("ROTATOR_PAGE_GLOB", DEFAULT_PAGE_GLOB).strip() or DEFAULT_PAGE_GLOB
+    page_glob_raw = os.environ.get("ROTATOR_PAGE_GLOB", DEFAULT_PAGE_GLOB).strip() or DEFAULT_PAGE_GLOB
+    page_globs = [entry.strip() for entry in page_glob_raw.split(",") if entry.strip()]
     excludes = parse_exclude_patterns()
 
     page_dir = Path(page_dir_raw)
@@ -86,12 +87,15 @@ def discover_pages(base_dir: Path) -> list[str]:
         return []
 
     discovered: list[str] = []
-    for path in sorted(page_dir.glob(page_glob)):
-        if not path.is_file():
-            continue
-        if any(path.match(pattern) or path.name == pattern for pattern in excludes):
-            continue
-        discovered.append(str(path.relative_to(base_dir)))
+    seen: set[Path] = set()
+    for page_glob in page_globs:
+        for path in sorted(page_dir.glob(page_glob)):
+            if not path.is_file() or path in seen:
+                continue
+            seen.add(path)
+            if any(path.match(pattern) or path.name == pattern for pattern in excludes):
+                continue
+            discovered.append(str(path.relative_to(base_dir)))
 
     return discovered
 
