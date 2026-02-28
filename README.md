@@ -70,9 +70,8 @@ Display rotator configuration
 
 Environment variables:
 - `ROTATOR_PAGES_DIR` (default: `scripts`) → directory to scan for pages.
-- `ROTATOR_PAGE_GLOB` (default: `*.py`) → file pattern inside that directory.
+- `ROTATOR_PAGE_GLOB` (default: `piholestats_v*.py`) → file pattern inside that directory. Set to `*.py` if you want to rotate arbitrary dashboards or test pages.
 - `ROTATOR_EXCLUDE_PATTERNS` (default: `pihole-display-dark*.py`) → comma-separated filename patterns to skip.
 - `ROTATOR_PAGES` → optional legacy explicit page list override.
 
 If you have a dark-mode script such as `pihole-display-dark_v1.2.py`, keep it outside the rotator pages directory or leave it in the directory and rely on `ROTATOR_EXCLUDE_PATTERNS`.
-
