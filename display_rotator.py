@@ -131,9 +131,13 @@ def detect_touch_width(device: str, default_width: int) -> int:
                 if not payload:
                     continue
                 try:
-                    code = int(code_str.strip(), 0)
+                    raw_code = code_str.strip().lower()
+                    code = int(raw_code, 16)
                 except ValueError:
-                    continue
+                    try:
+                        code = int(code_str.strip(), 0)
+                    except ValueError:
+                        continue
                 if code not in (ABS_X, ABS_MT_POSITION_X):
                     continue
 
