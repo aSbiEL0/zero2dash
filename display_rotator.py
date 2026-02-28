@@ -25,7 +25,9 @@ import time
 from pathlib import Path
 
 
-DEFAULT_PAGES = ["piholestats_v1.0.py", "piholestats_v1.1.py"]
+DEFAULT_PAGES_DIR = "scripts"
+DEFAULT_PAGE_GLOB = "*.py"
+DEFAULT_EXCLUDE_PATTERNS = ["pihole-display-dark*.py"]
 DEFAULT_ROTATE_SECS = 30
 SHUTDOWN_WAIT_SECS = 5
 DEFAULT_FBDEV = "/dev/fb1"
@@ -63,12 +65,43 @@ class ScreenPower:
             print(f"[rotator] Screen toggle failed on {self.fbdev}: {exc}", flush=True)
 
 
-def parse_pages() -> list[str]:
+def parse_exclude_patterns() -> list[str]:
+    raw = os.environ.get("ROTATOR_EXCLUDE_PATTERNS", "").strip()
+    if raw:
+        return [entry.strip() for entry in raw.split(",") if entry.strip()]
+    return DEFAULT_EXCLUDE_PATTERNS.copy()
+
+
+def discover_pages(base_dir: Path) -> list[str]:
+    page_dir_raw = os.environ.get("ROTATOR_PAGES_DIR", DEFAULT_PAGES_DIR).strip() or DEFAULT_PAGES_DIR
+    page_glob = os.environ.get("ROTATOR_PAGE_GLOB", DEFAULT_PAGE_GLOB).strip() or DEFAULT_PAGE_GLOB
+    excludes = parse_exclude_patterns()
+
+    page_dir = Path(page_dir_raw)
+    if not page_dir.is_absolute():
+        page_dir = base_dir / page_dir
+
+    if not page_dir.exists():
+        print(f"[rotator] Page directory does not exist: {page_dir}", flush=True)
+        return []
+
+    discovered: list[str] = []
+    for path in sorted(page_dir.glob(page_glob)):
+        if not path.is_file():
+            continue
+        if any(path.match(pattern) or path.name == pattern for pattern in excludes):
+            continue
+        discovered.append(str(path.relative_to(base_dir)))
+
+    return discovered
+
+
+def parse_pages(base_dir: Path) -> list[str]:
+    # Backward-compatible manual override; otherwise scan a directory.
     raw = os.environ.get("ROTATOR_PAGES", "").strip()
-    if not raw:
-        return DEFAULT_PAGES.copy()
-    pages = [entry.strip() for entry in raw.split(",") if entry.strip()]
-    return pages or DEFAULT_PAGES.copy()
+    if raw:
+        return [entry.strip() for entry in raw.split(",") if entry.strip()]
+    return discover_pages(base_dir)
 
 
 def parse_rotate_secs() -> int:
@@ -97,7 +130,8 @@ def resolve_script(path_like: str, base_dir: Path) -> str | None:
         if candidate.exists():
             return str(candidate)
 
-    print(f"[rotator] Skipping missing page: {candidates[0]}", flush=True)
+    checked = ", ".join(str(candidate) for candidate in candidates)
+    print(f"[rotator] Skipping missing page '{path_like}' (checked: {checked})", flush=True)
     return None
 
 
@@ -182,9 +216,15 @@ def main() -> int:
 
     pages = [
         resolved
-        for resolved in (resolve_script(item, base_dir) for item in parse_pages())
+        for resolved in (resolve_script(item, base_dir) for item in parse_pages(base_dir))
         if resolved is not None
     ]
+
+    if len(pages) == 1:
+        print(
+            "[rotator] Only one valid page configured; rotation and swipe navigation will reload that same script.",
+            flush=True,
+        )
 
     if not pages:
         print("[rotator] No valid pages found; exiting.", file=sys.stderr, flush=True)

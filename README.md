@@ -64,3 +64,15 @@ Shows: Total, Blocked, % Blocked, Temp, Uptime
 No hardware backlight control
 Touch not used in UI
 Private project.
+
+Display rotator configuration
+`display_rotator.py` now supports directory-based page discovery so you do not need to list every script file manually.
+
+Environment variables:
+- `ROTATOR_PAGES_DIR` (default: `scripts`) → directory to scan for pages.
+- `ROTATOR_PAGE_GLOB` (default: `*.py`) → file pattern inside that directory.
+- `ROTATOR_EXCLUDE_PATTERNS` (default: `pihole-display-dark*.py`) → comma-separated filename patterns to skip.
+- `ROTATOR_PAGES` → optional legacy explicit page list override.
+
+If you have a dark-mode script such as `pihole-display-dark_v1.2.py`, keep it outside the rotator pages directory or leave it in the directory and rely on `ROTATOR_EXCLUDE_PATTERNS`.
+
