@@ -35,6 +35,7 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 TOKEN_PATH = Path("token.json")
+DEFAULT_OAUTH_PORT = 8080
 
 
 @dataclass
@@ -64,6 +65,19 @@ def expand_path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
+def optional_env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer for {name}: {raw}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+    return value
+
+
 def load_font(preferred_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -77,14 +91,28 @@ def load_font(preferred_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFo
     return ImageFont.load_default()
 
 
-def build_client_config(client_id: str, client_secret: str) -> dict[str, Any]:
+def expected_redirect_uri(oauth_port: int) -> str:
+    return f"http://localhost:{oauth_port}/"
+
+
+def build_client_config(client_id: str, client_secret: str, oauth_port: int) -> dict[str, Any]:
+    redirect_uri = expected_redirect_uri(oauth_port)
     return {
         "installed": {
             "client_id": client_id,
             "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://localhost", "urn:ietf:wg:oauth:2.0:oob"],
+            "redirect_uris": [
+                "http://localhost",
+                "http://localhost/",
+                f"http://localhost:{oauth_port}",
+                redirect_uri,
+                "http://127.0.0.1",
+                "http://127.0.0.1/",
+                f"http://127.0.0.1:{oauth_port}",
+                redirect_uri.replace("localhost", "127.0.0.1", 1),
+            ],
         }
     }
 
@@ -94,7 +122,7 @@ def save_credentials(creds: Credentials, token_path: Path) -> None:
     os.chmod(token_path, 0o600)
 
 
-def get_credentials(client_id: str, client_secret: str, token_path: Path) -> Credentials:
+def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_port: int) -> Credentials:
     creds: Credentials | None = None
 
     if token_path.exists():
@@ -109,14 +137,21 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path) -> Cre
         save_credentials(creds, token_path)
         return creds
 
-    logging.info("Starting first-run OAuth flow.")
+    redirect_uri = expected_redirect_uri(oauth_port)
+    logging.info("Starting first-run OAuth flow on localhost:%d.", oauth_port)
+    logging.info("Expected OAuth redirect URI: %s", redirect_uri)
     flow = InstalledAppFlow.from_client_config(
-        build_client_config(client_id, client_secret),
+        build_client_config(client_id, client_secret, oauth_port),
         SCOPES,
     )
     try:
-        creds = flow.run_local_server(port=0, open_browser=False)
+        creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
     except Exception as exc:
+        if "redirect_uri_mismatch" in str(exc):
+            logging.error(
+                "OAuth redirect mismatch. Add this URI to your Google OAuth client redirect list: %s",
+                redirect_uri,
+            )
         logging.info("Local server auth failed (%s); falling back to console flow.", exc)
         creds = flow.run_console()
     save_credentials(creds, token_path)
@@ -318,12 +353,13 @@ def main() -> int:
         output_path = expand_path(required_env("OUTPUT_PATH"))
         background_path = expand_path(required_env("BACKGROUND_IMAGE"))
         icon_path = expand_path(required_env("ICON_IMAGE"))
+        oauth_port = optional_env_int("OAUTH_PORT", DEFAULT_OAUTH_PORT)
     except Exception as exc:
         logging.error("Configuration error: %s", exc)
         return 1
 
     try:
-        creds = get_credentials(client_id, client_secret, TOKEN_PATH)
+        creds = get_credentials(client_id, client_secret, TOKEN_PATH, oauth_port)
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         events = fetch_events(service, calendar_id=calendar_id, tz_name=tz_name, retries=3)
 
