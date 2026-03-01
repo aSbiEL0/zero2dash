@@ -356,17 +356,20 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
     print(f"[rotator] Touch controls listening on {device} (width {device_touch_width})", flush=True)
 
     last_x = device_touch_min + (device_touch_width // 2)
+    min_seen = device_touch_min
+    max_seen = device_touch_min + device_touch_width - 1
     touch_down = False
     last_tap_ts = None
     last_emit = 0.0
 
     def emit_tap(tap_x: int, now: float) -> None:
         nonlocal last_tap_ts, last_emit
-        relative_x = tap_x - device_touch_min
+        width = max(2, max_seen - min_seen + 1)
+        relative_x = tap_x - min_seen
         if relative_x < 0:
             relative_x = 0
-        elif relative_x >= device_touch_width:
-            relative_x = device_touch_width - 1
+        elif relative_x >= width:
+            relative_x = width - 1
 
         if last_tap_ts is not None and (now - last_tap_ts) <= DOUBLE_TAP_WINDOW_SECS:
             if (now - last_emit) >= tap_debounce_secs:
@@ -395,6 +398,10 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
 
                 if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
                     last_x = ev_value
+                    if ev_value < min_seen:
+                        min_seen = ev_value
+                    if ev_value > max_seen:
+                        max_seen = ev_value
                 elif ev_type == EV_KEY and ev_code == BTN_TOUCH:
                     if ev_value == 1:
                         touch_down = True
