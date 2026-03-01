@@ -144,6 +144,7 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
         build_client_config(client_id, client_secret, oauth_port),
         SCOPES,
     )
+    fixed_oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
     try:
         creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
     except Exception as exc:
