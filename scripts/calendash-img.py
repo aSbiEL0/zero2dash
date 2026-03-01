@@ -16,7 +16,7 @@ from PIL import Image
 FBDEV_DEFAULT = "/dev/fb1"
 TOUCH_DEVICE_DEFAULT = "/dev/input/event0"
 W, H = 320, 240
-DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "calendash.png"
+DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "calendash" / "output.jpg"
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 EV_KEY = 0x01
 BTN_TOUCH = 0x14A
