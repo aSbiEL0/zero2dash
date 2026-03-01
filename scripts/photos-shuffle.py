@@ -11,6 +11,8 @@ Configuration (.env):
 - Required: GOOGLE_PHOTOS_ALBUM_ID
 - Optional: GOOGLE_CLIENT_SECRETS_PATH, GOOGLE_TOKEN_PATH, FB_DEVICE, WIDTH,
   HEIGHT, CACHE_DIR, FALLBACK_IMAGE, LOGO_PATH
+- Optional OAuth alternative: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+  (used when GOOGLE_CLIENT_SECRETS_PATH file is not present).
 
 OAuth setup:
 - Put OAuth client secrets JSON at ~/zero2dash/client_secret.json (or override
@@ -55,6 +57,8 @@ BRIGHTNESS_FACTOR = 0.75
 class Config:
     album_id: str
     client_secrets_path: Path
+    client_id: str
+    client_secret: str
     token_path: Path
     fb_device: str
     width: int
@@ -92,6 +96,8 @@ def load_config() -> Config:
     return Config(
         album_id=album_id,
         client_secrets_path=env_path("GOOGLE_CLIENT_SECRETS_PATH", DEFAULT_ROOT / "client_secret.json"),
+        client_id=os.getenv("GOOGLE_CLIENT_ID", "").strip(),
+        client_secret=os.getenv("GOOGLE_CLIENT_SECRET", "").strip(),
         token_path=env_path("GOOGLE_TOKEN_PATH", DEFAULT_ROOT / "token_photos.json"),
         fb_device=os.getenv("FB_DEVICE", "/dev/fb1"),
         width=width,
@@ -125,13 +131,29 @@ def authenticate(config: Config, log: Log) -> Credentials:
             creds = None
 
     if not creds or not creds.valid:
-        if not config.client_secrets_path.exists():
-            raise FileNotFoundError(f"Client secret not found: {config.client_secrets_path}")
         log.info("No valid Google token found; starting OAuth local server flow.")
         log.info(
             "Follow the browser prompt to authorize Google Photos access, then return to this terminal."
         )
-        flow = InstalledAppFlow.from_client_secrets_file(str(config.client_secrets_path), SCOPES)
+        if config.client_secrets_path.exists():
+            flow = InstalledAppFlow.from_client_secrets_file(str(config.client_secrets_path), SCOPES)
+        elif config.client_id and config.client_secret:
+            flow = InstalledAppFlow.from_client_config(
+                {
+                    "installed": {
+                        "client_id": config.client_id,
+                        "client_secret": config.client_secret,
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }
+                },
+                SCOPES,
+            )
+        else:
+            raise FileNotFoundError(
+                f"Client secret not found: {config.client_secrets_path}; set GOOGLE_CLIENT_SECRETS_PATH "
+                "or provide GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET in .env"
+            )
         creds = flow.run_local_server(port=config.oauth_port, prompt="consent", authorization_prompt_message="")
 
     config.token_path.parent.mkdir(parents=True, exist_ok=True)
