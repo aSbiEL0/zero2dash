@@ -379,7 +379,10 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
             return
 
         if (now - last_emit) >= tap_debounce_secs:
-            cmd_q.put("PREV" if relative_x < (device_touch_width // 2) else "NEXT")
+            # Use the currently observed range, not the absolute device width.
+            # Some touch controllers report values that only occupy a sub-range
+            # of absinfo max, so the midpoint should track observed taps.
+            cmd_q.put("PREV" if relative_x < (width // 2) else "NEXT")
             last_emit = now
         last_tap_ts = now
 
