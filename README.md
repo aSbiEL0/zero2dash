@@ -172,3 +172,53 @@ Touch controls and static pages
 - Single tap left/right changes page.
 - Double tap toggles screen power: OFF blanks/powers down the panel output, ON restores panel output. The rotator and page scripts keep running in both states (falls back to `vcgencmd display_power` when framebuffer blanking is unsupported).
 - Image-only scripts can exit immediately; the rotator now keeps each page on-screen for `ROTATOR_SECS` unless you tap to switch.
+
+## Google Calendar image generator (`scripts/calendash-api.py`)
+
+This script creates a daily 320×240 PNG summary of upcoming Google Calendar events for TFT display rotation.
+
+### Install dependencies
+
+```sh
+python3 -m pip install google-api-python-client google-auth-oauthlib python-dotenv pillow pytz
+```
+
+### Configure
+
+1. Copy and edit env file:
+
+   ```sh
+   cp .env.example .env
+   chmod 600 .env
+   ```
+
+2. Set these variables in `.env`:
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+   - `GOOGLE_CALENDAR_ID` (for personal calendar use `primary`)
+   - `OUTPUT_PATH`
+   - `BACKGROUND_IMAGE`
+   - `ICON_IMAGE`
+   - `TIMEZONE` (example: `Europe/London`)
+
+3. Place your assets:
+   - `BACKGROUND_IMAGE`: 320×240 background containing the Google Calendar logo/header.
+   - `ICON_IMAGE`: small calendar icon used in each event row.
+
+### First run (OAuth)
+
+Run once manually to complete OAuth2 login and create `token.json` in the repo root:
+
+```sh
+python3 scripts/calendash-api.py
+```
+
+After first auth, future runs refresh tokens automatically and are suitable for headless cron execution.
+
+### Daily cron at 06:00 (local time)
+
+```cron
+0 6 * * * cd /opt/zero2dash && /usr/bin/python3 /opt/zero2dash/scripts/calendash-api.py >> /var/log/calendash.log 2>&1
+```
+
+The script fetches events from **today 00:00** to **+3 calendar days 23:59**, retries API/network failures with exponential backoff, and writes either the event summary image, a no-events image, or an error image.
