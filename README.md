@@ -125,7 +125,7 @@ The `display_rotator.py` script uses environment variables to discover and contr
 
 - `ROTATOR_PAGES_DIR` – directory containing dashboard scripts (default: `scripts`)
 - `ROTATOR_PAGE_GLOB` – glob pattern for dashboard filenames (default: `*.py`)
-- `ROTATOR_EXCLUDE_PATTERNS` – comma‑separated list of patterns to ignore (default: `piholestats_v1.2.py,calendash-api.py,calendash-img.py`)
+- `ROTATOR_EXCLUDE_PATTERNS` – comma‑separated list of patterns to ignore (default: `piholestats_v1.2.py,calendash-api.py`)
 - `ROTATOR_SECS` – seconds to show each page before rotating (minimum 5)
 - `ROTATOR_TOUCH_WIDTH` – touch‑sensitive width threshold for navigation
 - `ROTATOR_PAGES` – optional explicit comma‑separated list of scripts to rotate
@@ -240,6 +240,8 @@ Use two independent scripts to reduce steady-state CPU and memory use:
 2. `scripts/calendash-img.py` (runtime display script)
    - Displays the pre-rendered image
    - Waits for either a touch event or a timeout, then exits
+
+`calendash-api.py` is excluded from rotator discovery by default because it is a generator, but `calendash-img.py` is **not** excluded so you can rotate it like any other display page.
 
 Example:
 
