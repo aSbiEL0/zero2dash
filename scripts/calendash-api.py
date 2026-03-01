@@ -78,13 +78,14 @@ def load_font(preferred_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFo
 
 
 def build_client_config(client_id: str, client_secret: str) -> dict[str, Any]:
+    oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
     return {
         "installed": {
             "client_id": client_id,
             "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://localhost", "urn:ietf:wg:oauth:2.0:oob"],
+            "redirect_uris": ["http://localhost", f"http://localhost:{oauth_port}/"],
         }
     }
 
@@ -114,11 +115,23 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path) -> Cre
         build_client_config(client_id, client_secret),
         SCOPES,
     )
+    fixed_oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
     try:
         creds = flow.run_local_server(port=0, open_browser=False)
     except Exception as exc:
-        logging.info("Local server auth failed (%s); falling back to console flow.", exc)
-        creds = flow.run_console()
+        logging.warning(
+            "OAuth local callback on a random port failed (%s). Retrying on fixed port %d.",
+            exc,
+            fixed_oauth_port,
+        )
+        try:
+            creds = flow.run_local_server(port=fixed_oauth_port, open_browser=False)
+        except Exception as fixed_port_exc:
+            raise RuntimeError(
+                "OAuth setup failed. Ensure GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET belong to a Google OAuth "
+                "Desktop app client and that Authorized redirect URIs include http://localhost and "
+                f"http://localhost:{fixed_oauth_port}/ in Google Cloud Console."
+            ) from fixed_port_exc
     save_credentials(creds, token_path)
     return creds
 
