@@ -107,15 +107,24 @@ def authenticate(config: Config, log: Log) -> Credentials:
     creds: Credentials | None = None
 
     if config.token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(config.token_path), SCOPES)
+        try:
+            creds = Credentials.from_authorized_user_file(str(config.token_path), SCOPES)
+        except Exception as exc:
+            log.info(f"Existing token at {config.token_path} is invalid ({exc}); re-authenticating")
+            creds = None
 
     if creds and creds.valid:
         return creds
 
     if creds and creds.expired and creds.refresh_token:
         log.debug("Refreshing existing Google OAuth token")
-        creds.refresh(Request())
-    else:
+        try:
+            creds.refresh(Request())
+        except Exception as exc:
+            log.info(f"Token refresh failed ({exc}); starting OAuth flow")
+            creds = None
+
+    if not creds or not creds.valid:
         if not config.client_secrets_path.exists():
             raise FileNotFoundError(f"Client secret not found: {config.client_secrets_path}")
         log.info("No valid Google token found; starting OAuth local server flow.")
