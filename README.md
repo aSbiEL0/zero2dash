@@ -222,6 +222,28 @@ python3 scripts/calendash-api.py
 
 After first auth, future runs refresh tokens automatically and are suitable for headless cron execution.
 
+### OAuth troubleshooting (`localhost` connection refused after clicking **Continue**)
+
+If Google sign-in works but the final redirect page fails with `localhost refused to connect`, the browser and `calendash-api.py` are usually not on the same network namespace.
+
+- If script and browser are on the same machine, re-run the script and immediately open the exact URL it prints.
+- If script runs on a remote Pi/VM over SSH and browser runs on your laptop, create an SSH tunnel before authorizing:
+
+  ```sh
+  ssh -L 8080:localhost:8080 <user>@<pi-or-server>
+  ```
+
+  Keep that SSH session open, then run `python3 scripts/calendash-api.py` on the remote host and complete Google consent from your local browser.
+
+- Ensure `.env` `OAUTH_PORT` and Google OAuth redirect URI match exactly, including trailing slash:
+
+  ```text
+  http://localhost:8080/
+  ```
+
+- If port `8080` is already used, set another value for `OAUTH_PORT` (for example `8090`) and add the matching URI in Google Cloud Console.
+- If you are using an SSH tunnel, a message like `channel 3: open failed: connect failed: Connection refused` can appear after consent when the browser makes an extra request (for example `/favicon.ico`) after the local OAuth server already shut down. If `Saved OAuth token...` and `Wrote image: ...` are logged, OAuth completed successfully.
+
 ### Daily cron at 06:00 (local time)
 
 ```cron
