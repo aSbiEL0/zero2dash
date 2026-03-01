@@ -123,11 +123,23 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path) -> Cre
         build_client_config(client_id, client_secret),
         SCOPES,
     )
+    fixed_oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
     try:
         creds = flow.run_local_server(port=OAUTH_LOCAL_PORT, open_browser=False)
     except Exception as exc:
-        logging.info("Local server auth failed (%s); falling back to console flow.", exc)
-        creds = flow.run_console()
+        logging.warning(
+            "OAuth local callback on a random port failed (%s). Retrying on fixed port %d.",
+            exc,
+            fixed_oauth_port,
+        )
+        try:
+            creds = flow.run_local_server(port=fixed_oauth_port, open_browser=False)
+        except Exception as fixed_port_exc:
+            raise RuntimeError(
+                "OAuth setup failed. Ensure GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET belong to a Google OAuth "
+                "Desktop app client and that Authorized redirect URIs include http://localhost and "
+                f"http://localhost:{fixed_oauth_port}/ in Google Cloud Console."
+            ) from fixed_port_exc
     save_credentials(creds, token_path)
     return creds
 
