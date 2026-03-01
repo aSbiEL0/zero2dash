@@ -129,9 +129,13 @@ def _normalize_host(raw_host: str) -> str:
     host = raw_host.strip()
     if not host:
         return "http://127.0.0.1"
-    if host.startswith("http://") or host.startswith("https://"):
-        return host.rstrip("/")
-    return f"http://{host.rstrip('/')}"
+    if not host.startswith(("http://", "https://")):
+        host = f"http://{host}"
+    parsed = urllib.parse.urlsplit(host)
+    if parsed.path.startswith("/admin"):
+        parsed = parsed._replace(path="")
+    cleaned = parsed._replace(query="", fragment="")
+    return urllib.parse.urlunsplit(cleaned).rstrip("/")
 
 
 BASE_URL = _normalize_host(PIHOLE_HOST)
