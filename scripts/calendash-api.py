@@ -78,16 +78,28 @@ def optional_env_int(name: str, default: int) -> int:
     return value
 
 
-def load_font(preferred_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    ]
+def load_font(preferred_size: int, *, use_bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    env_candidates = [p.strip() for p in os.getenv("CALENDASH_FONT_PATH", "").split(",") if p.strip()]
+    if use_bold:
+        default_candidates = [
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        ]
+    else:
+        default_candidates = [
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        ]
+
+    candidates = env_candidates + default_candidates
     for candidate in candidates:
         if Path(candidate).exists():
             return ImageFont.truetype(candidate, preferred_size)
-    logging.warning("No bold TTF font found; using PIL default font.")
+    logging.warning("No usable TTF font found; using PIL default font.")
     return ImageFont.load_default()
 
 
@@ -270,7 +282,7 @@ def render_image(
     bg = Image.open(background_path).convert("RGBA").resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(bg)
 
-    font_date = load_font(18)
+    font_date = load_font(18, use_bold=True)
     font_title = load_font(14)
     font_empty = load_font(20)
     font_more = load_font(13)
