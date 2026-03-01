@@ -35,6 +35,8 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 TOKEN_PATH = Path("token.json")
+OAUTH_LOCAL_PORT = 8080
+OAUTH_LOCAL_REDIRECT_URI = f"http://localhost:{OAUTH_LOCAL_PORT}/"
 
 
 @dataclass
@@ -78,14 +80,15 @@ def load_font(preferred_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFo
 
 
 def build_client_config(client_id: str, client_secret: str) -> dict[str, Any]:
-    oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
+    # Google OAuth should use a Desktop/loopback-compatible client, or this exact
+    # loopback callback URI must be registered in the Cloud Console credentials.
     return {
         "installed": {
             "client_id": client_id,
             "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://localhost", f"http://localhost:{oauth_port}/"],
+            "redirect_uris": [OAUTH_LOCAL_REDIRECT_URI, "urn:ietf:wg:oauth:2.0:oob"],
         }
     }
 
@@ -111,13 +114,18 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path) -> Cre
         return creds
 
     logging.info("Starting first-run OAuth flow.")
+    logging.info(
+        "Expected local OAuth redirect URI for this run: %s (port %d)",
+        OAUTH_LOCAL_REDIRECT_URI,
+        OAUTH_LOCAL_PORT,
+    )
     flow = InstalledAppFlow.from_client_config(
         build_client_config(client_id, client_secret),
         SCOPES,
     )
     fixed_oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
     try:
-        creds = flow.run_local_server(port=0, open_browser=False)
+        creds = flow.run_local_server(port=OAUTH_LOCAL_PORT, open_browser=False)
     except Exception as exc:
         logging.warning(
             "OAuth local callback on a random port failed (%s). Retrying on fixed port %d.",
