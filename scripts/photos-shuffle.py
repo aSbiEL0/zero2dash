@@ -15,6 +15,9 @@ Configuration (.env):
 OAuth setup:
 - Put OAuth client secrets JSON at ~/zero2dash/client_secret.json (or override
   with GOOGLE_CLIENT_SECRETS_PATH).
+- Token path defaults to ~/zero2dash/token_photos.json so it does not
+  conflict with calendar scripts that use token.json (override with
+  GOOGLE_TOKEN_PATH if needed).
 - On first run, if token is missing/invalid and refresh is unavailable, the
   script starts a local OAuth flow and prints instructions to complete login.
 
@@ -89,7 +92,7 @@ def load_config() -> Config:
     return Config(
         album_id=album_id,
         client_secrets_path=env_path("GOOGLE_CLIENT_SECRETS_PATH", DEFAULT_ROOT / "client_secret.json"),
-        token_path=env_path("GOOGLE_TOKEN_PATH", DEFAULT_ROOT / "token.json"),
+        token_path=env_path("GOOGLE_TOKEN_PATH", DEFAULT_ROOT / "token_photos.json"),
         fb_device=os.getenv("FB_DEVICE", "/dev/fb1"),
         width=width,
         height=height,
