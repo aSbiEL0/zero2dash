@@ -217,7 +217,7 @@ def _candidate_absinfo_paths(device: str) -> list[Path]:
     return uniq
 
 
-def detect_touch_width(device: str, default_width: int) -> int:
+def detect_touch_width(device: str, default_width: int) -> tuple[int, int]:
     for absinfo_path in _candidate_absinfo_paths(device):
         try:
             with open(absinfo_path) as absinfo:
@@ -247,12 +247,12 @@ def detect_touch_width(device: str, default_width: int) -> int:
 
                     if max_val > min_val:
                         width = max_val - min_val + 1
-                        return max(100, width)
+                        return max(100, width), min_val
         except Exception:
             continue
 
     print(f"[rotator] Touch width detection failed ({device}); using width {default_width}", flush=True)
-    return default_width
+    return default_width, 0
 
 
 def resolve_script(path_like: str, base_dir: Path) -> str | None:
@@ -352,16 +352,21 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
         print("[rotator] No touch device found; touch controls disabled.", flush=True)
         return
 
-    device_touch_width = detect_touch_width(device, touch_width)
+    device_touch_width, device_touch_min = detect_touch_width(device, touch_width)
     print(f"[rotator] Touch controls listening on {device} (width {device_touch_width})", flush=True)
 
-    last_x = device_touch_width // 2
+    last_x = device_touch_min + (device_touch_width // 2)
     touch_down = False
     last_tap_ts = None
     last_emit = 0.0
 
     def emit_tap(tap_x: int, now: float) -> None:
         nonlocal last_tap_ts, last_emit
+        relative_x = tap_x - device_touch_min
+        if relative_x < 0:
+            relative_x = 0
+        elif relative_x >= device_touch_width:
+            relative_x = device_touch_width - 1
 
         if last_tap_ts is not None and (now - last_tap_ts) <= DOUBLE_TAP_WINDOW_SECS:
             if (now - last_emit) >= tap_debounce_secs:
@@ -371,7 +376,7 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
             return
 
         if (now - last_emit) >= tap_debounce_secs:
-            cmd_q.put("PREV" if tap_x < (device_touch_width // 2) else "NEXT")
+            cmd_q.put("PREV" if relative_x < (device_touch_width // 2) else "NEXT")
             last_emit = now
         last_tap_ts = now
 
