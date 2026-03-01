@@ -93,6 +93,12 @@ class ScreenPower:
         return result.returncode == 0
 
     def toggle(self) -> None:
+        """Toggle display power state without stopping the rotator process.
+
+        OFF requests panel blanking/powerdown (framebuffer output is hidden while the
+        rotator keeps running). ON unblanks/restores panel output so current page is
+        visible again.
+        """
         target = FB_BLANK_POWERDOWN if self.screen_on else FB_BLANK_UNBLANK
         try:
             toggled = self._toggle_via_fb_blank(target)
@@ -351,20 +357,27 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
 
     last_x = device_touch_width // 2
     touch_down = False
-    pending_tap: tuple[float, int] | None = None
+    last_tap_ts = None
     last_emit = 0.0
+
+    def emit_tap(tap_x: int, now: float) -> None:
+        nonlocal last_tap_ts, last_emit
+
+        if last_tap_ts is not None and (now - last_tap_ts) <= DOUBLE_TAP_WINDOW_SECS:
+            if (now - last_emit) >= tap_debounce_secs:
+                cmd_q.put("TOGGLE_SCREEN")
+                last_emit = now
+            last_tap_ts = None
+            return
+
+        if (now - last_emit) >= tap_debounce_secs:
+            cmd_q.put("PREV" if tap_x < (device_touch_width // 2) else "NEXT")
+            last_emit = now
+        last_tap_ts = now
 
     try:
         with open(device, "rb", buffering=0) as fd:
             while not stop_evt.is_set():
-                if pending_tap is not None:
-                    tap_ts, tap_x = pending_tap
-                    if time.monotonic() - tap_ts > DOUBLE_TAP_WINDOW_SECS:
-                        if (time.monotonic() - last_emit) >= tap_debounce_secs:
-                            cmd_q.put("PREV" if tap_x < (device_touch_width // 2) else "NEXT")
-                            last_emit = time.monotonic()
-                        pending_tap = None
-
                 readable, _, _ = select.select([fd], [], [], 0.2)
                 if not readable:
                     continue
@@ -382,25 +395,11 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
                         touch_down = True
                     elif ev_value == 0 and touch_down:
                         touch_down = False
-                        now = time.monotonic()
-                        if pending_tap is not None and now - pending_tap[0] <= DOUBLE_TAP_WINDOW_SECS:
-                            if (time.monotonic() - last_emit) >= tap_debounce_secs:
-                                cmd_q.put("TOGGLE_SCREEN")
-                                last_emit = time.monotonic()
-                            pending_tap = None
-                        else:
-                            pending_tap = (now, last_x)
+                        emit_tap(last_x, time.monotonic())
                 elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
                     if ev_value == -1 and touch_down:
                         touch_down = False
-                        now = time.monotonic()
-                        if pending_tap is not None and now - pending_tap[0] <= DOUBLE_TAP_WINDOW_SECS:
-                            if (time.monotonic() - last_emit) >= tap_debounce_secs:
-                                cmd_q.put("TOGGLE_SCREEN")
-                                last_emit = time.monotonic()
-                            pending_tap = None
-                        else:
-                            pending_tap = (now, last_x)
+                        emit_tap(last_x, time.monotonic())
                     elif ev_value >= 0:
                         touch_down = True
                 elif ev_type == EV_SYN:
