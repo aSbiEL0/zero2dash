@@ -120,6 +120,7 @@ def build_client_config(client_id: str, client_secret: str, oauth_port: int) -> 
 def save_credentials(creds: Credentials, token_path: Path) -> None:
     token_path.write_text(creds.to_json(), encoding="utf-8")
     os.chmod(token_path, 0o600)
+    logging.info("Saved OAuth token to %s", token_path.resolve())
 
 
 def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_port: int) -> Credentials:
@@ -144,9 +145,9 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
         build_client_config(client_id, client_secret, oauth_port),
         SCOPES,
     )
-    fixed_oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
     try:
         creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
+        logging.info("OAuth callback received successfully on localhost:%d.", oauth_port)
     except Exception as exc:
         if "redirect_uri_mismatch" in str(exc):
             logging.error(
