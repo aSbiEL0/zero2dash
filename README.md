@@ -199,12 +199,14 @@ python3 -m pip install google-api-python-client google-auth-oauthlib python-dote
    - `OUTPUT_PATH` (recommended: `~/zero2dash/images/calendash.png`)
    - `BACKGROUND_IMAGE`
    - `ICON_IMAGE`
+   - `CALENDASH_FONT_PATH` (optional comma-separated font file paths; first existing path is used)
    - `TIMEZONE` (example: `Europe/London`)
    - `OAUTH_PORT` (optional, default `8080`)
 
 3. Place your assets:
    - `BACKGROUND_IMAGE`: 320×240 background containing the Google Calendar logo/header.
    - `ICON_IMAGE`: small calendar icon used in each event row.
+   - `CALENDASH_FONT_PATH`: optional fallback list to try alternate fonts, e.g. `/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf,/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf`.
 
 ### First run (OAuth)
 
