@@ -22,6 +22,8 @@ OAuth setup:
   GOOGLE_TOKEN_PATH if needed).
 - On first run, if token is missing/invalid and refresh is unavailable, the
   script starts a local OAuth flow and prints instructions to complete login.
+- In headless environments, it does not auto-launch a browser by default;
+  copy the printed URL into any browser and paste back the result.
 
 Fallback:
 - Ensure local fallback image exists at ~/zero2dash/images/photos-fallback.png
@@ -67,6 +69,7 @@ class Config:
     fallback_image: Path
     logo_path: Path
     oauth_port: int
+    oauth_open_browser: bool
 
 
 class Log:
@@ -93,6 +96,8 @@ def load_config() -> Config:
 
     width = int(os.getenv("WIDTH", "320"))
     height = int(os.getenv("HEIGHT", "240"))
+
+    oauth_open_browser = os.getenv("OAUTH_OPEN_BROWSER", "0").strip().lower() in {"1", "true", "yes", "on"}
     return Config(
         album_id=album_id,
         client_secrets_path=env_path("GOOGLE_CLIENT_SECRETS_PATH", DEFAULT_ROOT / "client_secret.json"),
@@ -106,6 +111,7 @@ def load_config() -> Config:
         fallback_image=env_path("FALLBACK_IMAGE", DEFAULT_ROOT / "images" / "photos-fallback.png"),
         logo_path=env_path("LOGO_PATH", Path("/images/goo-photos-icon.png")),
         oauth_port=int(os.getenv("OAUTH_PORT", "8080")),
+        oauth_open_browser=oauth_open_browser,
     )
 
 
@@ -154,7 +160,12 @@ def authenticate(config: Config, log: Log) -> Credentials:
                 f"Client secret not found: {config.client_secrets_path}; set GOOGLE_CLIENT_SECRETS_PATH "
                 "or provide GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET in .env"
             )
-        creds = flow.run_local_server(port=config.oauth_port, prompt="consent", authorization_prompt_message="")
+        creds = flow.run_local_server(
+            port=config.oauth_port,
+            prompt="consent",
+            authorization_prompt_message="",
+            open_browser=config.oauth_open_browser,
+        )
 
     config.token_path.parent.mkdir(parents=True, exist_ok=True)
     config.token_path.write_text(creds.to_json(), encoding="utf-8")
