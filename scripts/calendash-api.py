@@ -78,6 +78,14 @@ def required_env(name: str) -> str:
     return value
 
 
+def required_env_any(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    raise ValueError(f"Missing required env variable: one of {', '.join(names)}")
+
+
 def expand_path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
@@ -193,11 +201,17 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
         creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
         logging.info("OAuth callback received successfully on localhost:%d.", oauth_port)
     except Exception as exc:
-        if "redirect_uri_mismatch" in str(exc):
+        exc_text = str(exc).lower()
+        if "redirect_uri_mismatch" in exc_text:
             logging.error(
                 "OAuth redirect mismatch. Add this URI to your Google OAuth client redirect list: %s",
                 redirect_uri,
             )
+        if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
+            logging.error(
+                "Google blocked this OAuth client. For calendar, use a Desktop OAuth client and add your account as a test user on the consent screen."
+            )
+            logging.error("You can also set GOOGLE_CALENDAR_CLIENT_ID / GOOGLE_CALENDAR_CLIENT_SECRET to use a dedicated calendar OAuth client.")
         logging.info("Local server auth failed (%s); falling back to console flow.", exc)
         creds = flow.run_console()
     save_credentials(creds, token_path)
@@ -392,8 +406,8 @@ def main() -> int:
     load_dotenv()
 
     try:
-        client_id = required_env("GOOGLE_CLIENT_ID")
-        client_secret = required_env("GOOGLE_CLIENT_SECRET")
+        client_id = required_env_any("GOOGLE_CALENDAR_CLIENT_ID", "GOOGLE_CLIENT_ID")
+        client_secret = required_env_any("GOOGLE_CALENDAR_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET")
         calendar_id = required_env("GOOGLE_CALENDAR_ID")
         tz_name = required_env("TIMEZONE")
         output_path = expand_path(required_env("OUTPUT_PATH"))

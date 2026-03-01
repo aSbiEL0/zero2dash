@@ -195,6 +195,7 @@ python3 -m pip install google-api-python-client google-auth-oauthlib python-dote
 2. Set these variables in `.env`:
    - `GOOGLE_CLIENT_ID`
    - `GOOGLE_CLIENT_SECRET`
+   - Optional: `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET` (dedicated Calendar OAuth client)
    - `GOOGLE_CALENDAR_ID` (for personal calendar use `primary`)
    - `OUTPUT_PATH` (recommended: `~/zero2dash/images/calendash.png`)
    - `BACKGROUND_IMAGE`
@@ -233,6 +234,13 @@ Use separate OAuth token files per script to avoid scope conflicts:
 - `scripts/photos-shuffle.py` (Photos): `GOOGLE_TOKEN_PATH_PHOTOS` (default `~/zero2dash/token_photos.json`)
 
 Do **not** point the Photos script at `token.json`. The Photos script now blocks that configuration and asks for a separate token path.
+
+If you see **"app restricted"** in browser consent, create **separate Desktop OAuth clients** in Google Cloud: one for Calendar and one for Photos. Then set:
+
+- Calendar: `GOOGLE_CALENDAR_CLIENT_ID` / `GOOGLE_CALENDAR_CLIENT_SECRET`
+- Photos: `GOOGLE_PHOTOS_CLIENT_ID` / `GOOGLE_PHOTOS_CLIENT_SECRET` (or `GOOGLE_PHOTOS_CLIENT_SECRETS_PATH`)
+
+Also keep the consent screen in **Testing** and add your Google account as a **Test user**.
 
 ### OAuth troubleshooting (`localhost` connection refused after clicking **Continue**)
 
