@@ -224,6 +224,16 @@ python3 scripts/calendash-api.py
 
 After first auth, future runs refresh tokens automatically and are suitable for headless cron execution.
 
+
+### Token separation (important)
+
+Use separate OAuth token files per script to avoid scope conflicts:
+
+- `scripts/calendash-api.py` (Calendar): `GOOGLE_TOKEN_PATH` (default `token.json`)
+- `scripts/photos-shuffle.py` (Photos): `GOOGLE_TOKEN_PATH_PHOTOS` (default `~/zero2dash/token_photos.json`)
+
+Do **not** point the Photos script at `token.json`. The Photos script now blocks that configuration and asks for a separate token path.
+
 ### OAuth troubleshooting (`localhost` connection refused after clicking **Continue**)
 
 If Google sign-in works but the final redirect page fails with `localhost refused to connect`, the browser and `calendash-api.py` are usually not on the same network namespace.

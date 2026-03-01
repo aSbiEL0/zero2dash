@@ -9,7 +9,7 @@ google-api-python-client.
 
 Configuration (.env):
 - Required: GOOGLE_PHOTOS_ALBUM_ID
-- Optional: GOOGLE_CLIENT_SECRETS_PATH, GOOGLE_TOKEN_PATH, FB_DEVICE, WIDTH,
+- Optional: GOOGLE_CLIENT_SECRETS_PATH, GOOGLE_TOKEN_PATH_PHOTOS, FB_DEVICE, WIDTH,
   HEIGHT, CACHE_DIR, FALLBACK_IMAGE, LOGO_PATH
 - Optional OAuth alternative: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
   (used when GOOGLE_CLIENT_SECRETS_PATH file is not present).
@@ -19,7 +19,7 @@ OAuth setup:
   with GOOGLE_CLIENT_SECRETS_PATH).
 - Token path defaults to ~/zero2dash/token_photos.json so it does not
   conflict with calendar scripts that use token.json (override with
-  GOOGLE_TOKEN_PATH if needed).
+  GOOGLE_TOKEN_PATH_PHOTOS if needed).
 - On first run, if token is missing/invalid and refresh is unavailable, the
   script starts a local OAuth flow and prints instructions to complete login.
 - In headless environments, it does not auto-launch a browser by default;
@@ -34,6 +34,7 @@ Fallback:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 from dataclasses import dataclass
@@ -72,6 +73,21 @@ class Config:
     oauth_open_browser: bool
 
 
+def _normalize_scopes(raw_scopes: Any) -> set[str]:
+    if isinstance(raw_scopes, str):
+        return {raw_scopes}
+    if isinstance(raw_scopes, (list, tuple, set)):
+        return {str(scope) for scope in raw_scopes if scope}
+    return set()
+
+
+def _is_token_compatible_with_photos(token_payload: dict[str, Any]) -> bool:
+    token_scopes = _normalize_scopes(token_payload.get("scopes") or token_payload.get("scope"))
+    if not token_scopes:
+        return True
+    return set(SCOPES).issubset(token_scopes)
+
+
 class Log:
     def __init__(self, debug: bool = False) -> None:
         self.debug_enabled = debug
@@ -103,7 +119,10 @@ def load_config() -> Config:
         client_secrets_path=env_path("GOOGLE_CLIENT_SECRETS_PATH", DEFAULT_ROOT / "client_secret.json"),
         client_id=os.getenv("GOOGLE_CLIENT_ID", "").strip(),
         client_secret=os.getenv("GOOGLE_CLIENT_SECRET", "").strip(),
-        token_path=env_path("GOOGLE_TOKEN_PATH", DEFAULT_ROOT / "token_photos.json"),
+        token_path=env_path(
+            "GOOGLE_TOKEN_PATH_PHOTOS",
+            env_path("GOOGLE_TOKEN_PATH", DEFAULT_ROOT / "token_photos.json"),
+        ),
         fb_device=os.getenv("FB_DEVICE", "/dev/fb1"),
         width=width,
         height=height,
@@ -118,12 +137,30 @@ def load_config() -> Config:
 def authenticate(config: Config, log: Log) -> Credentials:
     creds: Credentials | None = None
 
+    calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
+    if config.token_path.resolve() == calendar_default_token:
+        raise ValueError(
+            "GOOGLE_TOKEN_PATH points to token.json, which is reserved for calendash-api.py. "
+            "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
+        )
+
     if config.token_path.exists():
         try:
-            creds = Credentials.from_authorized_user_file(str(config.token_path), SCOPES)
+            payload = json.loads(config.token_path.read_text(encoding="utf-8"))
         except Exception as exc:
             log.info(f"Existing token at {config.token_path} is invalid ({exc}); re-authenticating")
-            creds = None
+            payload = None
+
+        if payload and not _is_token_compatible_with_photos(payload):
+            log.info(
+                f"Token at {config.token_path} does not include Google Photos scope; re-authenticating"
+            )
+        else:
+            try:
+                creds = Credentials.from_authorized_user_file(str(config.token_path), SCOPES)
+            except Exception as exc:
+                log.info(f"Existing token at {config.token_path} is invalid ({exc}); re-authenticating")
+                creds = None
 
     if creds and creds.valid:
         return creds
@@ -163,7 +200,7 @@ def authenticate(config: Config, log: Log) -> Credentials:
         creds = flow.run_local_server(
             port=config.oauth_port,
             prompt="consent",
-            authorization_prompt_message="",
+            authorization_prompt_message="Open this URL in your browser to authorize Google Photos access: {url}",
             open_browser=config.oauth_open_browser,
         )
 
