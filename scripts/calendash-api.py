@@ -35,8 +35,7 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 TOKEN_PATH = Path("token.json")
-OAUTH_LOCAL_PORT = 8080
-OAUTH_LOCAL_REDIRECT_URI = f"http://localhost:{OAUTH_LOCAL_PORT}/"
+DEFAULT_OAUTH_PORT = 8080
 
 
 @dataclass
@@ -66,6 +65,18 @@ def expand_path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
+def optional_env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer for {name}: {raw}") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+    return value
+
 def load_font(preferred_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -88,7 +99,16 @@ def build_client_config(client_id: str, client_secret: str) -> dict[str, Any]:
             "client_secret": client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [OAUTH_LOCAL_REDIRECT_URI, "urn:ietf:wg:oauth:2.0:oob"],
+            "redirect_uris": [
+                "http://localhost",
+                "http://localhost/",
+                "http://localhost:8080",
+                "http://localhost:8080/",
+                "http://127.0.0.1",
+                "http://127.0.0.1/",
+                "http://127.0.0.1:8080",
+                "http://127.0.0.1:8080/",
+            ],
         }
     }
 
@@ -98,7 +118,7 @@ def save_credentials(creds: Credentials, token_path: Path) -> None:
     os.chmod(token_path, 0o600)
 
 
-def get_credentials(client_id: str, client_secret: str, token_path: Path) -> Credentials:
+def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_port: int) -> Credentials:
     creds: Credentials | None = None
 
     if token_path.exists():
@@ -113,19 +133,14 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path) -> Cre
         save_credentials(creds, token_path)
         return creds
 
-    logging.info("Starting first-run OAuth flow.")
-    logging.info(
-        "Expected local OAuth redirect URI for this run: %s (port %d)",
-        OAUTH_LOCAL_REDIRECT_URI,
-        OAUTH_LOCAL_PORT,
-    )
+    logging.info("Starting first-run OAuth flow on localhost:%d.", oauth_port)
     flow = InstalledAppFlow.from_client_config(
         build_client_config(client_id, client_secret),
         SCOPES,
     )
     fixed_oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
     try:
-        creds = flow.run_local_server(port=OAUTH_LOCAL_PORT, open_browser=False)
+        creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
     except Exception as exc:
         logging.warning(
             "OAuth local callback on a random port failed (%s). Retrying on fixed port %d.",
@@ -339,12 +354,13 @@ def main() -> int:
         output_path = expand_path(required_env("OUTPUT_PATH"))
         background_path = expand_path(required_env("BACKGROUND_IMAGE"))
         icon_path = expand_path(required_env("ICON_IMAGE"))
+        oauth_port = optional_env_int("OAUTH_PORT", DEFAULT_OAUTH_PORT)
     except Exception as exc:
         logging.error("Configuration error: %s", exc)
         return 1
 
     try:
-        creds = get_credentials(client_id, client_secret, TOKEN_PATH)
+        creds = get_credentials(client_id, client_secret, TOKEN_PATH, oauth_port)
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         events = fetch_events(service, calendar_id=calendar_id, tz_name=tz_name, retries=3)
 

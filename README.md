@@ -125,7 +125,7 @@ The `display_rotator.py` script uses environment variables to discover and contr
 
 - `ROTATOR_PAGES_DIR` – directory containing dashboard scripts (default: `scripts`)
 - `ROTATOR_PAGE_GLOB` – glob pattern for dashboard filenames (default: `piholestats_v*.py`)
-- `ROTATOR_EXCLUDE_PATTERNS` – comma‑separated list of patterns to ignore (default: `pihole-display-dark*.py`)
+- `ROTATOR_EXCLUDE_PATTERNS` – comma‑separated list of patterns to ignore (default: `piholestats_v1.2.py,calendash-api.py,calendash-img.py`)
 - `ROTATOR_SECS` – seconds to show each page before rotating (minimum 5)
 - `ROTATOR_TOUCH_WIDTH` – touch‑sensitive width threshold for navigation
 - `ROTATOR_PAGES` – optional explicit comma‑separated list of scripts to rotate
@@ -175,7 +175,7 @@ Touch controls and static pages
 
 ## Google Calendar image generator (`scripts/calendash-api.py`)
 
-This script creates a daily 320×240 PNG summary of upcoming Google Calendar events for TFT display rotation.
+This script creates a daily 320×240 PNG summary of upcoming Google Calendar events. It is designed to run separately from the rotator so image generation work is done once at 06:00 instead of every page cycle.
 
 ### Install dependencies
 
@@ -200,12 +200,19 @@ python3 -m pip install google-api-python-client google-auth-oauthlib python-dote
    - `BACKGROUND_IMAGE`
    - `ICON_IMAGE`
    - `TIMEZONE` (example: `Europe/London`)
+   - `OAUTH_PORT` (optional, default `8080`)
 
 3. Place your assets:
    - `BACKGROUND_IMAGE`: 320×240 background containing the Google Calendar logo/header.
    - `ICON_IMAGE`: small calendar icon used in each event row.
 
 ### First run (OAuth)
+
+Before first run, in Google Cloud Console open your OAuth client and ensure this redirect URI is allowed (or your custom `OAUTH_PORT` equivalent):
+
+```text
+http://localhost:8080/
+```
 
 Run once manually to complete OAuth2 login (local server flow) and create `token.json` in the repo root. When prompted, open the printed `http://localhost:<port>/` URL in a browser on the same machine (or via SSH port forwarding), approve access, and wait for the terminal to confirm the token was saved:
 
@@ -222,3 +229,23 @@ After first auth, future runs refresh tokens automatically and are suitable for 
 ```
 
 The script fetches events from **today 00:00** to **+3 calendar days 23:59**, retries API/network failures with exponential backoff, and writes either the event summary image, a no-events image, or an error image.
+
+## Calendar split workflow (generator + image-only display)
+
+Use two independent scripts to reduce steady-state CPU and memory use:
+
+1. `scripts/calendash-api.py` (scheduled, e.g. 06:00)
+   - Calls Google Calendar API
+   - Renders `images/calendash.png`
+2. `scripts/calendash-img.py` (runtime display script)
+   - Displays the pre-rendered image
+   - Waits for either a touch event or a timeout, then exits
+
+Example:
+
+```sh
+python3 scripts/calendash-api.py
+python3 scripts/calendash-img.py --timeout 30 --touch-device /dev/input/event0
+```
+
+If `--touch-device` does not exist, `calendash-img.py` safely falls back to timeout-only behavior.
