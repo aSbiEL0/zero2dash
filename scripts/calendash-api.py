@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
@@ -34,8 +35,24 @@ from PIL import Image, ImageDraw, ImageFont
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
-TOKEN_PATH = Path("token.json")
+DEFAULT_TOKEN_PATH = Path("token.json")
 DEFAULT_OAUTH_PORT = 8080
+
+
+def _normalize_scopes(raw_scopes: Any) -> set[str]:
+    if isinstance(raw_scopes, str):
+        return {raw_scopes}
+    if isinstance(raw_scopes, (list, tuple, set)):
+        return {str(scope) for scope in raw_scopes if scope}
+    return set()
+
+
+def _is_token_compatible_with_calendar(token_payload: dict[str, Any]) -> bool:
+    token_scopes = _normalize_scopes(token_payload.get("scopes") or token_payload.get("scope"))
+    if not token_scopes:
+        # Older token files may not include explicit scopes; let google-auth decide.
+        return True
+    return set(SCOPES).issubset(token_scopes)
 
 
 @dataclass
@@ -59,6 +76,14 @@ def required_env(name: str) -> str:
     if not value:
         raise ValueError(f"Missing required env variable: {name}")
     return value
+
+
+def required_env_any(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    raise ValueError(f"Missing required env variable: one of {', '.join(names)}")
 
 
 def expand_path(value: str) -> Path:
@@ -139,7 +164,22 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
     creds: Credentials | None = None
 
     if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        try:
+            payload = json.loads(token_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logging.warning("Ignoring invalid token file at %s (%s).", token_path.resolve(), exc)
+            payload = None
+
+        if payload and not _is_token_compatible_with_calendar(payload):
+            logging.warning(
+                "Token at %s does not include calendar scope; re-authenticating.",
+                token_path.resolve(),
+            )
+        else:
+            try:
+                creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+            except Exception as exc:
+                logging.warning("Unable to load token from %s (%s); re-authenticating.", token_path.resolve(), exc)
 
     if creds and creds.valid:
         return creds
@@ -161,11 +201,17 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
         creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
         logging.info("OAuth callback received successfully on localhost:%d.", oauth_port)
     except Exception as exc:
-        if "redirect_uri_mismatch" in str(exc):
+        exc_text = str(exc).lower()
+        if "redirect_uri_mismatch" in exc_text:
             logging.error(
                 "OAuth redirect mismatch. Add this URI to your Google OAuth client redirect list: %s",
                 redirect_uri,
             )
+        if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
+            logging.error(
+                "Google blocked this OAuth client. For calendar, use a Desktop OAuth client and add your account as a test user on the consent screen."
+            )
+            logging.error("You can also set GOOGLE_CALENDAR_CLIENT_ID / GOOGLE_CALENDAR_CLIENT_SECRET to use a dedicated calendar OAuth client.")
         logging.info("Local server auth failed (%s); falling back to console flow.", exc)
         creds = flow.run_console()
     save_credentials(creds, token_path)
@@ -360,20 +406,21 @@ def main() -> int:
     load_dotenv()
 
     try:
-        client_id = required_env("GOOGLE_CLIENT_ID")
-        client_secret = required_env("GOOGLE_CLIENT_SECRET")
+        client_id = required_env_any("GOOGLE_CALENDAR_CLIENT_ID", "GOOGLE_CLIENT_ID")
+        client_secret = required_env_any("GOOGLE_CALENDAR_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET")
         calendar_id = required_env("GOOGLE_CALENDAR_ID")
         tz_name = required_env("TIMEZONE")
         output_path = expand_path(required_env("OUTPUT_PATH"))
         background_path = expand_path(required_env("BACKGROUND_IMAGE"))
         icon_path = expand_path(required_env("ICON_IMAGE"))
         oauth_port = optional_env_int("OAUTH_PORT", DEFAULT_OAUTH_PORT)
+        token_path = expand_path(os.getenv("GOOGLE_TOKEN_PATH", str(DEFAULT_TOKEN_PATH)))
     except Exception as exc:
         logging.error("Configuration error: %s", exc)
         return 1
 
     try:
-        creds = get_credentials(client_id, client_secret, TOKEN_PATH, oauth_port)
+        creds = get_credentials(client_id, client_secret, token_path, oauth_port)
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
         events = fetch_events(service, calendar_id=calendar_id, tz_name=tz_name, retries=3)
 
@@ -405,7 +452,7 @@ def main() -> int:
             )
             return 2
         except Exception as render_exc:
-            logging.error("Also failed rendering error image: %s", render_exc)
+            logging.error("Failed to render fallback image: %s", render_exc)
             return 3
 
 

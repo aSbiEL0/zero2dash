@@ -9,17 +9,17 @@ google-api-python-client.
 
 Configuration (.env):
 - Required: GOOGLE_PHOTOS_ALBUM_ID
-- Optional: GOOGLE_CLIENT_SECRETS_PATH, GOOGLE_TOKEN_PATH, FB_DEVICE, WIDTH,
+- Optional: GOOGLE_PHOTOS_CLIENT_SECRETS_PATH, GOOGLE_TOKEN_PATH_PHOTOS, FB_DEVICE, WIDTH,
   HEIGHT, CACHE_DIR, FALLBACK_IMAGE, LOGO_PATH
-- Optional OAuth alternative: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
-  (used when GOOGLE_CLIENT_SECRETS_PATH file is not present).
+- Optional OAuth alternative: GOOGLE_PHOTOS_CLIENT_ID and GOOGLE_PHOTOS_CLIENT_SECRET
+  (used when GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file is not present).
 
 OAuth setup:
 - Put OAuth client secrets JSON at ~/zero2dash/client_secret.json (or override
-  with GOOGLE_CLIENT_SECRETS_PATH).
+  with GOOGLE_PHOTOS_CLIENT_SECRETS_PATH).
 - Token path defaults to ~/zero2dash/token_photos.json so it does not
   conflict with calendar scripts that use token.json (override with
-  GOOGLE_TOKEN_PATH if needed).
+  GOOGLE_TOKEN_PATH_PHOTOS if needed).
 - On first run, if token is missing/invalid and refresh is unavailable, the
   script starts a local OAuth flow and prints instructions to complete login.
 - In headless environments, it does not auto-launch a browser by default;
@@ -34,6 +34,7 @@ Fallback:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 from dataclasses import dataclass
@@ -72,6 +73,21 @@ class Config:
     oauth_open_browser: bool
 
 
+def _normalize_scopes(raw_scopes: Any) -> set[str]:
+    if isinstance(raw_scopes, str):
+        return {raw_scopes}
+    if isinstance(raw_scopes, (list, tuple, set)):
+        return {str(scope) for scope in raw_scopes if scope}
+    return set()
+
+
+def _is_token_compatible_with_photos(token_payload: dict[str, Any]) -> bool:
+    token_scopes = _normalize_scopes(token_payload.get("scopes") or token_payload.get("scope"))
+    if not token_scopes:
+        return True
+    return set(SCOPES).issubset(token_scopes)
+
+
 class Log:
     def __init__(self, debug: bool = False) -> None:
         self.debug_enabled = debug
@@ -100,10 +116,10 @@ def load_config() -> Config:
     oauth_open_browser = os.getenv("OAUTH_OPEN_BROWSER", "0").strip().lower() in {"1", "true", "yes", "on"}
     return Config(
         album_id=album_id,
-        client_secrets_path=env_path("GOOGLE_CLIENT_SECRETS_PATH", DEFAULT_ROOT / "client_secret.json"),
-        client_id=os.getenv("GOOGLE_CLIENT_ID", "").strip(),
-        client_secret=os.getenv("GOOGLE_CLIENT_SECRET", "").strip(),
-        token_path=env_path("GOOGLE_TOKEN_PATH", DEFAULT_ROOT / "token_photos.json"),
+        client_secrets_path=env_path("GOOGLE_PHOTOS_CLIENT_SECRETS_PATH", env_path("GOOGLE_CLIENT_SECRETS_PATH", DEFAULT_ROOT / "client_secret.json")),
+        client_id=os.getenv("GOOGLE_PHOTOS_CLIENT_ID", os.getenv("GOOGLE_CLIENT_ID", "")).strip(),
+        client_secret=os.getenv("GOOGLE_PHOTOS_CLIENT_SECRET", os.getenv("GOOGLE_CLIENT_SECRET", "")).strip(),
+        token_path=env_path("GOOGLE_TOKEN_PATH_PHOTOS", DEFAULT_ROOT / "token_photos.json"),
         fb_device=os.getenv("FB_DEVICE", "/dev/fb1"),
         width=width,
         height=height,
@@ -118,12 +134,30 @@ def load_config() -> Config:
 def authenticate(config: Config, log: Log) -> Credentials:
     creds: Credentials | None = None
 
+    calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
+    if config.token_path.resolve() == calendar_default_token:
+        raise ValueError(
+            "GOOGLE_TOKEN_PATH points to token.json, which is reserved for calendash-api.py. "
+            "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
+        )
+
     if config.token_path.exists():
         try:
-            creds = Credentials.from_authorized_user_file(str(config.token_path), SCOPES)
+            payload = json.loads(config.token_path.read_text(encoding="utf-8"))
         except Exception as exc:
             log.info(f"Existing token at {config.token_path} is invalid ({exc}); re-authenticating")
-            creds = None
+            payload = None
+
+        if payload and not _is_token_compatible_with_photos(payload):
+            log.info(
+                f"Token at {config.token_path} does not include Google Photos scope; re-authenticating"
+            )
+        else:
+            try:
+                creds = Credentials.from_authorized_user_file(str(config.token_path), SCOPES)
+            except Exception as exc:
+                log.info(f"Existing token at {config.token_path} is invalid ({exc}); re-authenticating")
+                creds = None
 
     if creds and creds.valid:
         return creds
@@ -157,15 +191,22 @@ def authenticate(config: Config, log: Log) -> Credentials:
             )
         else:
             raise FileNotFoundError(
-                f"Client secret not found: {config.client_secrets_path}; set GOOGLE_CLIENT_SECRETS_PATH "
-                "or provide GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET in .env"
+                f"Client secret not found: {config.client_secrets_path}; set GOOGLE_PHOTOS_CLIENT_SECRETS_PATH "
+                "or provide GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET in .env"
             )
-        creds = flow.run_local_server(
-            port=config.oauth_port,
-            prompt="consent",
-            authorization_prompt_message="",
-            open_browser=config.oauth_open_browser,
-        )
+        try:
+            creds = flow.run_local_server(
+                port=config.oauth_port,
+                prompt="consent",
+                authorization_prompt_message="Open this URL in your browser to authorize Google Photos access: {url}",
+                open_browser=config.oauth_open_browser,
+            )
+        except Exception as exc:
+            exc_text = str(exc).lower()
+            if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
+                log.info("Google blocked this OAuth client for Photos. Use a dedicated Desktop OAuth client and add your account as a test user.")
+                log.info("Set GOOGLE_PHOTOS_CLIENT_ID / GOOGLE_PHOTOS_CLIENT_SECRET (or GOOGLE_PHOTOS_CLIENT_SECRETS_PATH) in .env.")
+            raise
 
     config.token_path.parent.mkdir(parents=True, exist_ok=True)
     config.token_path.write_text(creds.to_json(), encoding="utf-8")
