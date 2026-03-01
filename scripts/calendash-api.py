@@ -109,12 +109,16 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path) -> Cre
         save_credentials(creds, token_path)
         return creds
 
-    logging.info("Starting first-run OAuth flow (console mode).")
+    logging.info("Starting first-run OAuth flow.")
     flow = InstalledAppFlow.from_client_config(
         build_client_config(client_id, client_secret),
         SCOPES,
     )
-    creds = flow.run_console()
+    try:
+        creds = flow.run_local_server(port=0, open_browser=False)
+    except Exception as exc:
+        logging.info("Local server auth failed (%s); falling back to console flow.", exc)
+        creds = flow.run_console()
     save_credentials(creds, token_path)
     return creds
 
