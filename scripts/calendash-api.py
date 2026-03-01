@@ -77,6 +77,7 @@ def optional_env_int(name: str, default: int) -> int:
         raise ValueError(f"{name} must be greater than 0")
     return value
 
+
 def load_font(preferred_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -90,9 +91,12 @@ def load_font(preferred_size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFo
     return ImageFont.load_default()
 
 
-def build_client_config(client_id: str, client_secret: str) -> dict[str, Any]:
-    # Google OAuth should use a Desktop/loopback-compatible client, or this exact
-    # loopback callback URI must be registered in the Cloud Console credentials.
+def expected_redirect_uri(oauth_port: int) -> str:
+    return f"http://localhost:{oauth_port}/"
+
+
+def build_client_config(client_id: str, client_secret: str, oauth_port: int) -> dict[str, Any]:
+    redirect_uri = expected_redirect_uri(oauth_port)
     return {
         "installed": {
             "client_id": client_id,
@@ -102,12 +106,12 @@ def build_client_config(client_id: str, client_secret: str) -> dict[str, Any]:
             "redirect_uris": [
                 "http://localhost",
                 "http://localhost/",
-                "http://localhost:8080",
-                "http://localhost:8080/",
+                f"http://localhost:{oauth_port}",
+                redirect_uri,
                 "http://127.0.0.1",
                 "http://127.0.0.1/",
-                "http://127.0.0.1:8080",
-                "http://127.0.0.1:8080/",
+                f"http://127.0.0.1:{oauth_port}",
+                redirect_uri.replace("localhost", "127.0.0.1", 1),
             ],
         }
     }
@@ -133,28 +137,24 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
         save_credentials(creds, token_path)
         return creds
 
+    redirect_uri = expected_redirect_uri(oauth_port)
     logging.info("Starting first-run OAuth flow on localhost:%d.", oauth_port)
+    logging.info("Expected OAuth redirect URI: %s", redirect_uri)
     flow = InstalledAppFlow.from_client_config(
-        build_client_config(client_id, client_secret),
+        build_client_config(client_id, client_secret, oauth_port),
         SCOPES,
     )
     fixed_oauth_port = int(os.getenv("GOOGLE_OAUTH_LOCAL_PORT", "8080"))
     try:
         creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
     except Exception as exc:
-        logging.warning(
-            "OAuth local callback on a random port failed (%s). Retrying on fixed port %d.",
-            exc,
-            fixed_oauth_port,
-        )
-        try:
-            creds = flow.run_local_server(port=fixed_oauth_port, open_browser=False)
-        except Exception as fixed_port_exc:
-            raise RuntimeError(
-                "OAuth setup failed. Ensure GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET belong to a Google OAuth "
-                "Desktop app client and that Authorized redirect URIs include http://localhost and "
-                f"http://localhost:{fixed_oauth_port}/ in Google Cloud Console."
-            ) from fixed_port_exc
+        if "redirect_uri_mismatch" in str(exc):
+            logging.error(
+                "OAuth redirect mismatch. Add this URI to your Google OAuth client redirect list: %s",
+                redirect_uri,
+            )
+        logging.info("Local server auth failed (%s); falling back to console flow.", exc)
+        creds = flow.run_console()
     save_credentials(creds, token_path)
     return creds
 

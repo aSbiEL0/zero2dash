@@ -11,7 +11,7 @@ from PIL import Image
 
 FBDEV_DEFAULT = "/dev/fb1"
 W, H = 320, 240
-DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "calendash-temp.png"
+DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "calendash.png"
 
 
 def rgb888_to_rgb565(image: Image.Image) -> bytes:

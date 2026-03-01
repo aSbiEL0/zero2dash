@@ -124,8 +124,8 @@ ACTIVE_HOURS = (22, 7)             # hours to run this dark mode dashboard
 The `display_rotator.py` script uses environment variables to discover and control dashboards:
 
 - `ROTATOR_PAGES_DIR` – directory containing dashboard scripts (default: `scripts`)
-- `ROTATOR_PAGE_GLOB` – glob pattern for dashboard filenames (default: `piholestats_v*.py`)
-- `ROTATOR_EXCLUDE_PATTERNS` – comma‑separated list of patterns to ignore (default: `piholestats_v1.2.py,calendash-api.py,calendash-img.py`)
+- `ROTATOR_PAGE_GLOB` – glob pattern for dashboard filenames (default: `*.py`)
+- `ROTATOR_EXCLUDE_PATTERNS` – comma‑separated list of patterns to ignore (default: `piholestats_v1.2.py,calendash-api.py`)
 - `ROTATOR_SECS` – seconds to show each page before rotating (minimum 5)
 - `ROTATOR_TOUCH_WIDTH` – touch‑sensitive width threshold for navigation
 - `ROTATOR_PAGES` – optional explicit comma‑separated list of scripts to rotate
@@ -196,7 +196,7 @@ python3 -m pip install google-api-python-client google-auth-oauthlib python-dote
    - `GOOGLE_CLIENT_ID`
    - `GOOGLE_CLIENT_SECRET`
    - `GOOGLE_CALENDAR_ID` (for personal calendar use `primary`)
-   - `OUTPUT_PATH`
+   - `OUTPUT_PATH` (recommended: `~/zero2dash/images/calendash.png`)
    - `BACKGROUND_IMAGE`
    - `ICON_IMAGE`
    - `TIMEZONE` (example: `Europe/London`)
@@ -208,7 +208,7 @@ python3 -m pip install google-api-python-client google-auth-oauthlib python-dote
 
 ### First run (OAuth)
 
-Before first run, in Google Cloud Console open your OAuth client and ensure this redirect URI is allowed (or your custom `OAUTH_PORT` equivalent):
+Before first run, in Google Cloud Console open your OAuth client and ensure this redirect URI is allowed (replace `8080` if you set `OAUTH_PORT` differently):
 
 ```text
 http://localhost:8080/
@@ -240,6 +240,8 @@ Use two independent scripts to reduce steady-state CPU and memory use:
 2. `scripts/calendash-img.py` (runtime display script)
    - Displays the pre-rendered image
    - Waits for either a touch event or a timeout, then exits
+
+`calendash-api.py` is excluded from rotator discovery by default because it is a generator, but `calendash-img.py` is **not** excluded so you can rotate it like any other display page.
 
 Example:
 

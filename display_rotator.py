@@ -28,7 +28,7 @@ from pathlib import Path
 
 DEFAULT_PAGES_DIR = "scripts"
 DEFAULT_PAGE_GLOB = "*.py"
-DEFAULT_EXCLUDE_PATTERNS = ["piholestats_v1.2.py", "calendash-api.py", "calendash-img.py"]
+DEFAULT_EXCLUDE_PATTERNS = ["piholestats_v1.2.py", "calendash-api.py"]
 DEFAULT_ROTATE_SECS = 30
 SHUTDOWN_WAIT_SECS = 5
 DEFAULT_FBDEV = "/dev/fb1"
