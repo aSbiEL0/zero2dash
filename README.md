@@ -207,7 +207,7 @@ python3 -m pip install google-api-python-client google-auth-oauthlib python-dote
 
 ### First run (OAuth)
 
-Run once manually to complete OAuth2 login and create `token.json` in the repo root:
+Run once manually to complete OAuth2 login (local server flow) and create `token.json` in the repo root. When prompted, open the printed `http://localhost:<port>/` URL in a browser on the same machine (or via SSH port forwarding), approve access, and wait for the terminal to confirm the token was saved:
 
 ```sh
 python3 scripts/calendash-api.py
