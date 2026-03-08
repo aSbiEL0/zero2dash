@@ -3,7 +3,7 @@
 # v6 auth handled elsewhere; this file only renders and calls API
 # Version 1.2.1 (fixed crash at 23:59) even darker mode
 
-import os, sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl
+import os, sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl, errno
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
@@ -36,6 +36,9 @@ _SID = None
 _SID_EXP = 0.0
 REQUEST_TIMEOUT = 4.0
 REQUEST_TLS_VERIFY: bool | str = True
+OUTPUT_IMAGE = ""
+IO_RETRIES = 2
+IO_RETRY_DELAY_SECS = 0.15
 
 
 def _parse_int(value: str) -> int:
@@ -174,13 +177,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Pi-hole framebuffer dashboard")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
     parser.add_argument("--self-test", action="store_true", help="Run active-hours self checks and exit")
+    parser.add_argument("--output-image", default="", help="Write rendered frame to a PNG file instead of framebuffer")
     return parser.parse_args()
 
 
-def apply_config(config: dict[str, object]) -> None:
+def apply_config(config: dict[str, object], output_image: str = "") -> None:
     global FBDEV, PIHOLE_HOST, PIHOLE_SCHEME, PIHOLE_VERIFY_TLS, PIHOLE_CA_BUNDLE
     global PIHOLE_PASSWORD, PIHOLE_API_TOKEN, PIHOLE_AUTH_MODE, REFRESH_SECS, ACTIVE_HOURS, BASE_URL
-    global REQUEST_TIMEOUT, REQUEST_TLS_VERIFY
+    global REQUEST_TIMEOUT, REQUEST_TLS_VERIFY, OUTPUT_IMAGE
     FBDEV = str(config["fbdev"])
     PIHOLE_HOST = str(config["pihole_host"])
     PIHOLE_SCHEME = str(config["pihole_scheme"])
@@ -192,6 +196,7 @@ def apply_config(config: dict[str, object]) -> None:
     REQUEST_TIMEOUT = float(config["request_timeout"])
     REFRESH_SECS = int(config["refresh_secs"])
     ACTIVE_HOURS = config["active_hours"]
+    OUTPUT_IMAGE = output_image.strip() or str(get_env("OUTPUT_IMAGE", default="")).strip()
     BASE_URL = _normalize_host(PIHOLE_HOST, preferred_scheme=PIHOLE_SCHEME)
     REQUEST_TLS_VERIFY = _resolve_tls_verify(BASE_URL, PIHOLE_VERIFY_TLS, PIHOLE_CA_BUNDLE)
 
@@ -228,15 +233,67 @@ def rgb888_to_rgb565(img_rgb):
         arr += struct.pack("<H", v)
     return bytes(arr)
 
+
+def _is_transient_io_error(exc: OSError) -> bool:
+    return exc.errno in {
+        errno.EAGAIN,
+        errno.EINTR,
+        errno.EBUSY,
+        errno.ETIMEDOUT,
+        errno.EIO,
+    }
+
+
+def _retry_io(action, description: str, retries: int = IO_RETRIES):
+    attempt = 0
+    while True:
+        try:
+            return action()
+        except OSError as exc:
+            if attempt >= retries or not _is_transient_io_error(exc):
+                raise RuntimeError(f"{description} failed after {attempt + 1} attempt(s): {exc}") from exc
+            attempt += 1
+            time.sleep(IO_RETRY_DELAY_SECS)
+
+
+def _write_framebuffer_payload(payload: bytes) -> None:
+    fb_file = None
+    fb_map = None
+    try:
+        try:
+            fb_file = open(FBDEV, "r+b", buffering=0)
+        except OSError as exc:
+            raise RuntimeError(f"Unable to open framebuffer device {FBDEV}: {exc}") from exc
+
+        try:
+            fb_map = mmap.mmap(fb_file.fileno(), W * H * 2, mmap.MAP_SHARED, mmap.PROT_WRITE)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Unable to memory-map framebuffer {FBDEV}: {exc}") from exc
+
+        try:
+            fb_map.seek(0)
+            fb_map.write(payload)
+        except (BufferError, ValueError, OSError) as exc:
+            raise RuntimeError(f"Unable to write frame to framebuffer {FBDEV}: {exc}") from exc
+    finally:
+        if fb_map is not None:
+            fb_map.close()
+        if fb_file is not None:
+            fb_file.close()
+
 def fb_write(img):
     if img.size != (W, H):
         img = img.resize((W, H), Image.BILINEAR)
     if img.mode != "RGB":
         img = img.convert("RGB")
+    if OUTPUT_IMAGE:
+        output_path = Path(OUTPUT_IMAGE)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        _retry_io(lambda: img.save(output_path, format="PNG"), f"Writing PNG output image {output_path}")
+        return
+
     payload = rgb888_to_rgb565(img)
-    with open(FBDEV, "r+b", buffering=0) as f:
-        mm = mmap.mmap(f.fileno(), W*H*2, mmap.MAP_SHARED, mmap.PROT_WRITE)
-        mm.seek(0); mm.write(payload); mm.close()
+    _retry_io(lambda: _write_framebuffer_payload(payload), f"Framebuffer write to {FBDEV}")
 
 def read_temp_c():
     try:
@@ -582,9 +639,9 @@ def main():
         print("[piholestats_v1.2.py] Configuration check passed.")
         return 0
 
-    apply_config(config)
+    apply_config(config, output_image=args.output_image)
 
-    if not Path(FBDEV).exists():
+    if not OUTPUT_IMAGE and not Path(FBDEV).exists():
         print(f"Framebuffer {FBDEV} not found.", file=sys.stderr)
         return 1
 
@@ -599,6 +656,10 @@ def main():
     temp_c = read_temp_c()
     uptime = read_uptime_str()
     fb_write(draw_frame(cached, temp_c, uptime, active))
+
+    if OUTPUT_IMAGE:
+        print(f"[piholestats_v1.2.py] Rendered test frame to {OUTPUT_IMAGE}.")
+        return 0
 
     while True:
         hr = time.localtime().tm_hour
