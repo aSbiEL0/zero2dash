@@ -3,15 +3,19 @@
 
 import argparse
 import mmap
+import os
 import struct
 import sys
 from pathlib import Path
 
 from PIL import Image
 
-FBDEV_DEFAULT = "/dev/fb1"
-W, H = 320, 240
+FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
+WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
+HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "weather-dash-temp.png"
+
+RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
 
 def rgb888_to_rgb565(image: Image.Image) -> bytes:
@@ -28,16 +32,20 @@ def rgb888_to_rgb565(image: Image.Image) -> bytes:
     return bytes(rgb565)
 
 
-def load_frame(image_path: Path) -> Image.Image:
+def load_frame(image_path: Path, width: int, height: int) -> Image.Image:
     if not image_path.exists():
         raise FileNotFoundError(f"Background image not found: {image_path}")
-    return Image.open(image_path).convert("RGB").resize((W, H), Image.Resampling.LANCZOS)
+    return Image.open(image_path).convert("RGB").resize((width, height), RESAMPLING_LANCZOS)
 
 
-def write_to_framebuffer(image: Image.Image, fbdev: str) -> None:
+def write_to_framebuffer(image: Image.Image, fbdev: str, width: int, height: int) -> None:
     payload = rgb888_to_rgb565(image)
+    expected = width * height * 2
+    if len(payload) != expected:
+        raise RuntimeError(f"Framebuffer payload size mismatch: expected {expected} bytes, got {len(payload)} bytes")
+
     with open(fbdev, "r+b", buffering=0) as framebuffer:
-        mm = mmap.mmap(framebuffer.fileno(), W * H * 2, mmap.MAP_SHARED, mmap.PROT_WRITE)
+        mm = mmap.mmap(framebuffer.fileno(), expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
         mm.seek(0)
         mm.write(payload)
         mm.close()
@@ -47,6 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Display weather-dash background image on TFT framebuffer.")
     parser.add_argument("--image", default=str(DEFAULT_IMAGE), help=f"Background image path (default: {DEFAULT_IMAGE})")
     parser.add_argument("--fbdev", default=FBDEV_DEFAULT, help=f"Framebuffer device path (default: {FBDEV_DEFAULT})")
+    parser.add_argument("--width", type=int, default=WIDTH_DEFAULT, help=f"Framebuffer width (default: {WIDTH_DEFAULT})")
+    parser.add_argument("--height", type=int, default=HEIGHT_DEFAULT, help=f"Framebuffer height (default: {HEIGHT_DEFAULT})")
     parser.add_argument("--output", help="Optional output image path for local verification (PNG/JPG)")
     parser.add_argument("--no-framebuffer", action="store_true", help="Skip framebuffer write (useful for local testing).")
     return parser.parse_args()
@@ -56,7 +66,7 @@ def main() -> int:
     args = parse_args()
 
     try:
-        frame = load_frame(Path(args.image))
+        frame = load_frame(Path(args.image), args.width, args.height)
     except FileNotFoundError as exc:
         print(exc, file=sys.stderr)
         return 1
@@ -74,7 +84,11 @@ def main() -> int:
         print(f"Framebuffer {args.fbdev} not found.", file=sys.stderr)
         return 1
 
-    write_to_framebuffer(frame, args.fbdev)
+    if args.width <= 0 or args.height <= 0:
+        print("Width/height must be positive integers.", file=sys.stderr)
+        return 1
+
+    write_to_framebuffer(frame, args.fbdev, args.width, args.height)
     print(f"Displayed weather-dash background on {args.fbdev}")
     return 0
 

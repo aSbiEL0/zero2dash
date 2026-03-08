@@ -4,8 +4,8 @@ This report summarizes the status of the debugging roadmap tasks after the rewri
 
 ## Overall status
 
-- **Implemented:** Tasks **#1 through #21**, plus **#25**.
-- **Remaining (Block F portability/system):** **#22, #23, #24, #26, #27**.
+- **Implemented:** Tasks **#1 through #27**.
+- **Remaining:** None.
 
 ## Implemented fixes
 
@@ -133,62 +133,14 @@ This report summarizes the status of the debugging roadmap tasks after the rewri
   - Key file: `README.md`.
   - Evidence commit: `63cbacd`.
 
-## Remaining fixes to implement (Block F)
+## Remaining fixes to implement
 
-### #22 Static script Pillow compatibility shim
+All previously listed Block F items (#22, #23, #24, #26, #27) are now implemented.
 
-**Status:** Not implemented.
+## Block F completion summary
 
-- Needed change: add a compatibility fallback for `Image.Resampling.LANCZOS` to support older Pillow versions.
-- Target files:
-  - `scripts/calendash-img.py`
-  - `scripts/google-photos.py`
-  - `scripts/tram-info.py`
-  - `scripts/weather-dash.py`
-
-### #23 Parameterize framebuffer path/geometry
-
-**Status:** Not implemented.
-
-- Needed change: configurable framebuffer path, width/height, and robust byte-size validation.
-- Target files:
-  - `scripts/calendash-img.py`
-  - `scripts/google-photos.py`
-  - `scripts/tram-info.py`
-  - `scripts/weather-dash.py`
-
-### #24 Robust touch parsing in `calendash-img.py`
-
-**Status:** Not implemented.
-
-- Needed change: parse full Linux input event stream, handle partial reads, reduce false timeouts, support configurable input device path.
-- Target file:
-  - `scripts/calendash-img.py`
-
-### #26 Make systemd framebuffer path configurable
-
-**Status:** Not implemented.
-
-- Needed change: avoid hard-coded `/dev/fb1` assumptions; pass framebuffer path from environment/override.
-- Target files:
-  - `systemd/display.service`
-  - `systemd/pihole-display-dark.service`
-  - potentially related timer/unit docs in `README.md`
-
-### #27 Harden `pihole-display-pre.sh` dependency checks
-
-**Status:** Not implemented.
-
-- Needed change: check availability of `con2fbmap`/`setterm`, guard sysfs writes, and log warnings for skipped operations.
-- Target file:
-  - `scripts/pihole-display-pre.sh`
-
-## Suggested next implementation order for remaining Block F
-
-1. **#22** (low-risk compatibility helper)
-2. **#23** (shared framebuffer configurability)
-3. **#24** (touch-event parser update)
-4. **#26** (systemd wiring for #23)
-5. **#27** (pre-start shell hardening)
-
-This ordering minimizes rework because systemd changes (#26) should reference finalized script flags/env from #23.
+- **#22** Implemented with Pillow resampling compatibility fallback in static render scripts.
+- **#23** Implemented with configurable framebuffer path/geometry and payload-size checks.
+- **#24** Implemented with non-blocking buffered Linux input event parsing in `calendash-img.py`.
+- **#26** Implemented by wiring `FB_DEVICE` into canonical systemd services and removing hard-coded fb device unit dependencies.
+- **#27** Implemented with command-presence checks, sysfs write guards, and warning logs in pre-start shell script.
