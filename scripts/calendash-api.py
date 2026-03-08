@@ -19,6 +19,7 @@ import os
 import time
 import json
 import argparse
+import hashlib
 import random
 import socket
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ CANVAS_HEIGHT = 240
 DEFAULT_TOKEN_PATH = Path("token.json")
 DEFAULT_OAUTH_PORT = 8080
 DEFAULT_AUTH_MODE = "local_server"
+TOKEN_METADATA_SUFFIX = ".meta.json"
 RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 NON_RETRYABLE_HTTP_STATUSES = {400, 401, 403, 404}
 ALLOWED_AUTH_MODES = {"local_server", "console", "device_code"}
@@ -159,7 +161,86 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(ALLOWED_AUTH_MODES),
         help="OAuth flow mode: local_server, console, or device_code.",
     )
+    parser.add_argument(
+        "--force-token-path-reuse",
+        action="store_true",
+        help="Allow GOOGLE_TOKEN_PATH to match GOOGLE_TOKEN_PATH_PHOTOS and bypass token metadata mismatch checks.",
+    )
     return parser.parse_args()
+
+
+def _scope_fingerprint(scopes: Iterable[str]) -> str:
+    canonical = "\n".join(sorted(set(scopes)))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _token_metadata_path(token_path: Path) -> Path:
+    return token_path.with_name(f"{token_path.name}{TOKEN_METADATA_SUFFIX}")
+
+
+def _write_token_metadata(token_path: Path, provider: str, scopes: Iterable[str]) -> None:
+    metadata_path = _token_metadata_path(token_path)
+    payload = {
+        "provider": provider,
+        "scopes": sorted(set(scopes)),
+        "scope_fingerprint": _scope_fingerprint(scopes),
+    }
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(metadata_path, 0o600)
+
+
+def _preflight_token_path_guard(calendar_token_path: Path, force_token_path_reuse: bool) -> None:
+    photos_token_path = Path(os.getenv("GOOGLE_TOKEN_PATH_PHOTOS", "~/zero2dash/token_photos.json")).expanduser().resolve()
+    if calendar_token_path.resolve() != photos_token_path:
+        return
+    if force_token_path_reuse:
+        logging.warning(
+            "GOOGLE_TOKEN_PATH matches GOOGLE_TOKEN_PATH_PHOTOS (%s), but proceeding due to --force-token-path-reuse.",
+            calendar_token_path.resolve(),
+        )
+        return
+    raise ValueError(
+        "Refusing to reuse a single token path for calendar and photos scripts. "
+        "Update GOOGLE_TOKEN_PATH or GOOGLE_TOKEN_PATH_PHOTOS to different files, "
+        "or pass --force-token-path-reuse to override intentionally."
+    )
+
+
+def _verify_token_metadata(token_path: Path, force_token_path_reuse: bool) -> None:
+    metadata_path = _token_metadata_path(token_path)
+    if not metadata_path.exists():
+        return
+
+    try:
+        metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logging.warning("Ignoring unreadable token metadata at %s (%s).", metadata_path.resolve(), exc)
+        return
+
+    expected_provider = "google_calendar"
+    expected_fingerprint = _scope_fingerprint(SCOPES)
+    provider = str(metadata_payload.get("provider", "")).strip()
+    scope_fingerprint = str(metadata_payload.get("scope_fingerprint", "")).strip()
+
+    if provider == expected_provider and scope_fingerprint == expected_fingerprint:
+        return
+
+    mismatch_message = (
+        f"Token metadata mismatch for {token_path.resolve()} (found provider={provider or 'unknown'}, "
+        f"scope_fingerprint={scope_fingerprint or 'unknown'}; expected provider={expected_provider})."
+    )
+    remediation = (
+        "Remediation: set GOOGLE_TOKEN_PATH to a dedicated calendar token file and "
+        "set GOOGLE_TOKEN_PATH_PHOTOS to a separate photos token file. "
+        "If shared token usage is intentional, rerun with --force-token-path-reuse."
+    )
+
+    if force_token_path_reuse:
+        logging.warning("%s %s", mismatch_message, remediation)
+        return
+
+    raise ValueError(f"{mismatch_message} {remediation}")
 
 
 def validate_timezone(value: str) -> str:
@@ -378,6 +459,7 @@ def build_client_config(client_id: str, client_secret: str, oauth_port: int) -> 
 def save_credentials(creds: Credentials, token_path: Path) -> None:
     token_path.write_text(creds.to_json(), encoding="utf-8")
     os.chmod(token_path, 0o600)
+    _write_token_metadata(token_path, provider="google_calendar", scopes=SCOPES)
     logging.info("Saved OAuth token to %s", token_path.resolve())
 
 
@@ -388,8 +470,12 @@ def get_credentials(
     oauth_port: int,
     auth_mode: str,
     diagnostics_path: Path,
+    force_token_path_reuse: bool,
 ) -> Credentials:
     creds: Credentials | None = None
+
+    _preflight_token_path_guard(token_path, force_token_path_reuse)
+    _verify_token_metadata(token_path, force_token_path_reuse)
 
     if token_path.exists():
         try:
@@ -737,6 +823,13 @@ def main() -> int:
         logging.error("Unsupported auth mode: %s", selected_auth_mode)
         return 1
 
+    try:
+        _preflight_token_path_guard(runtime_config["token_path"], args.force_token_path_reuse)
+        _verify_token_metadata(runtime_config["token_path"], args.force_token_path_reuse)
+    except ValueError as exc:
+        logging.error(str(exc))
+        return 1
+
     if args.check_config:
         print("[calendash-api.py] Configuration check passed.")
         return 0
@@ -749,6 +842,7 @@ def main() -> int:
             runtime_config["oauth_port"],
             selected_auth_mode,
             runtime_config["diagnostics_path"],
+            args.force_token_path_reuse,
         )
 
         if args.auth_only:
