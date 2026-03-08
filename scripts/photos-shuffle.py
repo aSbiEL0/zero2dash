@@ -89,6 +89,7 @@ class Config:
     cache_dir: Path
     fallback_image: Path
     logo_path: Path
+    logo_attempted_paths: list[Path]
     oauth_port: int
     oauth_open_browser: bool
     max_online_attempts: int
@@ -227,6 +228,23 @@ def format_credentials_checklist() -> str:
     )
 
 
+def resolve_repo_or_script_relative_path(path_raw: str) -> tuple[Path, list[Path]]:
+    expanded = Path(path_raw).expanduser()
+    if expanded.is_absolute():
+        return expanded, [expanded]
+
+    repo_candidate = (REPO_ROOT / expanded).resolve()
+    script_candidate = (SCRIPT_DIR / expanded).resolve()
+    attempted = [repo_candidate]
+    if script_candidate != repo_candidate:
+        attempted.append(script_candidate)
+
+    for candidate in attempted:
+        if candidate.exists():
+            return candidate, attempted
+    return repo_candidate, attempted
+
+
 def selected_credential_source(config: Config) -> str:
     if config.client_secrets_path.exists():
         return f"GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file ({config.client_secrets_path})"
@@ -260,7 +278,9 @@ def validate_config(*, force_token_path_reuse: bool = False) -> tuple[Config | N
     height = record("HEIGHT", default=240, validator=lambda v: _as_int("HEIGHT", v))
     cache_raw = record("CACHE_DIR", default=str(DEFAULT_ROOT / "cache" / "google_photos"))
     fallback_raw = record("FALLBACK_IMAGE", default=str(DEFAULT_ROOT / "images" / "photos-fallback.png"))
-    logo_raw = record("LOGO_PATH", default="/images/goo-photos-icon.png")
+    logo_override_raw = os.getenv("LOGO_PATH")
+    logo_raw = logo_override_raw if logo_override_raw is not None else str(DEFAULT_LOGO_RELATIVE_PATH)
+    logo_path, logo_attempted_paths = resolve_repo_or_script_relative_path(str(logo_raw))
     oauth_port = record("OAUTH_PORT", default=8080, validator=lambda v: _as_int("OAUTH_PORT", v))
     oauth_open_browser = record("OAUTH_OPEN_BROWSER", default=False, validator=_as_bool)
     max_online_attempts = record(
@@ -293,7 +313,8 @@ def validate_config(*, force_token_path_reuse: bool = False) -> tuple[Config | N
         height=int(height),
         cache_dir=Path(str(cache_raw)).expanduser(),
         fallback_image=fallback_image,
-        logo_path=Path(str(logo_raw)).expanduser(),
+        logo_path=logo_path,
+        logo_attempted_paths=logo_attempted_paths,
         oauth_port=int(oauth_port),
         oauth_open_browser=bool(oauth_open_browser),
         max_online_attempts=int(max_online_attempts),
