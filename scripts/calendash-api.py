@@ -19,6 +19,8 @@ import os
 import time
 import json
 import argparse
+import random
+import socket
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from collections import OrderedDict
@@ -33,6 +35,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from PIL import Image, ImageDraw, ImageFont
+from requests import exceptions as requests_exceptions
 
 from _config import get_env, report_validation_errors
 
@@ -41,6 +44,8 @@ CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 DEFAULT_TOKEN_PATH = Path("token.json")
 DEFAULT_OAUTH_PORT = 8080
+RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+NON_RETRYABLE_HTTP_STATUSES = {400, 401, 403, 404}
 
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
@@ -362,6 +367,36 @@ def fetch_events(
     }
 
     last_error: Exception | None = None
+
+    def _http_status(exc: HttpError) -> int | None:
+        return getattr(getattr(exc, "resp", None), "status", None)
+
+    def _is_non_retryable(exc: Exception) -> bool:
+        if isinstance(exc, HttpError):
+            return _http_status(exc) in NON_RETRYABLE_HTTP_STATUSES
+        return False
+
+    def _is_retryable(exc: Exception) -> bool:
+        if isinstance(exc, HttpError):
+            return _http_status(exc) in RETRYABLE_HTTP_STATUSES
+        return isinstance(
+            exc,
+            (
+                OSError,
+                TimeoutError,
+                socket.timeout,
+                socket.gaierror,
+                json.JSONDecodeError,
+                requests_exceptions.ConnectionError,
+                requests_exceptions.Timeout,
+                requests_exceptions.RequestException,
+            ),
+        )
+
+    def _backoff_seconds(attempt: int, *, base_delay: float = 1.0, cap_seconds: float = 16.0, jitter_max: float = 0.75) -> float:
+        exponential = min(cap_seconds, base_delay * (2 ** (attempt - 1)))
+        return exponential + random.uniform(0, jitter_max)
+
     for attempt in range(1, retries + 1):
         try:
             logging.info(
@@ -387,12 +422,19 @@ def fetch_events(
                 )
             parsed.sort(key=lambda event: event.starts_at)
             return parsed
-        except (HttpError, OSError, TimeoutError) as exc:
+        except Exception as exc:
             last_error = exc
-            wait_s = 2 ** (attempt - 1)
-            logging.error("Fetch failed (attempt %d/%d): %s", attempt, retries, exc)
+            if _is_non_retryable(exc):
+                logging.error("Fetch failed with non-retryable error (attempt %d/%d): %s", attempt, retries, exc)
+                break
+
+            if not _is_retryable(exc):
+                raise
+
+            wait_s = _backoff_seconds(attempt)
+            logging.error("Fetch failed with retryable error (attempt %d/%d): %s", attempt, retries, exc)
             if attempt < retries:
-                logging.info("Retrying in %d seconds...", wait_s)
+                logging.info("Retrying in %.2f seconds...", wait_s)
                 time.sleep(wait_s)
 
     assert last_error is not None
