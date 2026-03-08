@@ -15,6 +15,7 @@ import fcntl
 import glob
 import json
 import os
+import argparse
 import re
 import queue
 import select
@@ -30,6 +31,7 @@ from pathlib import Path
 DEFAULT_PAGES_DIR = "scripts"
 DEFAULT_PAGE_GLOB = "*.py"
 DEFAULT_EXCLUDE_PATTERNS = ["piholestats_v1.2.py", "calendash-api.py"]
+DEFAULT_INCLUDE_PATTERNS: list[str] = []
 DEFAULT_ROTATE_SECS = 30
 SHUTDOWN_WAIT_SECS = 5
 DEFAULT_FBDEV = "/dev/fb1"
@@ -42,6 +44,29 @@ DEFAULT_BACKOFF_STEPS = (10, 30, 60)
 DEFAULT_BACKOFF_MAX_SECS = 300
 DEFAULT_QUARANTINE_FAILURE_THRESHOLD = 3
 DEFAULT_QUARANTINE_CYCLES = 3
+
+DISCOVERY_CONFIG_DOCS = [
+    {
+        "env": "ROTATOR_PAGES_DIR",
+        "default": DEFAULT_PAGES_DIR,
+        "description": "Directory to scan for page scripts.",
+    },
+    {
+        "env": "ROTATOR_PAGE_GLOB",
+        "default": DEFAULT_PAGE_GLOB,
+        "description": "Comma-separated glob(s) used to discover page scripts.",
+    },
+    {
+        "env": "ROTATOR_INCLUDE_PATTERNS",
+        "default": "",
+        "description": "Optional comma-separated exact filename/path or glob patterns to force-include.",
+    },
+    {
+        "env": "ROTATOR_EXCLUDE_PATTERNS",
+        "default": ",".join(DEFAULT_EXCLUDE_PATTERNS),
+        "description": "Comma-separated exact filename/path or glob patterns to exclude.",
+    },
+]
 
 # linux/input-event-codes.h
 EV_SYN = 0x00
@@ -289,18 +314,68 @@ class ScreenPower:
             pass
 
 
-def parse_exclude_patterns() -> list[str]:
+def _parse_csv_patterns(raw: str) -> list[str]:
+    return [entry.strip() for entry in raw.split(",") if entry.strip()]
+
+
+def parse_exclude_patterns() -> tuple[list[str], bool]:
     raw = os.environ.get("ROTATOR_EXCLUDE_PATTERNS", "").strip()
     if raw:
-        return [entry.strip() for entry in raw.split(",") if entry.strip()]
-    return DEFAULT_EXCLUDE_PATTERNS.copy()
+        return _parse_csv_patterns(raw), True
+    return DEFAULT_EXCLUDE_PATTERNS.copy(), False
 
 
-def discover_pages(base_dir: Path) -> list[str]:
+def parse_include_patterns() -> list[str]:
+    raw = os.environ.get("ROTATOR_INCLUDE_PATTERNS", "").strip()
+    if not raw:
+        return DEFAULT_INCLUDE_PATTERNS.copy()
+    return _parse_csv_patterns(raw)
+
+
+def _has_glob_tokens(pattern: str) -> bool:
+    return any(token in pattern for token in "*?[]")
+
+
+def _pattern_matches(path: Path, pattern: str, page_dir: Path, base_dir: Path) -> bool:
+    relative_to_page_dir = path.relative_to(page_dir).as_posix()
+    relative_to_base = path.relative_to(base_dir).as_posix()
+    path_name = path.name
+
+    if _has_glob_tokens(pattern):
+        return (
+            path.match(pattern)
+            or Path(relative_to_page_dir).match(pattern)
+            or Path(relative_to_base).match(pattern)
+        )
+
+    return pattern in {path_name, relative_to_page_dir, relative_to_base}
+
+
+def _collect_page_candidates(page_dir: Path, page_globs: list[str]) -> list[Path]:
+    seen: set[Path] = set()
+    discovered: list[Path] = []
+    for page_glob in page_globs:
+        for path in sorted(page_dir.glob(page_glob)):
+            if not path.is_file() or path in seen:
+                continue
+            seen.add(path)
+            discovered.append(path)
+    return discovered
+
+
+def _resolve_exact_pattern_candidate(page_dir: Path, pattern: str) -> Path | None:
+    candidate = page_dir / pattern
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    return None
+
+
+def discover_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
     page_dir_raw = os.environ.get("ROTATOR_PAGES_DIR", DEFAULT_PAGES_DIR).strip() or DEFAULT_PAGES_DIR
     page_glob_raw = os.environ.get("ROTATOR_PAGE_GLOB", DEFAULT_PAGE_GLOB).strip() or DEFAULT_PAGE_GLOB
     page_globs = [entry.strip() for entry in page_glob_raw.split(",") if entry.strip()]
-    excludes = parse_exclude_patterns()
+    excludes, exclude_is_user_configured = parse_exclude_patterns()
+    includes = parse_include_patterns()
 
     page_dir = Path(page_dir_raw)
     if not page_dir.is_absolute():
@@ -310,26 +385,76 @@ def discover_pages(base_dir: Path) -> list[str]:
         print(f"[rotator] Page directory does not exist: {page_dir}", flush=True)
         return []
 
-    discovered: list[str] = []
-    seen: set[Path] = set()
-    for page_glob in page_globs:
-        for path in sorted(page_dir.glob(page_glob)):
-            if not path.is_file() or path in seen:
-                continue
-            seen.add(path)
-            if any(path.match(pattern) or path.name == pattern for pattern in excludes):
-                continue
-            discovered.append(str(path.relative_to(base_dir)))
+    candidates = _collect_page_candidates(page_dir, page_globs)
 
-    return discovered
+    for pattern in includes:
+        if _has_glob_tokens(pattern):
+            continue
+        exact = _resolve_exact_pattern_candidate(page_dir, pattern)
+        if exact and exact not in candidates:
+            candidates.append(exact)
+
+    included: list[str] = []
+    discovery_report: list[tuple[str, str]] = []
+    user_excludes = excludes if exclude_is_user_configured else []
+    default_excludes = DEFAULT_EXCLUDE_PATTERNS if not exclude_is_user_configured else []
+    for path in sorted(candidates):
+        relative = str(path.relative_to(base_dir))
+
+        user_include_match = next((pat for pat in includes if _pattern_matches(path, pat, page_dir, base_dir)), None)
+        user_exclude_match = next((pat for pat in user_excludes if _pattern_matches(path, pat, page_dir, base_dir)), None)
+        default_exclude_match = next(
+            (pat for pat in default_excludes if _pattern_matches(path, pat, page_dir, base_dir)),
+            None,
+        )
+
+        if user_exclude_match:
+            discovery_report.append((relative, f"excluded (user exclude: {user_exclude_match})"))
+            continue
+        if user_include_match:
+            included.append(relative)
+            discovery_report.append((relative, f"included (user include: {user_include_match})"))
+            continue
+        if default_exclude_match:
+            discovery_report.append((relative, f"excluded (default exclude: {default_exclude_match})"))
+            continue
+
+        included.append(relative)
+        discovery_report.append((relative, "included (matched discovery globs)"))
+
+    print("[rotator] Discovery config:", flush=True)
+    for item in DISCOVERY_CONFIG_DOCS:
+        value = os.environ.get(item["env"], str(item["default"])).strip() or str(item["default"])
+        print(f"[rotator]   {item['env']}={value} ({item['description']})", flush=True)
+
+    print("[rotator] Discovery result:", flush=True)
+    for script, status in discovery_report:
+        print(f"[rotator]   {script}: {status}", flush=True)
+
+    if list_pages:
+        print("[rotator] --list-pages summary:", flush=True)
+        for script, status in discovery_report:
+            print(f"{script}\t{status}", flush=True)
+
+    return included
 
 
-def parse_pages(base_dir: Path) -> list[str]:
+def parse_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
     # Backward-compatible manual override; otherwise scan a directory.
     raw = os.environ.get("ROTATOR_PAGES", "").strip()
     if raw:
         return [entry.strip() for entry in raw.split(",") if entry.strip()]
-    return discover_pages(base_dir)
+    return discover_pages(base_dir, list_pages=list_pages)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Rotate dashboard page scripts on the framebuffer display.")
+    parser.add_argument(
+        "--list-pages",
+        action="store_true",
+        help="Print discovered scripts and why each one is included/excluded, then exit.",
+    )
+    return parser.parse_args(argv)
 
 
 def parse_rotate_secs() -> int:
@@ -624,6 +749,7 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
 
 
 def main() -> int:
+    args = parse_args(sys.argv[1:])
     base_dir = Path(__file__).resolve().parent
     rotate_secs = parse_rotate_secs()
     touch_width = parse_width()
@@ -635,9 +761,12 @@ def main() -> int:
 
     pages = [
         resolved
-        for resolved in (resolve_script(item, base_dir) for item in parse_pages(base_dir))
+        for resolved in (resolve_script(item, base_dir) for item in parse_pages(base_dir, list_pages=args.list_pages))
         if resolved is not None
     ]
+
+    if args.list_pages:
+        return 0 if pages else 1
 
     if len(pages) == 1:
         print(
