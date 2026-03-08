@@ -150,7 +150,7 @@ Required configuration:
 
 - `LOCAL_PHOTOS_DIR`
 - `GOOGLE_DRIVE_FOLDER_ID`
-- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` (`~/.config/zero2dash/drive-service-account.json` is the recommended Pi path)
 
 Recommended workflow:
 
@@ -170,6 +170,7 @@ python3 scripts/photos-shuffle.py --test
 ### Framebuffer overrides in systemd
 
 Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
+
 
 
 
