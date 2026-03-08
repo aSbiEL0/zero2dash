@@ -2,6 +2,7 @@
 # Pi-hole TFT Dashboard -> direct framebuffer RGB565 (no X, no SDL)
 # v6 auth handled elsewhere; this file only renders and calls API
 # Version 1.1 - Introducing dark mode
+# LEGACY: kept for compatibility/manual use; canonical night service uses piholestats_v1.2.py
 
 import os, sys, time, json, urllib.request, urllib.parse, mmap, struct, argparse
 from pathlib import Path
