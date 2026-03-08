@@ -4,7 +4,7 @@
 # Version 1.1 - Introducing dark mode
 # LEGACY: kept for compatibility/manual use; canonical night service uses piholestats_v1.2.py
 
-import os, sys, time, json, urllib.request, urllib.parse, mmap, struct, argparse
+import os, sys, time, json, urllib.request, urllib.parse, mmap, struct, argparse, ssl
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
@@ -18,6 +18,9 @@ REFRESH_SECS = 3
 ACTIVE_HOURS = (7, 22)
 
 PIHOLE_HOST = "127.0.0.1"
+PIHOLE_SCHEME = ""
+PIHOLE_VERIFY_TLS = "auto"
+PIHOLE_CA_BUNDLE = ""
 PIHOLE_PASSWORD = ""
 PIHOLE_API_TOKEN = ""
 TITLE = "Pi-hole"
@@ -33,6 +36,8 @@ COL_UP   = (60,30,100)
 
 _SID = None
 _SID_EXP = 0.0
+REQUEST_TIMEOUT = 4.0
+REQUEST_TLS_VERIFY: bool | str = True
 
 
 def _parse_int(value: str) -> int:
@@ -53,6 +58,27 @@ def _parse_active_hours(value: str) -> tuple[int, int]:
     for hour in (start_hour, end_hour):
         validate_hour_bounds(hour)
     return start_hour, end_hour
+
+
+def _parse_float(value: str) -> float:
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"expected number, got {value!r}") from exc
+
+
+def _parse_scheme(value: str) -> str:
+    scheme = value.strip().lower()
+    if scheme not in {"http", "https"}:
+        raise ValueError("expected 'http' or 'https'")
+    return scheme
+
+
+def _parse_verify_tls(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in {"auto", "true", "false", "1", "0", "yes", "no"}:
+        raise ValueError("expected one of auto/true/false")
+    return normalized
 
 
 def validate_hour_bounds(hour: int) -> None:
@@ -106,13 +132,21 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
 
     fbdev = record("FB_DEVICE", default=FBDEV)
     host = record("PIHOLE_HOST", default="127.0.0.1")
+    scheme = record("PIHOLE_SCHEME", default="", validator=_parse_scheme)
+    verify_tls = record("PIHOLE_VERIFY_TLS", default="auto", validator=_parse_verify_tls)
+    ca_bundle = record("PIHOLE_CA_BUNDLE", default="")
     password = record("PIHOLE_PASSWORD", required=True)
     api_token = record("PIHOLE_API_TOKEN", default="")
     refresh_secs = record("REFRESH_SECS", default=REFRESH_SECS, validator=_parse_int)
+    request_timeout = record("PIHOLE_TIMEOUT", default=REQUEST_TIMEOUT, validator=_parse_float)
     active_hours = record("ACTIVE_HOURS", default=f"{ACTIVE_HOURS[0]},{ACTIVE_HOURS[1]}", validator=_parse_active_hours)
 
     if isinstance(refresh_secs, int) and refresh_secs < 1:
         errors.append("REFRESH_SECS is invalid: must be greater than or equal to 1")
+    if isinstance(request_timeout, float) and request_timeout <= 0:
+        errors.append("PIHOLE_TIMEOUT is invalid: must be greater than 0")
+    if ca_bundle and not Path(str(ca_bundle)).is_file():
+        errors.append("PIHOLE_CA_BUNDLE is invalid: file does not exist")
 
     if errors:
         return None, errors
@@ -120,8 +154,12 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
     return {
         "fbdev": str(fbdev),
         "pihole_host": str(host),
+        "pihole_scheme": str(scheme),
+        "pihole_verify_tls": str(verify_tls),
+        "pihole_ca_bundle": str(ca_bundle),
         "pihole_password": str(password),
         "pihole_api_token": str(api_token),
+        "request_timeout": float(request_timeout),
         "refresh_secs": int(refresh_secs),
         "active_hours": active_hours if isinstance(active_hours, tuple) else ACTIVE_HOURS,
     }, []
@@ -135,14 +173,21 @@ def parse_args():
 
 
 def apply_config(config: dict[str, object]) -> None:
-    global FBDEV, PIHOLE_HOST, PIHOLE_PASSWORD, PIHOLE_API_TOKEN, REFRESH_SECS, ACTIVE_HOURS, BASE_URL
+    global FBDEV, PIHOLE_HOST, PIHOLE_SCHEME, PIHOLE_VERIFY_TLS, PIHOLE_CA_BUNDLE
+    global PIHOLE_PASSWORD, PIHOLE_API_TOKEN, REFRESH_SECS, ACTIVE_HOURS, BASE_URL
+    global REQUEST_TIMEOUT, REQUEST_TLS_VERIFY
     FBDEV = str(config["fbdev"])
     PIHOLE_HOST = str(config["pihole_host"])
+    PIHOLE_SCHEME = str(config["pihole_scheme"])
+    PIHOLE_VERIFY_TLS = str(config["pihole_verify_tls"])
+    PIHOLE_CA_BUNDLE = str(config["pihole_ca_bundle"])
     PIHOLE_PASSWORD = str(config["pihole_password"])
     PIHOLE_API_TOKEN = str(config["pihole_api_token"])
+    REQUEST_TIMEOUT = float(config["request_timeout"])
     REFRESH_SECS = int(config["refresh_secs"])
     ACTIVE_HOURS = config["active_hours"]
-    BASE_URL = _normalize_host(PIHOLE_HOST)
+    BASE_URL = _normalize_host(PIHOLE_HOST, preferred_scheme=PIHOLE_SCHEME)
+    REQUEST_TLS_VERIFY = _resolve_tls_verify(BASE_URL, PIHOLE_VERIFY_TLS, PIHOLE_CA_BUNDLE)
 
 # ---------- utils ----------
 def load_font(size, bold=False):
@@ -206,20 +251,54 @@ def read_uptime_str():
         return "N/A"
 
 # ---------- Pi-hole v6 auth + fetch ----------
-def _http_json(url, method="GET", body=None, timeout=3):
+def _is_local_host(hostname: str) -> bool:
+    normalized = hostname.strip("[]").lower()
+    return normalized in {"localhost", "::1"} or normalized.startswith("127.")
+
+
+def _resolve_scheme(raw_host: str, preferred_scheme: str = "") -> str:
+    if preferred_scheme:
+        return preferred_scheme
+    parsed = urllib.parse.urlsplit(raw_host)
+    if parsed.scheme:
+        return parsed.scheme
+    hostname = parsed.hostname or raw_host.split("/")[0].split(":")[0]
+    return "http" if _is_local_host(hostname) else "https"
+
+
+def _resolve_tls_verify(base_url: str, verify_setting: str, ca_bundle: str):
+    normalized = verify_setting.strip().lower()
+    if ca_bundle:
+        return ca_bundle
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    parsed = urllib.parse.urlsplit(base_url)
+    return parsed.scheme == "https" and not _is_local_host(parsed.hostname or "")
+
+
+def _http_json(url, method="GET", body=None, timeout=None):
     headers = {"Content-Type": "application/json"} if body is not None else {}
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    effective_timeout = REQUEST_TIMEOUT if timeout is None else timeout
+    context = None
+    if url.startswith("https://"):
+        if REQUEST_TLS_VERIFY is False:
+            context = ssl._create_unverified_context()
+        elif isinstance(REQUEST_TLS_VERIFY, str):
+            context = ssl.create_default_context(cafile=REQUEST_TLS_VERIFY)
+    with urllib.request.urlopen(req, timeout=effective_timeout, context=context) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def _normalize_host(raw_host: str) -> str:
+def _normalize_host(raw_host: str, preferred_scheme: str = "") -> str:
     host = raw_host.strip()
     if not host:
-        return "http://127.0.0.1"
+        host = "127.0.0.1"
     if not host.startswith(("http://", "https://")):
-        host = f"http://{host}"
+        host = f"{_resolve_scheme(host, preferred_scheme)}://{host}"
     parsed = urllib.parse.urlsplit(host)
     if parsed.path.startswith("/admin"):
         parsed = parsed._replace(path="")
@@ -227,7 +306,7 @@ def _normalize_host(raw_host: str) -> str:
     return urllib.parse.urlunsplit(cleaned).rstrip("/")
 
 
-BASE_URL = _normalize_host(PIHOLE_HOST)
+BASE_URL = _normalize_host(PIHOLE_HOST, preferred_scheme=PIHOLE_SCHEME)
 
 def _auth_get_sid():
     global _SID, _SID_EXP
