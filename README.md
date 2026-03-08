@@ -35,10 +35,7 @@ zero2dash/
 │   ├── piholestats_v1.2.py      # canonical dark-mode service target
 │   ├── calendash-api.py
 │   ├── calendash-img.py
-│   ├── google-photos.py
 │   ├── photos-shuffle.py
-│   ├── tram-info.py
-│   └── weather-dash.py
 ├── systemd/
 │   ├── display.service
 │   ├── pihole-display-dark.service
@@ -153,7 +150,7 @@ Required configuration:
 
 - `LOCAL_PHOTOS_DIR`
 - `GOOGLE_DRIVE_FOLDER_ID`
-- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` (`~/.config/zero2dash/drive-service-account.json` is the recommended Pi path)
 
 Recommended workflow:
 
@@ -167,11 +164,13 @@ python3 scripts/photos-shuffle.py --test
 ## Notes
 
 - `display_rotator.py` excludes `piholestats_v1.2.py`, `calendash-api.py`, `_config.py`, `drive-sync.py`, and `photo-resize.py` by default so helper scripts do not end up in the day rotator.
-- Static image scripts (for example `tram-info.py`, `weather-dash.py`, `calendash-img.py`) are rotator-friendly page scripts, not systemd service units by themselves.
+- `calendash-img.py` is a rotator-friendly page script, not a systemd service unit by itself.
 
 
 ### Framebuffer overrides in systemd
 
 Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
+
+
 
 
