@@ -975,7 +975,7 @@ def main() -> int:
         stop_child(active_child)
         active_child = None
 
-        if early_exit:
+        if early_exit and (last_returncode is None or last_returncode != 0):
             state["consecutive_failures"] += 1
             state["last_failure_ts"] = time.time()
             backoff_secs = calculate_backoff_secs(state["consecutive_failures"], backoff_cap_secs)
@@ -1000,7 +1000,9 @@ def main() -> int:
                     ),
                     flush=True,
                 )
-        elif completed_full_duration:
+        elif completed_full_duration or (early_exit and last_returncode == 0):
+            if early_exit and last_returncode == 0:
+                print(f"[rotator] Clean one-shot page completed: {script}", flush=True)
             if state["consecutive_failures"] > 0 or state["quarantine_cycles_remaining"] > 0:
                 print(f"[rotator] Resetting failure counters after successful run: {script}", flush=True)
             state["consecutive_failures"] = 0
@@ -1018,4 +1020,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
