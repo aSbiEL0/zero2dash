@@ -41,6 +41,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from _config import get_env, report_validation_errors
+
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -100,35 +102,96 @@ class Log:
             print(f"[debug] {message}")
 
 
+def _as_int(name: str, value: str) -> int:
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"expected integer, got {value!r}") from exc
+
+
+def _as_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def validate_config() -> tuple[Config | None, list[str]]:
+    errors: list[str] = []
+
+    def record(name: str, *, default: Any = None, required: bool = False, validator: Any = None) -> Any:
+        try:
+            return get_env(name, default=default, required=required, validator=validator)
+        except ValueError as exc:
+            errors.append(str(exc))
+            return default
+
+    album_id = record("GOOGLE_PHOTOS_ALBUM_ID", required=True)
+    client_secrets_raw = record("GOOGLE_PHOTOS_CLIENT_SECRETS_PATH", default=str(DEFAULT_ROOT / "client_secret.json"))
+
+    client_id = record("GOOGLE_PHOTOS_CLIENT_ID") or record("GOOGLE_CLIENT_ID") or ""
+    client_secret = record("GOOGLE_PHOTOS_CLIENT_SECRET") or record("GOOGLE_CLIENT_SECRET") or ""
+
+    token_raw = record("GOOGLE_TOKEN_PATH_PHOTOS", default=str(DEFAULT_ROOT / "token_photos.json"))
+    fb_device = record("FB_DEVICE", default="/dev/fb1")
+    width = record("WIDTH", default=320, validator=lambda v: _as_int("WIDTH", v))
+    height = record("HEIGHT", default=240, validator=lambda v: _as_int("HEIGHT", v))
+    cache_raw = record("CACHE_DIR", default=str(DEFAULT_ROOT / "cache" / "google_photos"))
+    fallback_raw = record("FALLBACK_IMAGE", default=str(DEFAULT_ROOT / "images" / "photos-fallback.png"))
+    logo_raw = record("LOGO_PATH", default="/images/goo-photos-icon.png")
+    oauth_port = record("OAUTH_PORT", default=8080, validator=lambda v: _as_int("OAUTH_PORT", v))
+    oauth_open_browser = record("OAUTH_OPEN_BROWSER", default=False, validator=_as_bool)
+
+    if isinstance(width, int) and width <= 0:
+        errors.append("WIDTH is invalid: must be greater than 0")
+    if isinstance(height, int) and height <= 0:
+        errors.append("HEIGHT is invalid: must be greater than 0")
+    if isinstance(oauth_port, int) and oauth_port <= 0:
+        errors.append("OAUTH_PORT is invalid: must be greater than 0")
+
+    fallback_image = Path(str(fallback_raw)).expanduser()
+    if not fallback_image.exists():
+        errors.append(f"FALLBACK_IMAGE not found: {fallback_image}")
+
+    config = Config(
+        album_id=str(album_id),
+        client_secrets_path=Path(str(client_secrets_raw)).expanduser(),
+        client_id=str(client_id),
+        client_secret=str(client_secret),
+        token_path=Path(str(token_raw)).expanduser(),
+        fb_device=str(fb_device),
+        width=int(width),
+        height=int(height),
+        cache_dir=Path(str(cache_raw)).expanduser(),
+        fallback_image=fallback_image,
+        logo_path=Path(str(logo_raw)).expanduser(),
+        oauth_port=int(oauth_port),
+        oauth_open_browser=bool(oauth_open_browser),
+    )
+
+    calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
+    if config.token_path.resolve() == calendar_default_token:
+        errors.append(
+            "GOOGLE_TOKEN_PATH_PHOTOS points to token.json, which is reserved for calendash-api.py. "
+            "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
+        )
+
+    if not config.client_secrets_path.exists() and not (config.client_id and config.client_secret):
+        errors.append(
+            f"Google Photos OAuth credentials are required: set GOOGLE_PHOTOS_CLIENT_SECRETS_PATH to an existing file "
+            f"or provide GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET (checked path: {config.client_secrets_path})."
+        )
+
+    if errors:
+        return None, errors
+    return config, []
+
+
 def load_config() -> Config:
     load_dotenv(DEFAULT_ROOT / ".env")
-
-    album_id = os.getenv("GOOGLE_PHOTOS_ALBUM_ID", "").strip()
-    if not album_id:
-        raise ValueError("GOOGLE_PHOTOS_ALBUM_ID is required in .env")
-
-    def env_path(name: str, default: Path) -> Path:
-        return Path(os.getenv(name, str(default))).expanduser()
-
-    width = int(os.getenv("WIDTH", "320"))
-    height = int(os.getenv("HEIGHT", "240"))
-
-    oauth_open_browser = os.getenv("OAUTH_OPEN_BROWSER", "0").strip().lower() in {"1", "true", "yes", "on"}
-    return Config(
-        album_id=album_id,
-        client_secrets_path=env_path("GOOGLE_PHOTOS_CLIENT_SECRETS_PATH", env_path("GOOGLE_CLIENT_SECRETS_PATH", DEFAULT_ROOT / "client_secret.json")),
-        client_id=os.getenv("GOOGLE_PHOTOS_CLIENT_ID", os.getenv("GOOGLE_CLIENT_ID", "")).strip(),
-        client_secret=os.getenv("GOOGLE_PHOTOS_CLIENT_SECRET", os.getenv("GOOGLE_CLIENT_SECRET", "")).strip(),
-        token_path=env_path("GOOGLE_TOKEN_PATH_PHOTOS", DEFAULT_ROOT / "token_photos.json"),
-        fb_device=os.getenv("FB_DEVICE", "/dev/fb1"),
-        width=width,
-        height=height,
-        cache_dir=env_path("CACHE_DIR", DEFAULT_ROOT / "cache" / "google_photos"),
-        fallback_image=env_path("FALLBACK_IMAGE", DEFAULT_ROOT / "images" / "photos-fallback.png"),
-        logo_path=env_path("LOGO_PATH", Path("/images/goo-photos-icon.png")),
-        oauth_port=int(os.getenv("OAUTH_PORT", "8080")),
-        oauth_open_browser=oauth_open_browser,
-    )
+    config, errors = validate_config()
+    if errors:
+        report_validation_errors("photos-shuffle.py", errors)
+        raise ValueError("Invalid configuration")
+    assert config is not None
+    return config
 
 
 def authenticate(config: Config, log: Log) -> Credentials:
@@ -375,6 +438,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render one random Google Photos album image to framebuffer.")
     parser.add_argument("--test", action="store_true", help="Render to /tmp/photos-shuffle-test.png instead of framebuffer")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logs")
+    parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
     return parser.parse_args()
 
 
@@ -382,11 +446,16 @@ def main() -> int:
     args = parse_args()
     log = Log(debug=args.debug)
 
-    try:
-        config = load_config()
-    except Exception as exc:
-        print(f"Config error: {exc}")
+    load_dotenv(DEFAULT_ROOT / ".env")
+    config, errors = validate_config()
+    if errors:
+        report_validation_errors("photos-shuffle.py", errors)
         return 1
+    assert config is not None
+
+    if args.check_config:
+        print("[photos-shuffle.py] Configuration check passed.")
+        return 0
 
     source_image: Path | None = None
     try:
