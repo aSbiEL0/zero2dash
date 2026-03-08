@@ -51,19 +51,43 @@ ALLOWED_AUTH_MODES = {"local_server", "console", "device_code"}
 
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
-    if isinstance(raw_scopes, str):
-        return {raw_scopes}
-    if isinstance(raw_scopes, (list, tuple, set)):
-        return {str(scope) for scope in raw_scopes if scope}
-    return set()
+    parsed_scopes: set[str] = set()
+
+    def _add_scope_values(raw_value: Any) -> None:
+        if raw_value is None:
+            return
+        if isinstance(raw_value, str):
+            scope_tokens = raw_value.replace(",", " ").split()
+            parsed_scopes.update(token.strip() for token in scope_tokens if token.strip())
+            return
+        if isinstance(raw_value, dict):
+            _add_scope_values(raw_value.get("scope") or raw_value.get("scopes"))
+            return
+        if isinstance(raw_value, (list, tuple, set)):
+            for item in raw_value:
+                _add_scope_values(item)
+            return
+
+        parsed_scopes.add(str(raw_value).strip())
+
+    _add_scope_values(raw_scopes)
+    parsed_scopes.discard("")
+    return parsed_scopes
 
 
-def _is_token_compatible_with_calendar(token_payload: dict[str, Any]) -> bool:
-    token_scopes = _normalize_scopes(token_payload.get("scopes") or token_payload.get("scope"))
-    if not token_scopes:
-        # Older token files may not include explicit scopes; let google-auth decide.
-        return True
-    return set(SCOPES).issubset(token_scopes)
+def _missing_required_scopes(scopes: set[str]) -> set[str]:
+    return set(SCOPES) - scopes
+
+
+def _credentials_have_required_scopes(creds: Credentials) -> bool:
+    token_scopes = _normalize_scopes(getattr(creds, "scopes", None))
+    return not _missing_required_scopes(token_scopes)
+
+
+def _invalidate_token_file(token_path: Path, reason: str) -> None:
+    logging.warning("Marking token invalid at %s: %s", token_path.resolve(), reason)
+    if token_path.exists():
+        token_path.unlink()
 
 
 @dataclass
@@ -374,33 +398,60 @@ def get_credentials(
             logging.warning("Ignoring invalid token file at %s (%s).", token_path.resolve(), exc)
             payload = None
 
-        if payload and not _is_token_compatible_with_calendar(payload):
-            logging.warning(
-                "Token at %s does not include calendar scope; re-authenticating.",
-                token_path.resolve(),
-            )
-        else:
+        if payload is not None:
+            token_scopes = _normalize_scopes(payload.get("scopes") or payload.get("scope"))
+            missing_scopes = _missing_required_scopes(token_scopes)
+            if missing_scopes:
+                expected_list = ", ".join(sorted(SCOPES))
+                missing_list = ", ".join(sorted(missing_scopes))
+                _invalidate_token_file(
+                    token_path,
+                    f"missing required calendar scopes ({missing_list}); expected at least: {expected_list}",
+                )
+                payload = None
+
+        if payload is not None:
             try:
                 creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
             except Exception as exc:
                 logging.warning("Unable to load token from %s (%s); re-authenticating.", token_path.resolve(), exc)
 
     if creds and creds.valid:
-        persist_auth_diagnostics(
-            diagnostics_path,
-            AuthAttemptDiagnostics(status="success", mode="token_cache", oauth_port=oauth_port, redirect_uri=expected_redirect_uri(oauth_port)),
-        )
-        return creds
+        if not _credentials_have_required_scopes(creds):
+            _invalidate_token_file(token_path, "loaded token credentials are incompatible with required calendar scopes")
+            creds = None
+        else:
+            persist_auth_diagnostics(
+                diagnostics_path,
+                AuthAttemptDiagnostics(status="success", mode="token_cache", oauth_port=oauth_port, redirect_uri=expected_redirect_uri(oauth_port)),
+            )
+            return creds
 
     if creds and creds.expired and creds.refresh_token:
         logging.info("Refreshing existing OAuth token.")
-        creds.refresh(Request())
-        save_credentials(creds, token_path)
-        persist_auth_diagnostics(
-            diagnostics_path,
-            AuthAttemptDiagnostics(status="success", mode="token_refresh", oauth_port=oauth_port, redirect_uri=expected_redirect_uri(oauth_port)),
-        )
-        return creds
+        try:
+            creds.refresh(Request())
+        except Exception as exc:
+            _invalidate_token_file(token_path, f"refresh failed ({type(exc).__name__}: {exc})")
+            logging.warning(
+                "Token refresh failed and token was invalidated. Forcing re-authentication to restore calendar access."
+            )
+            creds = None
+
+        if creds and not _credentials_have_required_scopes(creds):
+            _invalidate_token_file(token_path, "refreshed token is missing required calendar scopes")
+            logging.warning(
+                "Refreshed OAuth token lacks required calendar scopes. Forcing re-authentication."
+            )
+            creds = None
+
+        if creds:
+            save_credentials(creds, token_path)
+            persist_auth_diagnostics(
+                diagnostics_path,
+                AuthAttemptDiagnostics(status="success", mode="token_refresh", oauth_port=oauth_port, redirect_uri=expected_redirect_uri(oauth_port)),
+            )
+            return creds
 
     redirect_uri = expected_redirect_uri(oauth_port)
     logging.info("Starting OAuth flow (%s) on localhost:%d.", auth_mode, oauth_port)
@@ -411,6 +462,10 @@ def get_credentials(
     )
     try:
         creds = _run_auth_flow(flow, auth_mode, oauth_port)
+        if not _credentials_have_required_scopes(creds):
+            raise RuntimeError(
+                "Authenticated token does not include required calendar scopes. Ensure consent grants calendar.readonly access."
+            )
         persist_auth_diagnostics(
             diagnostics_path,
             AuthAttemptDiagnostics(status="success", mode=auth_mode, oauth_port=oauth_port, redirect_uri=redirect_uri),
