@@ -274,6 +274,8 @@ def authenticate(config: Config, log: Log) -> Credentials:
         log.debug("Refreshing existing Google OAuth token")
         try:
             creds.refresh(Request())
+            _write_token_atomically(config.token_path, creds.to_json())
+            log.info(f"Google OAuth token refreshed and saved to {config.token_path}")
         except Exception as exc:
             log.info(f"Token refresh failed ({exc}); starting OAuth flow")
             creds = None
@@ -316,10 +318,19 @@ def authenticate(config: Config, log: Log) -> Credentials:
                 log.info("Set GOOGLE_PHOTOS_CLIENT_ID / GOOGLE_PHOTOS_CLIENT_SECRET (or GOOGLE_PHOTOS_CLIENT_SECRETS_PATH) in .env.")
             raise
 
-    config.token_path.parent.mkdir(parents=True, exist_ok=True)
-    config.token_path.write_text(creds.to_json(), encoding="utf-8")
+    _write_token_atomically(config.token_path, creds.to_json())
     log.debug(f"Saved OAuth token to {config.token_path}")
     return creds
+
+
+def _write_token_atomically(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp_file:
+        tmp_file.write(content)
+        tmp_file.flush()
+        os.fsync(tmp_file.fileno())
+        temp_path = Path(tmp_file.name)
+    temp_path.replace(path)
 
 
 def list_album_images(creds: Credentials, album_id: str, log: Log) -> list[dict[str, Any]]:
