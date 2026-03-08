@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # Pi-hole TFT Dashboard -> direct framebuffer RGB565 (no X, no SDL)
 # v6 auth handled elsewhere; this file only renders and calls API
-# Version 1.1 - Introducing dark mode
-# LEGACY: kept for compatibility/manual use; canonical night service uses piholestats_v1.2.py
+# Version 1.3 - Always-on stats display
+# Manual always-on variant; canonical night service uses piholestats_v1.2.py
 
 import os, sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl, errno
 from pathlib import Path
@@ -18,7 +18,6 @@ DEFAULT_ROOT = Path('~/zero2dash').expanduser()
 FBDEV = "/dev/fb1"
 W, H = 320, 240
 REFRESH_SECS = 3
-ACTIVE_HOURS = (7, 22)
 
 PIHOLE_HOST = "127.0.0.1"
 PIHOLE_SCHEME = ""
@@ -54,17 +53,6 @@ def _parse_int(value: str) -> int:
         raise ValueError(f"expected integer, got {value!r}") from exc
 
 
-def _parse_active_hours(value: str) -> tuple[int, int]:
-    parts = [part.strip() for part in value.split(",")]
-    if len(parts) != 2:
-        raise ValueError("expected format start,end (e.g. 22,7)")
-    try:
-        start_hour, end_hour = int(parts[0]), int(parts[1])
-    except ValueError as exc:
-        raise ValueError(f"expected integers in start,end, got {value!r}") from exc
-    for hour in (start_hour, end_hour):
-        validate_hour_bounds(hour)
-    return start_hour, end_hour
 
 
 def _parse_float(value: str) -> float:
@@ -101,43 +89,10 @@ def _host_requires_explicit_scheme(raw_host: str) -> bool:
     return hostname not in {"localhost", "::1"} and not hostname.startswith("127.")
 
 
-def validate_hour_bounds(hour: int) -> None:
-    if hour < 0 or hour > 23:
-        raise ValueError(f"hour must be in range 0-23, got {hour}")
 
 
-def is_hour_active(now_hour: int, start: int, end: int) -> bool:
-    validate_hour_bounds(now_hour)
-    validate_hour_bounds(start)
-    validate_hour_bounds(end)
-    if start <= end:
-        return start <= now_hour <= end
-    return now_hour >= start or now_hour <= end
 
 
-def run_self_checks() -> None:
-    # Non-wrapping range.
-    assert is_hour_active(8, 8, 17)
-    assert is_hour_active(17, 8, 17)
-    assert not is_hour_active(7, 8, 17)
-    # Cross-midnight range.
-    assert is_hour_active(23, 22, 7)
-    assert is_hour_active(3, 22, 7)
-    assert not is_hour_active(12, 22, 7)
-    # Single-hour range.
-    assert is_hour_active(0, 0, 0)
-    assert not is_hour_active(1, 0, 0)
-    # Late-night to early-morning range.
-    assert is_hour_active(23, 23, 2)
-    assert is_hour_active(1, 23, 2)
-    assert not is_hour_active(10, 23, 2)
-
-    for invalid_hour in (-1, 24):
-        try:
-            is_hour_active(invalid_hour, 8, 17)
-            raise AssertionError("expected ValueError for out-of-range hour")
-        except ValueError:
-            pass
 
 
 def validate_config() -> tuple[dict[str, object] | None, list[str]]:
@@ -159,7 +114,6 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
     api_token = record("PIHOLE_API_TOKEN", default="")
     refresh_secs = record("REFRESH_SECS", default=REFRESH_SECS, validator=_parse_int)
     request_timeout = record("PIHOLE_TIMEOUT", default=REQUEST_TIMEOUT, validator=_parse_float)
-    active_hours = record("ACTIVE_HOURS", default=f"{ACTIVE_HOURS[0]},{ACTIVE_HOURS[1]}", validator=_parse_active_hours)
 
     if isinstance(refresh_secs, int) and refresh_secs < 1:
         errors.append("REFRESH_SECS is invalid: must be greater than or equal to 1")
@@ -192,21 +146,19 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
         "pihole_auth_mode": auth_mode,
         "request_timeout": float(request_timeout),
         "refresh_secs": int(refresh_secs),
-        "active_hours": active_hours if isinstance(active_hours, tuple) else ACTIVE_HOURS,
     }, []
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Pi-hole framebuffer dashboard")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
-    parser.add_argument("--self-test", action="store_true", help="Run active-hours self checks and exit")
     parser.add_argument("--output-image", default="", help="Write rendered frame to a PNG file instead of framebuffer")
     return parser.parse_args()
 
 
 def apply_config(config: dict[str, object], output_image: str = "") -> None:
     global FBDEV, PIHOLE_HOST, PIHOLE_SCHEME, PIHOLE_VERIFY_TLS, PIHOLE_CA_BUNDLE
-    global PIHOLE_PASSWORD, PIHOLE_API_TOKEN, PIHOLE_AUTH_MODE, REFRESH_SECS, ACTIVE_HOURS, BASE_URL
+    global PIHOLE_PASSWORD, PIHOLE_API_TOKEN, PIHOLE_AUTH_MODE, REFRESH_SECS, BASE_URL
     global REQUEST_TIMEOUT, REQUEST_TLS_VERIFY, OUTPUT_IMAGE
     FBDEV = str(config["fbdev"])
     PIHOLE_HOST = str(config["pihole_host"])
@@ -218,7 +170,6 @@ def apply_config(config: dict[str, object], output_image: str = "") -> None:
     PIHOLE_AUTH_MODE = str(config["pihole_auth_mode"])
     REQUEST_TIMEOUT = float(config["request_timeout"])
     REFRESH_SECS = int(config["refresh_secs"])
-    ACTIVE_HOURS = config["active_hours"]
     OUTPUT_IMAGE = output_image.strip() or str(get_env("OUTPUT_IMAGE", default="")).strip()
     BASE_URL = _normalize_host(PIHOLE_HOST, preferred_scheme=PIHOLE_SCHEME)
     REQUEST_TLS_VERIFY = _resolve_tls_verify(BASE_URL, PIHOLE_VERIFY_TLS, PIHOLE_CA_BUNDLE)
@@ -481,7 +432,7 @@ def fetch_pihole():
 
         fallback_summary = legacy.get("failure", {}).get("summary") or legacy.get("status", "LEGACY FAIL")
         print(
-            f"[piholestats_v1.1.py] Summary fetch failed. primary={primary_summary}; fallback={fallback_summary}",
+            f"[piholestats_v1.3.py] Summary fetch failed. primary={primary_summary}; fallback={fallback_summary}",
             file=sys.stderr,
         )
         return {
@@ -604,7 +555,7 @@ def draw_temp_value(d, rect, temp_c, font, colour):
     d.text((x, y), num, font=font, fill=colour)
 
 
-def draw_frame(stats, temp_c, uptime, active):
+def draw_frame(stats, temp_c, uptime):
     img = Image.new("RGB", (W, H), COL_BG)
     d = ImageDraw.Draw(img)
     big   = load_font(28, True)
@@ -629,12 +580,6 @@ def draw_frame(stats, temp_c, uptime, active):
             tw, th = text_size(d, value, val_font)
             d.text((r[0]+(r[2]-tw)//2, r[1]+(r[3]-th)//2), value, font=val_font, fill=COL_TXT)
 
-    if not active:
-        d.rounded_rectangle([margin, margin, W-margin, H-margin], radius=12, fill=(20,20,20))
-        msg = f"{TITLE}: Sleeping"
-        tw, th = text_size(d, msg, mid)
-        d.text(((W-tw)//2,(H-th)//2), msg, font=mid, fill=(180,180,180))
-        return img
 
     total   = stats["total"]
     blocked = stats["blocked"]
@@ -661,20 +606,16 @@ def draw_frame(stats, temp_c, uptime, active):
 def main():
     args = parse_args()
 
-    if args.self_test:
-        run_self_checks()
-        print(f"[piholestats_v1.1.py] Self checks passed.")
-        return 0
 
     load_dotenv(DEFAULT_ROOT / '.env')
     config, errors = validate_config()
     if errors:
-        report_validation_errors("piholestats_v1.1.py", errors)
+        report_validation_errors("piholestats_v1.3.py", errors)
         return 1
     assert config is not None
 
     if args.check_config:
-        print("[piholestats_v1.1.py] Configuration check passed.")
+        print("[piholestats_v1.3.py] Configuration check passed.")
         return 0
 
     apply_config(config, output_image=args.output_image)
@@ -690,8 +631,6 @@ def main():
         pass
 
     while True:
-        hr = time.localtime().tm_hour
-        active = is_hour_active(hr, ACTIVE_HOURS[0], ACTIVE_HOURS[1])
 
         s = fetch_pihole()
         if s["ok"]:
@@ -700,10 +639,10 @@ def main():
         temp_c = read_temp_c()
         uptime = read_uptime_str()
 
-        frame = draw_frame(cached, temp_c, uptime, active)
+        frame = draw_frame(cached, temp_c, uptime)
         fb_write(frame)
         if OUTPUT_IMAGE:
-            print(f"[piholestats_v1.1.py] Rendered test frame to {OUTPUT_IMAGE}.")
+            print(f"[piholestats_v1.3.py] Rendered test frame to {OUTPUT_IMAGE}.")
             return 0
         time.sleep(REFRESH_SECS)
 
@@ -714,5 +653,7 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         pass
+
+
 
 

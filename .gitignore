@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .env
 .env.local
+photos/*
+!photos/.gitkeep
+cache/drive_sync_state.json
+cache/photo_resize_state.json
+

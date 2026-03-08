@@ -2,15 +2,14 @@
 """
 photos-shuffle.py
 
-One-shot Google Photos album renderer for a 320x240 framebuffer page.
+One-shot photo renderer for a 320x240 framebuffer page.
 
 Requirements (pip): Pillow, python-dotenv, google-auth, google-auth-oauthlib,
 google-api-python-client.
 
 Configuration (.env):
-- Required: GOOGLE_PHOTOS_ALBUM_ID
-- Optional: GOOGLE_PHOTOS_CLIENT_SECRETS_PATH, GOOGLE_TOKEN_PATH_PHOTOS, FB_DEVICE, WIDTH,
-  HEIGHT, CACHE_DIR, FALLBACK_IMAGE, LOGO_PATH
+- Optional: LOCAL_PHOTOS_DIR, GOOGLE_PHOTOS_ALBUM_ID, GOOGLE_PHOTOS_CLIENT_SECRETS_PATH,
+  GOOGLE_TOKEN_PATH_PHOTOS, FB_DEVICE, WIDTH, HEIGHT, CACHE_DIR, FALLBACK_IMAGE, LOGO_PATH
 - Optional OAuth alternative: GOOGLE_PHOTOS_CLIENT_ID and GOOGLE_PHOTOS_CLIENT_SECRET
   (used when GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file is not present).
 
@@ -26,11 +25,15 @@ OAuth setup:
   script, or use SSH port forwarding to forward the callback port from the Pi.
 - Use a Desktop OAuth client. If the Google app is in testing, add your
   account as a test user before first run.
+- Since 31 March 2025, Google Photos Library API read access is limited to app-created
+  albums and media items. Personal/shared albums should use LOCAL_PHOTOS_DIR,
+  optionally populated by Google Drive sync.
 
 Fallback:
+- Preferred source is LOCAL_PHOTOS_DIR (default: ~/zero2dash/photos). If it is empty, the
+  script can still try Google Photos when configured, then CACHE_DIR, then FALLBACK_IMAGE.
 - Ensure local fallback image exists at ~/zero2dash/images/photos-fallback.png
-  (or override with FALLBACK_IMAGE). If online/offline fetch fails, fallback is
-  rendered through the same processing pipeline.
+  (or override with FALLBACK_IMAGE).
 """
 
 from __future__ import annotations
@@ -52,7 +55,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from PIL import Image, ImageEnhance
 
-SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly"]
+SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata"]
 DEFAULT_ROOT = Path("~/zero2dash").expanduser()
 TEST_OUTPUT = Path("/tmp/photos-shuffle-test.png")
 LOGO_WIDTH_RATIO = 0.14
@@ -62,6 +65,7 @@ BRIGHTNESS_FACTOR = 0.75
 
 @dataclass
 class Config:
+    local_photos_dir: Path
     album_id: str
     client_secrets_path: Path
     client_id: str
@@ -161,7 +165,8 @@ def validate_config() -> tuple[Config | None, list[str]]:
             errors.append(str(exc))
             return default
 
-    album_id = record("GOOGLE_PHOTOS_ALBUM_ID", required=True)
+    local_photos_raw = record("LOCAL_PHOTOS_DIR", default=str(DEFAULT_ROOT / "photos"))
+    album_id = record("GOOGLE_PHOTOS_ALBUM_ID", default="")
     client_secrets_raw = record("GOOGLE_PHOTOS_CLIENT_SECRETS_PATH", default=str(DEFAULT_ROOT / "client_secret.json"))
 
     client_id = record("GOOGLE_PHOTOS_CLIENT_ID") or record("GOOGLE_CLIENT_ID") or ""
@@ -189,6 +194,7 @@ def validate_config() -> tuple[Config | None, list[str]]:
         errors.append(f"FALLBACK_IMAGE not found: {fallback_image}")
 
     config = Config(
+        local_photos_dir=Path(str(local_photos_raw)).expanduser(),
         album_id=str(album_id),
         client_secrets_path=Path(str(client_secrets_raw)).expanduser(),
         client_id=str(client_id),
@@ -205,13 +211,13 @@ def validate_config() -> tuple[Config | None, list[str]]:
     )
 
     calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
-    if config.token_path.resolve() == calendar_default_token:
+    if config.album_id and config.token_path.resolve() == calendar_default_token:
         errors.append(
             "GOOGLE_TOKEN_PATH_PHOTOS points to token.json, which is reserved for calendash-api.py. "
             "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
         )
 
-    if not config.client_secrets_path.exists() and not (config.client_id and config.client_secret):
+    if config.album_id and not config.client_secrets_path.exists() and not (config.client_id and config.client_secret):
         errors.append(
             f"Google Photos OAuth credentials are required: set GOOGLE_PHOTOS_CLIENT_SECRETS_PATH to an existing file "
             f"or provide GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET (checked path: {config.client_secrets_path})."
@@ -236,7 +242,7 @@ def authenticate(config: Config, log: Log) -> Credentials:
     creds: Credentials | None = None
 
     calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
-    if config.token_path.resolve() == calendar_default_token:
+    if config.album_id and config.token_path.resolve() == calendar_default_token:
         raise ValueError(
             "GOOGLE_TOKEN_PATH_PHOTOS points to token.json, which is reserved for calendash-api.py. "
             "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
@@ -251,7 +257,7 @@ def authenticate(config: Config, log: Log) -> Credentials:
 
         if payload and not _is_token_compatible_with_photos(payload):
             log.info(
-                f"Token at {config.token_path} does not include Google Photos scope; re-authenticating"
+                f"Token at {config.token_path} does not include required Google Photos scope {SCOPES[0]}; re-authenticating"
             )
         else:
             try:
@@ -357,6 +363,15 @@ def _describe_google_api_error(exc: HTTPError) -> str:
         return f"Google Photos API request failed ({exc.code} {exc.reason})"
 
     message = str(error.get("message") or f"Google Photos API request failed ({exc.code} {exc.reason})").strip()
+    lowered = message.lower()
+    if "insufficient authentication scopes" in lowered:
+        return (
+            "Google Photos Library API removed photoslibrary.readonly on 31 March 2025. "
+            "This script now only works with app-created albums/media using "
+            "photoslibrary.readonly.appcreateddata. Re-authorise with the new scope, "
+            "or populate CACHE_DIR from another source for personal/shared albums."
+        )
+
     details = error.get("details")
     if not isinstance(details, list):
         return message
@@ -580,7 +595,18 @@ def write_framebuffer(img: Image.Image, fb_device: str, width: int, height: int)
         fb.write(payload)
 
 
+def choose_local_image(config: Config, log: Log) -> Path:
+    local_images = list_cached_images(config.local_photos_dir)
+    if not local_images:
+        raise RuntimeError(f"Local photos directory empty: {config.local_photos_dir}")
+    chosen = random.choice(local_images)
+    log.info(f"LOCAL: selected {chosen.name}")
+    return chosen
+
 def choose_online_image(config: Config, log: Log) -> Path:
+    if not config.album_id:
+        raise RuntimeError("GOOGLE_PHOTOS_ALBUM_ID not configured")
+
     creds = authenticate(config, log)
     items = list_album_images(creds, config.album_id, log)
     if not items:
@@ -648,20 +674,27 @@ def main() -> int:
         return 0
 
     if args.auth_only:
+        if not config.album_id:
+            print("[photos-shuffle.py] No Google Photos album configured; auth check skipped.")
+            return 0
         authenticate(config, log)
         print("[photos-shuffle.py] Authentication check passed.")
         return 0
 
     source_image: Path | None = None
     try:
-        source_image = choose_online_image(config, log)
-    except Exception as exc:
-        log.info(f"Online unavailable ({exc}); trying offline cache")
+        source_image = choose_local_image(config, log)
+    except Exception as local_exc:
+        log.info(f"Local photos unavailable ({local_exc}); trying online source")
         try:
-            source_image = choose_offline_image(config, log)
-        except Exception as off_exc:
-            log.info(f"Offline cache unavailable ({off_exc}); using fallback image")
-            source_image = config.fallback_image
+            source_image = choose_online_image(config, log)
+        except Exception as exc:
+            log.info(f"Online unavailable ({exc}); trying offline cache")
+            try:
+                source_image = choose_offline_image(config, log)
+            except Exception as off_exc:
+                log.info(f"Offline cache unavailable ({off_exc}); using fallback image")
+                source_image = config.fallback_image
 
     try:
         frame = composite_frame(source_image, config.logo_path, config.width, config.height)
@@ -696,4 +729,9 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
 

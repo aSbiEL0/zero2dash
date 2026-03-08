@@ -31,7 +31,7 @@ zero2dash/
 ├── display_rotator.py
 ├── scripts/
 │   ├── pihole-display-pre.sh
-│   ├── piholestats_v1.1.py      # legacy daytime variant
+│   ├── piholestats_v1.3.py      # always-on daytime variant
 │   ├── piholestats_v1.2.py      # canonical dark-mode service target
 │   ├── calendash-api.py
 │   ├── calendash-img.py
@@ -106,7 +106,16 @@ Google OAuth notes:
 - Loopback OAuth only: complete sign-in on the same machine as the script, or tunnel the callback port from a headless Pi with `ssh -L 8080:localhost:8080 pihole@pihole`.
 - If the Google consent screen is in testing, add your account as a test user.
 - Enable Google Photos Library API in the same Google Cloud project as the Photos OAuth client.
+- Since 31 March 2025, Google Photos Library API only exposes app-created albums/media. Personal or shared albums need a different source, such as a pre-populated local cache used by `photos-shuffle.py` when online fetch is unavailable.
 - `calendash-api.py` defaults `GOOGLE_TOKEN_PATH` to `token.json` relative to `/opt/zero2dash` under systemd; `photos-shuffle.py` must keep using a separate `GOOGLE_TOKEN_PATH_PHOTOS`.
+- For normal personal/shared albums, prefer `LOCAL_PHOTOS_DIR` plus `scripts/drive-sync.py` instead of Google Photos API.
+- `scripts/photo-resize.py` resizes changed files in `LOCAL_PHOTOS_DIR` by 50% and is safe to run repeatedly because it tracks processed mtimes in `PHOTO_RESIZE_STATE_PATH`.
+
+Drive-backed photos:
+
+- Put display-ready local photos in `~/zero2dash/photos`, or sync them there with `scripts/drive-sync.py`.
+- `drive-sync.py` reads `GOOGLE_DRIVE_FOLDER_ID` and `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`, downloads image files into `LOCAL_PHOTOS_DIR`, then runs `photo-resize.py`.
+- Share the Drive folder directly with the service account email as `Viewer`. Do not rely on link-sharing if you want this to work without resource-key surprises.
 
 ## Run via systemd
 Install and enable canonical units:
@@ -130,4 +139,7 @@ journalctl -u pihole-display-dark.service -n 50 --no-pager
 
 - `display_rotator.py` excludes `piholestats_v1.2.py` by default so day mode and night mode stay distinct.
 - Static image scripts (for example `tram-info.py`, `weather-dash.py`, `calendash-img.py`) are rotator-friendly page scripts, not systemd service units by themselves.
+
+
+
 
