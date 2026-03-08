@@ -117,6 +117,17 @@ journalctl -u display.service -n 50 --no-pager
 journalctl -u pihole-display-dark.service -n 50 --no-pager
 ```
 
+
+## Google Photos shuffle credential precedence
+
+`scripts/photos-shuffle.py` resolves OAuth credentials in this order:
+
+1. `GOOGLE_PHOTOS_CLIENT_SECRETS_PATH` file path from env/`.env` (default: `~/zero2dash/client_secret.json`)
+2. `GOOGLE_PHOTOS_CLIENT_ID` + `GOOGLE_PHOTOS_CLIENT_SECRET` from env/`.env`
+3. `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` from env/`.env` (legacy fallback)
+
+Use `python3 scripts/photos-shuffle.py --check-config` to validate the configuration and print the credential source that will be used.
+
 ## Notes
 
 - `display_rotator.py` excludes `piholestats_v1.2.py` by default so day mode and night mode stay distinct.

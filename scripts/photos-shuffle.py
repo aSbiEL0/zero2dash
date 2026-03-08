@@ -29,6 +29,12 @@ Fallback:
 - Ensure local fallback image exists at ~/zero2dash/images/photos-fallback.png
   (or override with FALLBACK_IMAGE). If online/offline fetch fails, fallback is
   rendered through the same processing pipeline.
+
+Credential precedence:
+1) GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file (from env/.env; defaults to
+   ~/zero2dash/client_secret.json).
+2) GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET env/.env values.
+3) GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env/.env values (legacy fallback).
 """
 
 from __future__ import annotations
@@ -56,6 +62,12 @@ TEST_OUTPUT = Path("/tmp/photos-shuffle-test.png")
 LOGO_WIDTH_RATIO = 0.14
 LOGO_PADDING_RATIO = 0.03
 BRIGHTNESS_FACTOR = 0.75
+
+CREDENTIAL_SOURCES_CHECKLIST = [
+    "GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file (env/.env; default: ~/zero2dash/client_secret.json)",
+    "GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET (env/.env)",
+    "GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (legacy env/.env fallback)",
+]
 
 
 @dataclass
@@ -111,6 +123,23 @@ def _as_int(name: str, value: str) -> int:
 
 def _as_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def format_credentials_checklist() -> str:
+    return "Credential sources checked (in order): " + " ; ".join(
+        f"{index}) {source}" for index, source in enumerate(CREDENTIAL_SOURCES_CHECKLIST, start=1)
+    )
+
+
+def selected_credential_source(config: Config) -> str:
+    if config.client_secrets_path.exists():
+        return f"GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file ({config.client_secrets_path})"
+    if config.client_id and config.client_secret:
+        photos_scoped = bool(os.getenv("GOOGLE_PHOTOS_CLIENT_ID") and os.getenv("GOOGLE_PHOTOS_CLIENT_SECRET"))
+        if photos_scoped:
+            return "GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET"
+        return "GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (legacy fallback)"
+    return "none"
 
 
 def validate_config() -> tuple[Config | None, list[str]]:
@@ -178,6 +207,7 @@ def validate_config() -> tuple[Config | None, list[str]]:
             f"Google Photos OAuth credentials are required: set GOOGLE_PHOTOS_CLIENT_SECRETS_PATH to an existing file "
             f"or provide GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET (checked path: {config.client_secrets_path})."
         )
+        errors.append(format_credentials_checklist())
 
     if errors:
         return None, errors
@@ -514,10 +544,22 @@ def choose_offline_image(config: Config, log: Log) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render one random Google Photos album image to framebuffer.")
+    parser = argparse.ArgumentParser(
+        description="Render one random Google Photos album image to framebuffer.",
+        epilog=(
+            "Credential source precedence: "
+            "1) GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file, "
+            "2) GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET, "
+            "3) GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (legacy fallback)."
+        ),
+    )
     parser.add_argument("--test", action="store_true", help="Render to /tmp/photos-shuffle-test.png instead of framebuffer")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logs")
-    parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
+    parser.add_argument(
+        "--check-config",
+        action="store_true",
+        help="Validate config (including credential-source precedence) and exit",
+    )
     parser.add_argument("--smoke-list-fetch", action="store_true", help="Run paginated list fetch smoke check and exit")
     return parser.parse_args()
 
@@ -542,6 +584,7 @@ def main() -> int:
     assert config is not None
 
     if args.check_config:
+        print(f"[photos-shuffle.py] Credential source: {selected_credential_source(config)}")
         print("[photos-shuffle.py] Configuration check passed.")
         return 0
 
