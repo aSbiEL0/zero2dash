@@ -605,6 +605,9 @@ def main() -> int:
         return 0
     except Exception as exc:
         logging.error("Calendar update failed: %s", exc)
+        if args.auth_only:
+            logging.info("Auth-only mode; skipping fallback rendering.")
+            return 1
         try:
             render_image(
                 output_path=rendering_config["output_path"],
