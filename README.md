@@ -97,6 +97,8 @@ Set at minimum:
 - `PIHOLE_API_TOKEN` (optional fallback)
 - `REFRESH_SECS`
 - `ACTIVE_HOURS` (inclusive `start,end` hour window in 24h format; cross-midnight values like `22,7` are supported)
+- `FB_DEVICE` (optional override; defaults to `/dev/fb1`)
+- `FB_WIDTH` / `FB_HEIGHT` (optional override for static renderer geometry; defaults `320x240`)
 
 ## Run via systemd
 
@@ -132,3 +134,8 @@ Use `python3 scripts/photos-shuffle.py --check-config` to validate the configura
 
 - `display_rotator.py` excludes `piholestats_v1.2.py` by default so day mode and night mode stay distinct.
 - Static image scripts (for example `tram-info.py`, `weather-dash.py`, `calendash-img.py`) are rotator-friendly page scripts, not systemd service units by themselves.
+
+
+### Framebuffer overrides in systemd
+
+Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
