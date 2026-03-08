@@ -21,6 +21,7 @@ import json
 import argparse
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -94,6 +95,7 @@ def optional_env_int(name: str, default: int) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a calendar summary image.")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
+    parser.add_argument("--auth-only", action="store_true", help="Run OAuth/token setup only and exit")
     return parser.parse_args()
 
 
@@ -102,8 +104,33 @@ def validate_timezone(value: str) -> str:
     return value
 
 
-def validate_config() -> tuple[dict[str, Any] | None, list[str]]:
+def _env_is_set(name: str) -> bool:
+    value = os.getenv(name)
+    return value is not None and value.strip() != ""
+
+
+def _record_missing_for_section(missing_by_section: dict[str, list[str]], section: str, *env_names: str) -> None:
+    bucket = missing_by_section.setdefault(section, [])
+    for env_name in env_names:
+        if env_name not in bucket:
+            bucket.append(env_name)
+
+
+def report_missing_required_fields(missing_by_section: dict[str, list[str]]) -> None:
+    if not missing_by_section:
+        return
+    print("[calendash-api.py] Missing required environment variables by section:")
+    for section, env_names in missing_by_section.items():
+        if not env_names:
+            continue
+        print(f"  - {section}:")
+        for env_name in env_names:
+            print(f"    - {env_name}")
+
+
+def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, Any]], list[str], dict[str, list[str]]]:
     errors: list[str] = []
+    missing_by_section: dict[str, list[str]] = OrderedDict()
 
     def record(name: str, *, default: Any = None, required: bool = False, validator: Any = None) -> Any:
         try:
@@ -115,18 +142,33 @@ def validate_config() -> tuple[dict[str, Any] | None, list[str]]:
     calendar_client_id = record("GOOGLE_CALENDAR_CLIENT_ID")
     fallback_client_id = record("GOOGLE_CLIENT_ID")
     client_id = calendar_client_id or fallback_client_id
-    if not client_id:
+    if "auth" in require_sections and not client_id:
         errors.append("One of GOOGLE_CALENDAR_CLIENT_ID or GOOGLE_CLIENT_ID is required but not set.")
+        if not _env_is_set("GOOGLE_CALENDAR_CLIENT_ID"):
+            _record_missing_for_section(missing_by_section, "auth", "GOOGLE_CALENDAR_CLIENT_ID")
+        if not _env_is_set("GOOGLE_CLIENT_ID"):
+            _record_missing_for_section(missing_by_section, "auth", "GOOGLE_CLIENT_ID")
 
     calendar_client_secret = record("GOOGLE_CALENDAR_CLIENT_SECRET")
     fallback_client_secret = record("GOOGLE_CLIENT_SECRET")
     client_secret = calendar_client_secret or fallback_client_secret
-    if not client_secret:
+    if "auth" in require_sections and not client_secret:
         errors.append("One of GOOGLE_CALENDAR_CLIENT_SECRET or GOOGLE_CLIENT_SECRET is required but not set.")
+        if not _env_is_set("GOOGLE_CALENDAR_CLIENT_SECRET"):
+            _record_missing_for_section(missing_by_section, "auth", "GOOGLE_CALENDAR_CLIENT_SECRET")
+        if not _env_is_set("GOOGLE_CLIENT_SECRET"):
+            _record_missing_for_section(missing_by_section, "auth", "GOOGLE_CLIENT_SECRET")
 
-    calendar_id = record("GOOGLE_CALENDAR_ID", required=True)
-    tz_name = record("TIMEZONE", required=True, validator=validate_timezone)
+    api_required = "api" in require_sections
+    calendar_id = record("GOOGLE_CALENDAR_ID", required=api_required)
+    tz_name = record("TIMEZONE", required=api_required, validator=validate_timezone)
+    if api_required:
+        if not _env_is_set("GOOGLE_CALENDAR_ID"):
+            _record_missing_for_section(missing_by_section, "api", "GOOGLE_CALENDAR_ID")
+        if not _env_is_set("TIMEZONE"):
+            _record_missing_for_section(missing_by_section, "api", "TIMEZONE")
 
+    rendering_required = "rendering" in require_sections
     output_raw = record("OUTPUT_PATH", default="~/zero2dash/images/calendash.png")
     background_raw = record("BACKGROUND_IMAGE", default="~/zero2dash/images/calendash-bkg.png")
     icon_raw = record("ICON_IMAGE", default="~/zero2dash/images/calendash-icon.png")
@@ -139,25 +181,30 @@ def validate_config() -> tuple[dict[str, Any] | None, list[str]]:
     icon_path = expand_path(str(icon_raw))
     token_path = expand_path(str(token_raw))
 
-    if not background_path.exists():
+    if rendering_required and not background_path.exists():
         errors.append(f"BACKGROUND_IMAGE not found: {background_path}")
-    if not icon_path.exists():
+    if rendering_required and not icon_path.exists():
         errors.append(f"ICON_IMAGE not found: {icon_path}")
 
-    if errors:
-        return None, errors
-
     return {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "calendar_id": calendar_id,
-        "tz_name": tz_name,
-        "output_path": output_path,
-        "background_path": background_path,
-        "icon_path": icon_path,
-        "oauth_port": int(oauth_port),
-        "token_path": token_path,
-    }, []
+        "auth": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+        },
+        "api": {
+            "calendar_id": calendar_id,
+            "tz_name": tz_name,
+        },
+        "rendering": {
+            "output_path": output_path,
+            "background_path": background_path,
+            "icon_path": icon_path,
+        },
+        "runtime": {
+            "oauth_port": int(oauth_port),
+            "token_path": token_path,
+        },
+    }, errors, missing_by_section
 
 
 def load_font(preferred_size: int, *, use_bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -463,34 +510,54 @@ def main() -> int:
     load_dotenv()
     args = parse_args()
 
-    config, errors = validate_config()
+    required_sections = {"auth", "api", "rendering", "runtime"}
+    if args.check_config or args.auth_only:
+        required_sections = {"auth", "runtime"}
+
+    config, errors, missing_by_section = validate_config(require_sections=required_sections)
+    if missing_by_section:
+        report_missing_required_fields(missing_by_section)
     if errors:
         report_validation_errors("calendash-api.py", errors)
         return 1
-    assert config is not None
+
+    auth_config = config["auth"]
+    api_config = config["api"]
+    rendering_config = config["rendering"]
+    runtime_config = config["runtime"]
 
     if args.check_config:
         print("[calendash-api.py] Configuration check passed.")
         return 0
 
     try:
-        creds = get_credentials(config["client_id"], config["client_secret"], config["token_path"], config["oauth_port"])
+        creds = get_credentials(
+            auth_config["client_id"],
+            auth_config["client_secret"],
+            runtime_config["token_path"],
+            runtime_config["oauth_port"],
+        )
+
+        if args.auth_only:
+            print("[calendash-api.py] Authentication check passed.")
+            return 0
+
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-        events = fetch_events(service, calendar_id=config["calendar_id"], tz_name=config["tz_name"], retries=3)
+        events = fetch_events(service, calendar_id=api_config["calendar_id"], tz_name=api_config["tz_name"], retries=3)
 
         if not events:
             render_image(
-                output_path=config["output_path"],
-                background_path=config["background_path"],
-                icon_path=config["icon_path"],
+                output_path=rendering_config["output_path"],
+                background_path=rendering_config["background_path"],
+                icon_path=rendering_config["icon_path"],
                 events=[],
                 message="No upcoming events",
             )
         else:
             render_image(
-                output_path=config["output_path"],
-                background_path=config["background_path"],
-                icon_path=config["icon_path"],
+                output_path=rendering_config["output_path"],
+                background_path=rendering_config["background_path"],
+                icon_path=rendering_config["icon_path"],
                 events=events,
             )
         return 0
@@ -498,9 +565,9 @@ def main() -> int:
         logging.error("Calendar update failed: %s", exc)
         try:
             render_image(
-                output_path=config["output_path"],
-                background_path=config["background_path"],
-                icon_path=config["icon_path"],
+                output_path=rendering_config["output_path"],
+                background_path=rendering_config["background_path"],
+                icon_path=rendering_config["icon_path"],
                 events=[],
                 message="Failed to update calendar",
             )
