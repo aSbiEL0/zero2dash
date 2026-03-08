@@ -86,6 +86,7 @@ class Config:
     logo_path: Path
     oauth_port: int
     oauth_open_browser: bool
+    max_online_attempts: int
 
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
@@ -168,6 +169,11 @@ def validate_config() -> tuple[Config | None, list[str]]:
     logo_raw = record("LOGO_PATH", default="/images/goo-photos-icon.png")
     oauth_port = record("OAUTH_PORT", default=8080, validator=lambda v: _as_int("OAUTH_PORT", v))
     oauth_open_browser = record("OAUTH_OPEN_BROWSER", default=False, validator=_as_bool)
+    max_online_attempts = record(
+        "GOOGLE_PHOTOS_MAX_ATTEMPTS",
+        default=0,
+        validator=lambda v: _as_int("GOOGLE_PHOTOS_MAX_ATTEMPTS", v),
+    )
 
     if isinstance(width, int) and width <= 0:
         errors.append("WIDTH is invalid: must be greater than 0")
@@ -175,6 +181,8 @@ def validate_config() -> tuple[Config | None, list[str]]:
         errors.append("HEIGHT is invalid: must be greater than 0")
     if isinstance(oauth_port, int) and oauth_port <= 0:
         errors.append("OAUTH_PORT is invalid: must be greater than 0")
+    if isinstance(max_online_attempts, int) and max_online_attempts < 0:
+        errors.append("GOOGLE_PHOTOS_MAX_ATTEMPTS is invalid: must be >= 0")
 
     fallback_image = Path(str(fallback_raw)).expanduser()
     if not fallback_image.exists():
@@ -194,6 +202,7 @@ def validate_config() -> tuple[Config | None, list[str]]:
         logo_path=Path(str(logo_raw)).expanduser(),
         oauth_port=int(oauth_port),
         oauth_open_browser=bool(oauth_open_browser),
+        max_online_attempts=int(max_online_attempts),
     )
 
     calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
@@ -528,22 +537,62 @@ def choose_online_image(config: Config, log: Log) -> Path:
         raise RuntimeError("No image media items found in album")
 
     random.shuffle(items)
+    attempt_limit = len(items) if config.max_online_attempts == 0 else min(len(items), config.max_online_attempts)
+
+    failures_by_item: dict[str, str] = {}
+    outcomes: dict[str, int] = {"cache_hit": 0, "download_success": 0, "download_failure": 0}
+    attempted_count = 0
+
     for item in items:
+        if attempted_count >= attempt_limit:
+            break
+
         media_id = item.get("id", "unknown")
+        if media_id in failures_by_item:
+            continue
+
         cache_path = cache_path_for_item(config.cache_dir, item)
+        attempted_count += 1
+
         if cache_path.exists() and cache_path.stat().st_size > 0:
+            outcomes["cache_hit"] += 1
             log.info(f"ONLINE: cache hit for {media_id}")
+            log.info(
+                "ONLINE summary: "
+                f"attempted={attempted_count}/{attempt_limit}, "
+                f"cache_hit={outcomes['cache_hit']}, "
+                f"download_success={outcomes['download_success']}, "
+                f"download_failure={outcomes['download_failure']}"
+            )
             return cache_path
 
         log.info(f"ONLINE: cache miss for {media_id}; downloading")
         try:
             download_to_cache(creds, item, cache_path, config, log)
+            outcomes["download_success"] += 1
+            log.info(
+                "ONLINE summary: "
+                f"attempted={attempted_count}/{attempt_limit}, "
+                f"cache_hit={outcomes['cache_hit']}, "
+                f"download_success={outcomes['download_success']}, "
+                f"download_failure={outcomes['download_failure']}"
+            )
             return cache_path
         except Exception as exc:
+            outcomes["download_failure"] += 1
+            failures_by_item[str(media_id)] = str(exc)
             log.debug(f"Download failed for {media_id}: {exc}")
             continue
 
-    raise RuntimeError("Unable to fetch any album image")
+    failure_summary = ", ".join(f"{media_id}={reason}" for media_id, reason in failures_by_item.items()) or "none"
+    log.info(
+        "ONLINE summary: "
+        f"attempted={attempted_count}/{attempt_limit}, "
+        f"cache_hit={outcomes['cache_hit']}, "
+        f"download_success={outcomes['download_success']}, "
+        f"download_failure={outcomes['download_failure']}"
+    )
+    raise RuntimeError(f"Unable to fetch any album image after {attempted_count} attempts; failures: {failure_summary}")
 
 
 def choose_offline_image(config: Config, log: Log) -> Path:
