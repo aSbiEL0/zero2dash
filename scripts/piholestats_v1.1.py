@@ -4,7 +4,7 @@
 # Version 1.1 - Introducing dark mode
 # LEGACY: kept for compatibility/manual use; canonical night service uses piholestats_v1.2.py
 
-import os, sys, time, json, urllib.request, urllib.parse, mmap, struct, argparse, ssl, errno
+import os, sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl, errno
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
@@ -23,6 +23,7 @@ PIHOLE_VERIFY_TLS = "auto"
 PIHOLE_CA_BUNDLE = ""
 PIHOLE_PASSWORD = ""
 PIHOLE_API_TOKEN = ""
+PIHOLE_AUTH_MODE = ""
 TITLE = "Pi-hole"
 # Colours
 COL_BG   = (0, 0, 0)
@@ -84,6 +85,19 @@ def _parse_verify_tls(value: str) -> str:
     return normalized
 
 
+def _host_requires_explicit_scheme(raw_host: str) -> bool:
+    candidate = raw_host.strip()
+    if not candidate:
+        return False
+    parsed = urllib.parse.urlsplit(candidate if "://" in candidate else f"//{candidate}")
+    if parsed.scheme:
+        return False
+    hostname = (parsed.hostname or candidate.split("/")[0].split(":")[0]).strip("[]").lower()
+    if not hostname:
+        return False
+    return hostname not in {"localhost", "::1"} and not hostname.startswith("127.")
+
+
 def validate_hour_bounds(hour: int) -> None:
     if hour < 0 or hour > 23:
         raise ValueError(f"hour must be in range 0-23, got {hour}")
@@ -138,7 +152,7 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
     scheme = record("PIHOLE_SCHEME", default="", validator=_parse_scheme)
     verify_tls = record("PIHOLE_VERIFY_TLS", default="auto", validator=_parse_verify_tls)
     ca_bundle = record("PIHOLE_CA_BUNDLE", default="")
-    password = record("PIHOLE_PASSWORD", required=True)
+    password = record("PIHOLE_PASSWORD", default="")
     api_token = record("PIHOLE_API_TOKEN", default="")
     refresh_secs = record("REFRESH_SECS", default=REFRESH_SECS, validator=_parse_int)
     request_timeout = record("PIHOLE_TIMEOUT", default=REQUEST_TIMEOUT, validator=_parse_float)
@@ -150,6 +164,16 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
         errors.append("PIHOLE_TIMEOUT is invalid: must be greater than 0")
     if ca_bundle and not Path(str(ca_bundle)).is_file():
         errors.append("PIHOLE_CA_BUNDLE is invalid: file does not exist")
+    if _host_requires_explicit_scheme(str(host)) and not str(scheme):
+        errors.append(
+            "Remote PIHOLE_HOST requires an explicit scheme: set PIHOLE_SCHEME=http|https or include http:// / https:// in PIHOLE_HOST"
+        )
+
+    auth_mode = _detect_auth_mode(str(password), str(api_token))
+    if auth_mode is None:
+        errors.append(
+            "Auth configuration is invalid: set PIHOLE_PASSWORD for v6 session auth or PIHOLE_API_TOKEN for legacy token auth"
+        )
 
     if errors:
         return None, errors
@@ -162,6 +186,7 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
         "pihole_ca_bundle": str(ca_bundle),
         "pihole_password": str(password),
         "pihole_api_token": str(api_token),
+        "pihole_auth_mode": auth_mode,
         "request_timeout": float(request_timeout),
         "refresh_secs": int(refresh_secs),
         "active_hours": active_hours if isinstance(active_hours, tuple) else ACTIVE_HOURS,
@@ -178,7 +203,7 @@ def parse_args():
 
 def apply_config(config: dict[str, object], output_image: str = "") -> None:
     global FBDEV, PIHOLE_HOST, PIHOLE_SCHEME, PIHOLE_VERIFY_TLS, PIHOLE_CA_BUNDLE
-    global PIHOLE_PASSWORD, PIHOLE_API_TOKEN, REFRESH_SECS, ACTIVE_HOURS, BASE_URL
+    global PIHOLE_PASSWORD, PIHOLE_API_TOKEN, PIHOLE_AUTH_MODE, REFRESH_SECS, ACTIVE_HOURS, BASE_URL
     global REQUEST_TIMEOUT, REQUEST_TLS_VERIFY, OUTPUT_IMAGE
     FBDEV = str(config["fbdev"])
     PIHOLE_HOST = str(config["pihole_host"])
@@ -187,6 +212,7 @@ def apply_config(config: dict[str, object], output_image: str = "") -> None:
     PIHOLE_CA_BUNDLE = str(config["pihole_ca_bundle"])
     PIHOLE_PASSWORD = str(config["pihole_password"])
     PIHOLE_API_TOKEN = str(config["pihole_api_token"])
+    PIHOLE_AUTH_MODE = str(config["pihole_auth_mode"])
     REQUEST_TIMEOUT = float(config["request_timeout"])
     REFRESH_SECS = int(config["refresh_secs"])
     ACTIVE_HOURS = config["active_hours"]
@@ -365,25 +391,54 @@ def _normalize_host(raw_host: str, preferred_scheme: str = "") -> str:
 
 BASE_URL = _normalize_host(PIHOLE_HOST, preferred_scheme=PIHOLE_SCHEME)
 
+
+def _detect_auth_mode(password: str, api_token: str) -> str | None:
+    if password:
+        return "v6-session"
+    if api_token:
+        return "legacy-token"
+    return None
+
+
+def _auth_failure(msg: str) -> RuntimeError:
+    return RuntimeError(f"AUTH_FAILURE: {msg}")
+
+
+def _transport_failure(msg: str) -> RuntimeError:
+    return RuntimeError(f"TRANSPORT_FAILURE: {msg}")
+
+
 def _auth_get_sid():
     global _SID, _SID_EXP
     if not PIHOLE_PASSWORD:
-        raise RuntimeError("Missing PIHOLE_PASSWORD")
-    js = _http_json(f"{BASE_URL}/api/auth", method="POST",
-                    body={"password": PIHOLE_PASSWORD}, timeout=4)
+        raise _auth_failure("PIHOLE_PASSWORD is not configured")
+    try:
+        js = _http_json(f"{BASE_URL}/api/auth", method="POST",
+                        body={"password": PIHOLE_PASSWORD}, timeout=4)
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            raise _auth_failure("v6 session login rejected (check PIHOLE_PASSWORD)") from exc
+        raise _transport_failure(f"v6 auth HTTP error {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise _transport_failure(f"v6 auth transport error: {exc.reason}") from exc
     sess = js.get("session", {})
     if not sess.get("valid", False):
-        raise RuntimeError("Auth failed")
+        raise _auth_failure("v6 session response invalid (check PIHOLE_PASSWORD)")
     _SID = sess["sid"]
     _SID_EXP = time.time() + int(sess.get("validity", 1800)) - 10
     return _SID
+
 
 def _ensure_sid():
     if _SID and time.time() < _SID_EXP:
         return _SID
     return _auth_get_sid()
 
+
 def fetch_pihole():
+    if PIHOLE_AUTH_MODE == "legacy-token":
+        return _fetch_legacy_summary()
+
     try:
         sid = _ensure_sid()
         url = f"{BASE_URL}/api/stats/summary?sid=" + urllib.parse.quote(sid, safe="")
@@ -400,25 +455,130 @@ def fetch_pihole():
             "total": total,
             "blocked": blocked,
             "percent": percent,
-            "ok": True
+            "ok": True,
+            "status": "OK",
         }
-    except Exception:
-        pass
+    except Exception as exc:
+        v6_error = exc
+        primary_summary = _exception_summary(v6_error, "V6")
+        if not PIHOLE_API_TOKEN:
+            return {
+                "total": 0,
+                "blocked": 0,
+                "percent": 0.0,
+                "ok": False,
+                "status": _status_from_exception(v6_error, "AUTH ONLY"),
+                "failure": _failure_from_exception(v6_error, source="v6"),
+            }
 
+        legacy = _fetch_legacy_summary()
+        if legacy["ok"]:
+            legacy["status"] = "LEGACY"
+            return legacy
+
+        fallback_summary = legacy.get("failure", {}).get("summary") or legacy.get("status", "LEGACY FAIL")
+        print(
+            f"[piholestats_v1.1.py] Summary fetch failed. primary={primary_summary}; fallback={fallback_summary}",
+            file=sys.stderr,
+        )
+        return {
+            "total": 0,
+            "blocked": 0,
+            "percent": 0.0,
+            "ok": False,
+            "status": f"{_status_from_exception(v6_error, 'V6')} / {legacy.get('status', 'LEGACY FAIL')}",
+            "failure": {
+                "reason": _failure_reason_from_exception(v6_error),
+                "summary": f"primary={primary_summary}; fallback={fallback_summary}",
+                "source": "v6+legacy",
+                "primary": primary_summary,
+                "fallback": fallback_summary,
+            },
+        }
+
+
+def _fetch_legacy_summary():
     try:
-        params = {"summaryRaw": ""}
-        if PIHOLE_API_TOKEN:
-            params["auth"] = PIHOLE_API_TOKEN
+        params = {"summaryRaw": "", "auth": PIHOLE_API_TOKEN}
         query = urllib.parse.urlencode(params)
         legacy = _http_json(f"{BASE_URL}/admin/api.php?{query}", timeout=4)
+        if str(legacy.get("status", "")).lower() == "unauthorized":
+            raise _auth_failure("legacy token rejected (check PIHOLE_API_TOKEN)")
         return {
             "total": int(legacy.get("dns_queries_today", 0)),
             "blocked": int(legacy.get("ads_blocked_today", 0)),
             "percent": float(legacy.get("ads_percentage_today", 0.0)),
             "ok": True,
+            "status": "OK",
         }
-    except Exception:
-        return {"total":0,"blocked":0,"percent":0.0,"ok":False}
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403}:
+            failure_exc = _auth_failure("legacy token rejected (check PIHOLE_API_TOKEN)")
+            message = _status_from_exception(failure_exc, "LEGACY")
+        else:
+            failure_exc = _transport_failure(f"legacy HTTP error {exc.code}")
+            message = _status_from_exception(failure_exc, "LEGACY")
+        return {
+            "total":0,
+            "blocked":0,
+            "percent":0.0,
+            "ok":False,
+            "status": message,
+            "failure": _failure_from_exception(failure_exc, source="legacy"),
+        }
+    except urllib.error.URLError as exc:
+        failure_exc = _transport_failure(f"legacy transport error: {exc.reason}")
+        message = _status_from_exception(failure_exc, "LEGACY")
+        return {
+            "total":0,
+            "blocked":0,
+            "percent":0.0,
+            "ok":False,
+            "status": message,
+            "failure": _failure_from_exception(failure_exc, source="legacy"),
+        }
+    except Exception as exc:
+        return {
+            "total":0,
+            "blocked":0,
+            "percent":0.0,
+            "ok":False,
+            "status": _status_from_exception(exc, "LEGACY"),
+            "failure": _failure_from_exception(exc, source="legacy"),
+        }
+
+
+def _status_from_exception(exc: Exception, label: str) -> str:
+    message = str(exc)
+    if message.startswith("AUTH_FAILURE:"):
+        return f"{label} AUTH FAIL"
+    if message.startswith("TRANSPORT_FAILURE:"):
+        return f"{label} NET FAIL"
+    return f"{label} ERROR"
+
+
+def _failure_reason_from_exception(exc: Exception) -> str:
+    message = str(exc)
+    if message.startswith("AUTH_FAILURE:"):
+        return "auth_failed"
+    if message.startswith("TRANSPORT_FAILURE:"):
+        lowered = message.lower()
+        if "timed out" in lowered or "timeout" in lowered:
+            return "network_timeout"
+        return "network_error"
+    return "unknown_error"
+
+
+def _exception_summary(exc: Exception, label: str) -> str:
+    return f"{label} {_status_from_exception(exc, '').strip()} ({exc})"
+
+
+def _failure_from_exception(exc: Exception, source: str) -> dict[str, str]:
+    return {
+        "reason": _failure_reason_from_exception(exc),
+        "summary": _exception_summary(exc, source.upper()),
+        "source": source,
+    }
 
 # ---------- rendering ----------
 def draw_degree_circle(d, x, y, r, colour):

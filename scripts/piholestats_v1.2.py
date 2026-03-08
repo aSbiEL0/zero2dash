@@ -82,6 +82,19 @@ def _parse_verify_tls(value: str) -> str:
     return normalized
 
 
+def _host_requires_explicit_scheme(raw_host: str) -> bool:
+    candidate = raw_host.strip()
+    if not candidate:
+        return False
+    parsed = urllib.parse.urlsplit(candidate if "://" in candidate else f"//{candidate}")
+    if parsed.scheme:
+        return False
+    hostname = (parsed.hostname or candidate.split("/")[0].split(":")[0]).strip("[]").lower()
+    if not hostname:
+        return False
+    return hostname not in {"localhost", "::1"} and not hostname.startswith("127.")
+
+
 def validate_hour_bounds(hour: int) -> None:
     if hour < 0 or hour > 23:
         raise ValueError(f"hour must be in range 0-23, got {hour}")
@@ -148,6 +161,10 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
         errors.append("PIHOLE_TIMEOUT is invalid: must be greater than 0")
     if ca_bundle and not Path(str(ca_bundle)).is_file():
         errors.append("PIHOLE_CA_BUNDLE is invalid: file does not exist")
+    if _host_requires_explicit_scheme(str(host)) and not str(scheme):
+        errors.append(
+            "Remote PIHOLE_HOST requires an explicit scheme: set PIHOLE_SCHEME=http|https or include http:// / https:// in PIHOLE_HOST"
+        )
 
     auth_mode = _detect_auth_mode(str(password), str(api_token))
     if auth_mode is None:

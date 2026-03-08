@@ -53,7 +53,11 @@ ALLOWED_AUTH_MODES = {"local_server", "console", "device_code"}
 
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
-    parsed_scopes: set[str] = set()
+    if isinstance(raw_scopes, str):
+        return {scope for scope in raw_scopes.replace(",", " ").split() if scope}
+    if isinstance(raw_scopes, (list, tuple, set)):
+        return {str(scope) for scope in raw_scopes if scope}
+    return set()
 
     def _add_scope_values(raw_value: Any) -> None:
         if raw_value is None:
@@ -456,6 +460,16 @@ def build_client_config(client_id: str, client_secret: str, oauth_port: int) -> 
     }
 
 
+def loopback_oauth_guidance(oauth_port: int) -> list[str]:
+    redirect_uri = expected_redirect_uri(oauth_port)
+    return [
+        "Loopback OAuth only: complete Google sign-in on the same machine that is running this script.",
+        f"For a headless Pi, forward the callback port first: ssh -L {oauth_port}:localhost:{oauth_port} <user>@<pi-host>",
+        "Use a Desktop OAuth client. If your Google app is in testing, add your account as a test user.",
+        f"Expected redirect URI: {redirect_uri}",
+    ]
+
+
 def save_credentials(creds: Credentials, token_path: Path) -> None:
     token_path.write_text(creds.to_json(), encoding="utf-8")
     os.chmod(token_path, 0o600)
@@ -552,28 +566,14 @@ def get_credentials(
             raise RuntimeError(
                 "Authenticated token does not include required calendar scopes. Ensure consent grants calendar.readonly access."
             )
-        persist_auth_diagnostics(
-            diagnostics_path,
-            AuthAttemptDiagnostics(status="success", mode=auth_mode, oauth_port=oauth_port, redirect_uri=redirect_uri),
-        )
-    except Exception as exc:
-        next_steps = _next_steps_for_auth_error(auth_mode, exc, redirect_uri, oauth_port)
-        persist_auth_diagnostics(
-            diagnostics_path,
-            AuthAttemptDiagnostics(
-                status="failed",
-                mode=auth_mode,
-                oauth_port=oauth_port,
-                redirect_uri=redirect_uri,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-                next_steps=next_steps,
-            ),
-        )
-        logging.error("OAuth flow '%s' failed: %s", auth_mode, exc)
-        for step in next_steps:
-            logging.error("Next step: %s", step)
-        raise
+        if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
+            logging.error(
+                "Google blocked this OAuth client. For calendar, use a Desktop OAuth client and add your account as a test user on the consent screen."
+            )
+            logging.error("You can also set GOOGLE_CALENDAR_CLIENT_ID / GOOGLE_CALENDAR_CLIENT_SECRET to use a dedicated calendar OAuth client.")
+        for message in loopback_oauth_guidance(oauth_port):
+            logging.error(message)
+        raise RuntimeError("Loopback OAuth setup failed.") from exc
     save_credentials(creds, token_path)
     return creds
 
