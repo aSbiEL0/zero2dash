@@ -109,6 +109,13 @@ Google OAuth notes:
 - If the Google consent screen is in testing, add your account as a test user.
 - `calendash-api.py` defaults `GOOGLE_TOKEN_PATH` to `token.json` relative to `/opt/zero2dash` under systemd; `photos-shuffle.py` must keep using a separate `GOOGLE_TOKEN_PATH_PHOTOS`.
 
+Drive-backed photos notes:
+
+- `scripts/photos-shuffle.py` now treats `LOCAL_PHOTOS_DIR` as the primary source.
+- Use `scripts/drive-sync.py` to populate that directory from a shared Google Drive folder.
+- `scripts/photo-resize.py` proportionally reduces changed images to 50% before they are reused locally.
+- Normal personal/shared Google Photos albums are no longer a reliable headless source; if you still configure `GOOGLE_PHOTOS_ALBUM_ID`, treat it as an app-created-album fallback only.
+
 ## Run via systemd
 Install and enable canonical units:
 
@@ -138,12 +145,33 @@ journalctl -u pihole-display-dark.service -n 50 --no-pager
 
 Use `python3 scripts/photos-shuffle.py --check-config` to validate the configuration and print the credential source that will be used.
 
+## Drive-backed photo sync
+
+Use a shared Google Drive folder when you want remote photo management without depending on the now-hobbled Google Photos album API.
+
+Required configuration:
+
+- `LOCAL_PHOTOS_DIR`
+- `GOOGLE_DRIVE_FOLDER_ID`
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`
+
+Recommended workflow:
+
+```sh
+python3 scripts/drive-sync.py
+python3 scripts/photos-shuffle.py --test
+```
+
+`drive-sync.py` downloads images from the shared Drive folder into `LOCAL_PHOTOS_DIR` and then runs `photo-resize.py`, which shrinks new or changed images to 50% of their original width and height before reuse.
+
 ## Notes
 
-- `display_rotator.py` excludes `piholestats_v1.2.py` by default so day mode and night mode stay distinct.
+- `display_rotator.py` excludes `piholestats_v1.2.py`, `calendash-api.py`, `_config.py`, `drive-sync.py`, and `photo-resize.py` by default so helper scripts do not end up in the day rotator.
 - Static image scripts (for example `tram-info.py`, `weather-dash.py`, `calendash-img.py`) are rotator-friendly page scripts, not systemd service units by themselves.
 
 
 ### Framebuffer overrides in systemd
 
 Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
+
+

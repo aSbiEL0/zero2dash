@@ -1,0 +1,10 @@
+# Runtime Python dependencies for zero2dash scripts.
+# System tools such as git, gh, systemd, and framebuffer drivers are not pip packages.
+
+Pillow>=10.0
+python-dotenv>=1.0
+pytz>=2024.1
+google-auth>=2.0
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
+google-api-python-client>=2.0
