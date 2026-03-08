@@ -381,6 +381,7 @@ def fetch_pihole():
         }
     except Exception as exc:
         v6_error = exc
+        primary_summary = _exception_summary(v6_error, "V6")
         if not PIHOLE_API_TOKEN:
             return {
                 "total": 0,
@@ -388,18 +389,32 @@ def fetch_pihole():
                 "percent": 0.0,
                 "ok": False,
                 "status": _status_from_exception(v6_error, "AUTH ONLY"),
+                "failure": _failure_from_exception(v6_error, source="v6"),
             }
 
         legacy = _fetch_legacy_summary()
         if legacy["ok"]:
             legacy["status"] = "LEGACY"
             return legacy
+
+        fallback_summary = legacy.get("failure", {}).get("summary") or legacy.get("status", "LEGACY FAIL")
+        print(
+            f"[piholestats_v1.2.py] Summary fetch failed. primary={primary_summary}; fallback={fallback_summary}",
+            file=sys.stderr,
+        )
         return {
             "total": 0,
             "blocked": 0,
             "percent": 0.0,
             "ok": False,
             "status": f"{_status_from_exception(v6_error, 'V6')} / {legacy.get('status', 'LEGACY FAIL')}",
+            "failure": {
+                "reason": _failure_reason_from_exception(v6_error),
+                "summary": f"primary={primary_summary}; fallback={fallback_summary}",
+                "source": "v6+legacy",
+                "primary": primary_summary,
+                "fallback": fallback_summary,
+            },
         }
 
 
@@ -419,15 +434,39 @@ def _fetch_legacy_summary():
         }
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403}:
-            message = _status_from_exception(_auth_failure("legacy token rejected (check PIHOLE_API_TOKEN)"), "LEGACY")
+            failure_exc = _auth_failure("legacy token rejected (check PIHOLE_API_TOKEN)")
+            message = _status_from_exception(failure_exc, "LEGACY")
         else:
-            message = _status_from_exception(_transport_failure(f"legacy HTTP error {exc.code}"), "LEGACY")
-        return {"total":0,"blocked":0,"percent":0.0,"ok":False, "status": message}
+            failure_exc = _transport_failure(f"legacy HTTP error {exc.code}")
+            message = _status_from_exception(failure_exc, "LEGACY")
+        return {
+            "total":0,
+            "blocked":0,
+            "percent":0.0,
+            "ok":False,
+            "status": message,
+            "failure": _failure_from_exception(failure_exc, source="legacy"),
+        }
     except urllib.error.URLError as exc:
-        message = _status_from_exception(_transport_failure(f"legacy transport error: {exc.reason}"), "LEGACY")
-        return {"total":0,"blocked":0,"percent":0.0,"ok":False, "status": message}
+        failure_exc = _transport_failure(f"legacy transport error: {exc.reason}")
+        message = _status_from_exception(failure_exc, "LEGACY")
+        return {
+            "total":0,
+            "blocked":0,
+            "percent":0.0,
+            "ok":False,
+            "status": message,
+            "failure": _failure_from_exception(failure_exc, source="legacy"),
+        }
     except Exception as exc:
-        return {"total":0,"blocked":0,"percent":0.0,"ok":False, "status": _status_from_exception(exc, "LEGACY")}
+        return {
+            "total":0,
+            "blocked":0,
+            "percent":0.0,
+            "ok":False,
+            "status": _status_from_exception(exc, "LEGACY"),
+            "failure": _failure_from_exception(exc, source="legacy"),
+        }
 
 
 def _status_from_exception(exc: Exception, label: str) -> str:
@@ -437,6 +476,30 @@ def _status_from_exception(exc: Exception, label: str) -> str:
     if message.startswith("TRANSPORT_FAILURE:"):
         return f"{label} NET FAIL"
     return f"{label} ERROR"
+
+
+def _failure_reason_from_exception(exc: Exception) -> str:
+    message = str(exc)
+    if message.startswith("AUTH_FAILURE:"):
+        return "auth_failed"
+    if message.startswith("TRANSPORT_FAILURE:"):
+        lowered = message.lower()
+        if "timed out" in lowered or "timeout" in lowered:
+            return "network_timeout"
+        return "network_error"
+    return "unknown_error"
+
+
+def _exception_summary(exc: Exception, label: str) -> str:
+    return f"{label} {_status_from_exception(exc, '').strip()} ({exc})"
+
+
+def _failure_from_exception(exc: Exception, source: str) -> dict[str, str]:
+    return {
+        "reason": _failure_reason_from_exception(exc),
+        "summary": _exception_summary(exc, source.upper()),
+        "source": source,
+    }
 
 # ---------- rendering ----------
 def draw_temp_value(d, rect, temp_c, font, colour):
@@ -488,7 +551,9 @@ def draw_frame(stats, temp_c, uptime, active):
 
     d.rounded_rectangle([margin, y3, W-margin, y3+tile_h], radius=12, fill=COL_UP)
     line1 = f"Uptime: {uptime}"
-    status = stats.get("status", ("OK" if stats["ok"] else "N/A"))
+    failure = stats.get("failure", {}) if isinstance(stats.get("failure"), dict) else {}
+    failure_reason = str(failure.get("reason", "")).strip()
+    status = failure_reason if failure_reason else stats.get("status", ("OK" if stats["ok"] else "N/A"))
     line2 = f"{TITLE} {status}  |  {datetime.now().strftime('%H:%M')}"
     tw1, th1 = text_size(d, line1, mid)
     tw2, th2 = text_size(d, line2, mid)
