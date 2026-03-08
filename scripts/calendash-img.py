@@ -16,7 +16,7 @@ from PIL import Image
 FBDEV_DEFAULT = "/dev/fb1"
 TOUCH_DEVICE_DEFAULT = "/dev/input/event0"
 W, H = 320, 240
-DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "calendash" / "output.png"
+DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "calendash.png"
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 EV_KEY = 0x01
 BTN_TOUCH = 0x14A
@@ -38,7 +38,7 @@ def rgb888_to_rgb565(image: Image.Image) -> bytes:
 
 def load_frame(image_path: Path) -> Image.Image:
     if not image_path.exists():
-        raise FileNotFoundError(f"Background image not found: {image_path}")
+        raise FileNotFoundError(f"Calendar image not found: {image_path}")
     return Image.open(image_path).convert("RGB").resize((W, H), Image.Resampling.LANCZOS)
 
 

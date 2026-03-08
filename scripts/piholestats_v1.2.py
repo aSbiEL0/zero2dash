@@ -7,8 +7,11 @@ import os, sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, st
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
+from dotenv import load_dotenv
 
 from _config import get_env, report_validation_errors
+
+DEFAULT_ROOT = Path('~/zero2dash').expanduser()
 
 # -------- CONFIG --------
 FBDEV = "/dev/fb1"
@@ -646,6 +649,7 @@ def main():
         print(f"[piholestats_v1.2.py] Self checks passed.")
         return 0
 
+    load_dotenv(DEFAULT_ROOT / '.env')
     config, errors = validate_config()
     if errors:
         report_validation_errors("piholestats_v1.2.py", errors)
@@ -700,3 +704,5 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         pass
+
+

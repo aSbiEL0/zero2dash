@@ -105,6 +105,7 @@ Google OAuth notes:
 - Use Desktop OAuth clients for Calendar and Photos.
 - Loopback OAuth only: complete sign-in on the same machine as the script, or tunnel the callback port from a headless Pi with `ssh -L 8080:localhost:8080 pihole@pihole`.
 - If the Google consent screen is in testing, add your account as a test user.
+- Enable Google Photos Library API in the same Google Cloud project as the Photos OAuth client.
 - `calendash-api.py` defaults `GOOGLE_TOKEN_PATH` to `token.json` relative to `/opt/zero2dash` under systemd; `photos-shuffle.py` must keep using a separate `GOOGLE_TOKEN_PATH_PHOTOS`.
 
 ## Run via systemd
@@ -129,3 +130,4 @@ journalctl -u pihole-display-dark.service -n 50 --no-pager
 
 - `display_rotator.py` excludes `piholestats_v1.2.py` by default so day mode and night mode stay distinct.
 - Static image scripts (for example `tram-info.py`, `weather-dash.py`, `calendash-img.py`) are rotator-friendly page scripts, not systemd service units by themselves.
+

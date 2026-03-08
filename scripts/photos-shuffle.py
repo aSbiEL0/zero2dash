@@ -42,6 +42,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 
 from _config import get_env, report_validation_errors
 
@@ -49,7 +50,6 @@ from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 from PIL import Image, ImageEnhance
 
 SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly"]
@@ -313,12 +313,78 @@ def authenticate(config: Config, log: Log) -> Credentials:
     return creds
 
 
+def _photos_api_json(creds: Credentials, endpoint: str, body: dict[str, Any]) -> dict[str, Any]:
+    from urllib.request import Request as UrlRequest, urlopen
+
+    url = f"https://photoslibrary.googleapis.com/v1/{endpoint}"
+    payload = json.dumps(body).encode("utf-8")
+    request = UrlRequest(
+        url,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {creds.token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:  # nosec B310
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = _describe_google_api_error(exc)
+        if detail:
+            raise RuntimeError(detail) from exc
+        raise
+    if not isinstance(data, dict):
+        raise ValueError("Google Photos API response must be a JSON object")
+    return data
+
+
+def _describe_google_api_error(exc: HTTPError) -> str:
+    try:
+        raw_body = exc.read()
+    except Exception:
+        raw_body = b""
+
+    body_text = raw_body.decode("utf-8", "replace").strip() if raw_body else ""
+    try:
+        payload = json.loads(body_text) if body_text else {}
+    except json.JSONDecodeError:
+        payload = {}
+
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return f"Google Photos API request failed ({exc.code} {exc.reason})"
+
+    message = str(error.get("message") or f"Google Photos API request failed ({exc.code} {exc.reason})").strip()
+    details = error.get("details")
+    if not isinstance(details, list):
+        return message
+
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        metadata = detail.get("metadata")
+        if detail.get("reason") == "SERVICE_DISABLED" and isinstance(metadata, dict):
+            activation_url = metadata.get("activationUrl")
+            consumer = metadata.get("consumer")
+            if activation_url and consumer:
+                return f"{message} Enable Photos Library API for {consumer}: {activation_url}"
+            if activation_url:
+                return f"{message} Enable Photos Library API here: {activation_url}"
+
+    return message
+
+
 def list_album_images(creds: Credentials, album_id: str, log: Log) -> list[dict[str, Any]]:
-    service = build("photoslibrary", "v1", credentials=creds, cache_discovery=False)
-    return _list_album_images_from_service(service, album_id, log)
+    return _list_album_images(lambda body: _photos_api_json(creds, "mediaItems:search", body), album_id, log)
 
 
 def _list_album_images_from_service(service: Any, album_id: str, log: Log) -> list[dict[str, Any]]:
+    return _list_album_images(lambda body: service.mediaItems().search(body=body).execute(), album_id, log)
+
+
+def _list_album_images(fetch_page: Any, album_id: str, log: Log) -> list[dict[str, Any]]:
     if not album_id:
         raise ValueError("album_id is required")
 
@@ -332,7 +398,7 @@ def _list_album_images_from_service(service: Any, album_id: str, log: Log) -> li
         if page_token:
             body["pageToken"] = page_token
 
-        response = service.mediaItems().search(body=body).execute()
+        response = fetch_page(body)
         if not isinstance(response, dict):
             raise ValueError("Google Photos API response must be a JSON object")
 
@@ -357,7 +423,6 @@ def _list_album_images_from_service(service: Any, album_id: str, log: Log) -> li
 
     log.debug(f"Album returned {len(images)} image media items across {page_count} pages")
     return images
-
 
 def smoke_check_list_fetch(log: Log) -> None:
     class _Request:
@@ -631,3 +696,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
