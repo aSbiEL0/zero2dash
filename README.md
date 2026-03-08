@@ -31,7 +31,7 @@ zero2dash/
 ├── display_rotator.py
 ├── scripts/
 │   ├── pihole-display-pre.sh
-│   ├── piholestats_v1.3.py      # always-on daytime variant
+│   ├── piholestats_v1.1.py      # legacy daytime variant
 │   ├── piholestats_v1.2.py      # canonical dark-mode service target
 │   ├── calendash-api.py
 │   ├── calendash-img.py
@@ -99,23 +99,22 @@ Set at minimum for Pi-hole:
 - `PIHOLE_TIMEOUT`
 - `REFRESH_SECS`
 - `ACTIVE_HOURS` (inclusive `start,end` hour window in 24h format; cross-midnight values like `22,7` are supported)
+- `FB_DEVICE` (optional override; defaults to `/dev/fb1`)
+- `FB_WIDTH` / `FB_HEIGHT` (optional override for static renderer geometry; defaults `320x240`)
 
 Google OAuth notes:
 
 - Use Desktop OAuth clients for Calendar and Photos.
 - Loopback OAuth only: complete sign-in on the same machine as the script, or tunnel the callback port from a headless Pi with `ssh -L 8080:localhost:8080 pihole@pihole`.
 - If the Google consent screen is in testing, add your account as a test user.
-- Enable Google Photos Library API in the same Google Cloud project as the Photos OAuth client.
-- Since 31 March 2025, Google Photos Library API only exposes app-created albums/media. Personal or shared albums need a different source, such as a pre-populated local cache used by `photos-shuffle.py` when online fetch is unavailable.
 - `calendash-api.py` defaults `GOOGLE_TOKEN_PATH` to `token.json` relative to `/opt/zero2dash` under systemd; `photos-shuffle.py` must keep using a separate `GOOGLE_TOKEN_PATH_PHOTOS`.
-- For normal personal/shared albums, prefer `LOCAL_PHOTOS_DIR` plus `scripts/drive-sync.py` instead of Google Photos API.
-- `scripts/photo-resize.py` resizes changed files in `LOCAL_PHOTOS_DIR` by 50% and is safe to run repeatedly because it tracks processed mtimes in `PHOTO_RESIZE_STATE_PATH`.
 
-Drive-backed photos:
+Drive-backed photos notes:
 
-- Put display-ready local photos in `~/zero2dash/photos`, or sync them there with `scripts/drive-sync.py`.
-- `drive-sync.py` reads `GOOGLE_DRIVE_FOLDER_ID` and `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`, downloads image files into `LOCAL_PHOTOS_DIR`, then runs `photo-resize.py`.
-- Share the Drive folder directly with the service account email as `Viewer`. Do not rely on link-sharing if you want this to work without resource-key surprises.
+- `scripts/photos-shuffle.py` now treats `LOCAL_PHOTOS_DIR` as the primary source.
+- Use `scripts/drive-sync.py` to populate that directory from a shared Google Drive folder.
+- `scripts/photo-resize.py` proportionally reduces changed images to 50% before they are reused locally.
+- Normal personal/shared Google Photos albums are no longer a reliable headless source; if you still configure `GOOGLE_PHOTOS_ALBUM_ID`, treat it as an app-created-album fallback only.
 
 ## Run via systemd
 Install and enable canonical units:
@@ -135,11 +134,44 @@ journalctl -u display.service -n 50 --no-pager
 journalctl -u pihole-display-dark.service -n 50 --no-pager
 ```
 
+
+## Google Photos shuffle credential precedence
+
+`scripts/photos-shuffle.py` resolves OAuth credentials in this order:
+
+1. `GOOGLE_PHOTOS_CLIENT_SECRETS_PATH` file path from env/`.env` (default: `~/zero2dash/client_secret.json`)
+2. `GOOGLE_PHOTOS_CLIENT_ID` + `GOOGLE_PHOTOS_CLIENT_SECRET` from env/`.env`
+3. `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` from env/`.env` (legacy fallback)
+
+Use `python3 scripts/photos-shuffle.py --check-config` to validate the configuration and print the credential source that will be used.
+
+## Drive-backed photo sync
+
+Use a shared Google Drive folder when you want remote photo management without depending on the now-hobbled Google Photos album API.
+
+Required configuration:
+
+- `LOCAL_PHOTOS_DIR`
+- `GOOGLE_DRIVE_FOLDER_ID`
+- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`
+
+Recommended workflow:
+
+```sh
+python3 scripts/drive-sync.py
+python3 scripts/photos-shuffle.py --test
+```
+
+`drive-sync.py` downloads images from the shared Drive folder into `LOCAL_PHOTOS_DIR` and then runs `photo-resize.py`, which shrinks new or changed images to 50% of their original width and height before reuse.
+
 ## Notes
 
-- `display_rotator.py` excludes `piholestats_v1.2.py` by default so day mode and night mode stay distinct.
+- `display_rotator.py` excludes `piholestats_v1.2.py`, `calendash-api.py`, `_config.py`, `drive-sync.py`, and `photo-resize.py` by default so helper scripts do not end up in the day rotator.
 - Static image scripts (for example `tram-info.py`, `weather-dash.py`, `calendash-img.py`) are rotator-friendly page scripts, not systemd service units by themselves.
 
 
+### Framebuffer overrides in systemd
+
+Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
 
 
