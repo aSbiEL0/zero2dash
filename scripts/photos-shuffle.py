@@ -22,8 +22,10 @@ OAuth setup:
   GOOGLE_TOKEN_PATH_PHOTOS if needed).
 - On first run, if token is missing/invalid and refresh is unavailable, the
   script starts a local OAuth flow and prints instructions to complete login.
-- In headless environments, it does not auto-launch a browser by default;
-  copy the printed URL into any browser and paste back the result.
+- Loopback OAuth only: complete the browser sign-in on the same machine as the
+  script, or use SSH port forwarding to forward the callback port from the Pi.
+- Use a Desktop OAuth client. If the Google app is in testing, add your
+  account as a test user before first run.
 
 Fallback:
 - Ensure local fallback image exists at ~/zero2dash/images/photos-fallback.png
@@ -77,7 +79,7 @@ class Config:
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
     if isinstance(raw_scopes, str):
-        return {raw_scopes}
+        return {scope for scope in raw_scopes.replace(",", " ").split() if scope}
     if isinstance(raw_scopes, (list, tuple, set)):
         return {str(scope) for scope in raw_scopes if scope}
     return set()
@@ -100,6 +102,42 @@ class Log:
     def debug(self, message: str) -> None:
         if self.debug_enabled:
             print(f"[debug] {message}")
+
+
+def expected_redirect_uri(oauth_port: int) -> str:
+    return f"http://localhost:{oauth_port}/"
+
+
+def build_client_config(client_id: str, client_secret: str, oauth_port: int) -> dict[str, Any]:
+    redirect_uri = expected_redirect_uri(oauth_port)
+    return {
+        "installed": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [
+                "http://localhost",
+                "http://localhost/",
+                f"http://localhost:{oauth_port}",
+                redirect_uri,
+                "http://127.0.0.1",
+                "http://127.0.0.1/",
+                f"http://127.0.0.1:{oauth_port}",
+                redirect_uri.replace("localhost", "127.0.0.1", 1),
+            ],
+        }
+    }
+
+
+def loopback_oauth_guidance(oauth_port: int) -> list[str]:
+    redirect_uri = expected_redirect_uri(oauth_port)
+    return [
+        "Loopback OAuth only: complete Google sign-in on the same machine that is running this script.",
+        f"For a headless Pi, forward the callback port first: ssh -L {oauth_port}:localhost:{oauth_port} <user>@<pi-host>",
+        "Use a Desktop OAuth client. If your Google app is in testing, add your account as a test user.",
+        f"Expected redirect URI: {redirect_uri}",
+    ]
 
 
 def _as_int(name: str, value: str) -> int:
@@ -200,7 +238,7 @@ def authenticate(config: Config, log: Log) -> Credentials:
     calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
     if config.token_path.resolve() == calendar_default_token:
         raise ValueError(
-            "GOOGLE_TOKEN_PATH points to token.json, which is reserved for calendash-api.py. "
+            "GOOGLE_TOKEN_PATH_PHOTOS points to token.json, which is reserved for calendash-api.py. "
             "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
         )
 
@@ -236,20 +274,13 @@ def authenticate(config: Config, log: Log) -> Credentials:
     if not creds or not creds.valid:
         log.info("No valid Google token found; starting OAuth local server flow.")
         log.info(
-            "Follow the browser prompt to authorize Google Photos access, then return to this terminal."
+            "Complete Google sign-in on this machine, or use SSH port forwarding for the loopback callback."
         )
         if config.client_secrets_path.exists():
             flow = InstalledAppFlow.from_client_secrets_file(str(config.client_secrets_path), SCOPES)
         elif config.client_id and config.client_secret:
             flow = InstalledAppFlow.from_client_config(
-                {
-                    "installed": {
-                        "client_id": config.client_id,
-                        "client_secret": config.client_secret,
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                    }
-                },
+                build_client_config(config.client_id, config.client_secret, config.oauth_port),
                 SCOPES,
             )
         else:
@@ -263,13 +294,18 @@ def authenticate(config: Config, log: Log) -> Credentials:
                 prompt="consent",
                 authorization_prompt_message="Open this URL in your browser to authorize Google Photos access: {url}",
                 open_browser=config.oauth_open_browser,
+                redirect_uri_trailing_slash=True,
             )
         except Exception as exc:
             exc_text = str(exc).lower()
+            if "redirect_uri_mismatch" in exc_text:
+                log.info(f"OAuth redirect mismatch. Expected redirect URI: {expected_redirect_uri(config.oauth_port)}")
             if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
                 log.info("Google blocked this OAuth client for Photos. Use a dedicated Desktop OAuth client and add your account as a test user.")
                 log.info("Set GOOGLE_PHOTOS_CLIENT_ID / GOOGLE_PHOTOS_CLIENT_SECRET (or GOOGLE_PHOTOS_CLIENT_SECRETS_PATH) in .env.")
-            raise
+            for message in loopback_oauth_guidance(config.oauth_port):
+                log.info(message)
+            raise RuntimeError("Loopback OAuth setup failed") from exc
 
     config.token_path.parent.mkdir(parents=True, exist_ok=True)
     config.token_path.write_text(creds.to_json(), encoding="utf-8")
@@ -518,6 +554,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test", action="store_true", help="Render to /tmp/photos-shuffle-test.png instead of framebuffer")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logs")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
+    parser.add_argument("--auth-only", action="store_true", help="Run OAuth/token setup only and exit")
     parser.add_argument("--smoke-list-fetch", action="store_true", help="Run paginated list fetch smoke check and exit")
     return parser.parse_args()
 
@@ -543,6 +580,11 @@ def main() -> int:
 
     if args.check_config:
         print("[photos-shuffle.py] Configuration check passed.")
+        return 0
+
+    if args.auth_only:
+        authenticate(config, log)
+        print("[photos-shuffle.py] Authentication check passed.")
         return 0
 
     source_image: Path | None = None

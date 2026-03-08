@@ -45,7 +45,7 @@ DEFAULT_OAUTH_PORT = 8080
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
     if isinstance(raw_scopes, str):
-        return {raw_scopes}
+        return {scope for scope in raw_scopes.replace(",", " ").split() if scope}
     if isinstance(raw_scopes, (list, tuple, set)):
         return {str(scope) for scope in raw_scopes if scope}
     return set()
@@ -258,6 +258,16 @@ def build_client_config(client_id: str, client_secret: str, oauth_port: int) -> 
     }
 
 
+def loopback_oauth_guidance(oauth_port: int) -> list[str]:
+    redirect_uri = expected_redirect_uri(oauth_port)
+    return [
+        "Loopback OAuth only: complete Google sign-in on the same machine that is running this script.",
+        f"For a headless Pi, forward the callback port first: ssh -L {oauth_port}:localhost:{oauth_port} <user>@<pi-host>",
+        "Use a Desktop OAuth client. If your Google app is in testing, add your account as a test user.",
+        f"Expected redirect URI: {redirect_uri}",
+    ]
+
+
 def save_credentials(creds: Credentials, token_path: Path) -> None:
     token_path.write_text(creds.to_json(), encoding="utf-8")
     os.chmod(token_path, 0o600)
@@ -316,8 +326,9 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
                 "Google blocked this OAuth client. For calendar, use a Desktop OAuth client and add your account as a test user on the consent screen."
             )
             logging.error("You can also set GOOGLE_CALENDAR_CLIENT_ID / GOOGLE_CALENDAR_CLIENT_SECRET to use a dedicated calendar OAuth client.")
-        logging.info("Local server auth failed (%s); falling back to console flow.", exc)
-        creds = flow.run_console()
+        for message in loopback_oauth_guidance(oauth_port):
+            logging.error(message)
+        raise RuntimeError("Loopback OAuth setup failed.") from exc
     save_credentials(creds, token_path)
     return creds
 

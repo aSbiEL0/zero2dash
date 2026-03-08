@@ -90,16 +90,24 @@ cp /opt/zero2dash/.env.example /opt/zero2dash/.env
 chmod 600 /opt/zero2dash/.env
 ```
 
-Set at minimum:
+Set at minimum for Pi-hole:
 
 - `PIHOLE_HOST`
-- `PIHOLE_PASSWORD`
-- `PIHOLE_API_TOKEN` (optional fallback)
+- `PIHOLE_SCHEME` if `PIHOLE_HOST` is remote and does not already include `http://` or `https://`
+- `PIHOLE_PASSWORD` for v6 session auth, or `PIHOLE_API_TOKEN` for legacy token auth
+- `PIHOLE_VERIFY_TLS=false` for self-signed HTTPS, or `PIHOLE_CA_BUNDLE=/path/to/ca.pem` to verify a private CA
+- `PIHOLE_TIMEOUT`
 - `REFRESH_SECS`
 - `ACTIVE_HOURS` (inclusive `start,end` hour window in 24h format; cross-midnight values like `22,7` are supported)
 
-## Run via systemd
+Google OAuth notes:
 
+- Use Desktop OAuth clients for Calendar and Photos.
+- Loopback OAuth only: complete sign-in on the same machine as the script, or tunnel the callback port from a headless Pi with `ssh -L 8080:localhost:8080 pihole@pihole`.
+- If the Google consent screen is in testing, add your account as a test user.
+- `calendash-api.py` defaults `GOOGLE_TOKEN_PATH` to `token.json` relative to `/opt/zero2dash` under systemd; `photos-shuffle.py` must keep using a separate `GOOGLE_TOKEN_PATH_PHOTOS`.
+
+## Run via systemd
 Install and enable canonical units:
 
 ```sh
