@@ -44,8 +44,10 @@ CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 DEFAULT_TOKEN_PATH = Path("token.json")
 DEFAULT_OAUTH_PORT = 8080
+DEFAULT_AUTH_MODE = "local_server"
 RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 NON_RETRYABLE_HTTP_STATUSES = {400, 401, 403, 404}
+ALLOWED_AUTH_MODES = {"local_server", "console", "device_code"}
 
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
@@ -70,6 +72,33 @@ class CalendarEvent:
     display_date: str
     summary: str
     all_day: bool
+
+
+@dataclass
+class AuthAttemptDiagnostics:
+    status: str
+    mode: str
+    oauth_port: int
+    redirect_uri: str
+    error_type: str | None = None
+    error_message: str | None = None
+    next_steps: list[str] | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "timestamp": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "status": self.status,
+            "mode": self.mode,
+            "oauth_port": self.oauth_port,
+            "redirect_uri": self.redirect_uri,
+        }
+        if self.error_type:
+            payload["error_type"] = self.error_type
+        if self.error_message:
+            payload["error_message"] = self.error_message
+        if self.next_steps:
+            payload["next_steps"] = self.next_steps
+        return payload
 
 
 def configure_logging() -> None:
@@ -101,6 +130,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a calendar summary image.")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
     parser.add_argument("--auth-only", action="store_true", help="Run OAuth/token setup only and exit")
+    parser.add_argument(
+        "--auth-mode",
+        choices=sorted(ALLOWED_AUTH_MODES),
+        help="OAuth flow mode: local_server, console, or device_code.",
+    )
     return parser.parse_args()
 
 
@@ -180,11 +214,21 @@ def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, 
 
     oauth_port = record("OAUTH_PORT", default=DEFAULT_OAUTH_PORT, validator=lambda v: optional_env_int("OAUTH_PORT", DEFAULT_OAUTH_PORT))
     token_raw = record("GOOGLE_TOKEN_PATH", default=str(DEFAULT_TOKEN_PATH))
+    auth_mode_raw = record("GOOGLE_AUTH_MODE", default=DEFAULT_AUTH_MODE)
+    diagnostics_raw = record("GOOGLE_AUTH_DIAGNOSTICS_PATH", default="~/zero2dash/logs/calendash-auth-diagnostics.json")
+
+    auth_mode = str(auth_mode_raw).strip().lower()
+    if auth_mode not in ALLOWED_AUTH_MODES:
+        errors.append(
+            f"GOOGLE_AUTH_MODE must be one of {', '.join(sorted(ALLOWED_AUTH_MODES))}. Received: {auth_mode_raw!r}"
+        )
+        auth_mode = DEFAULT_AUTH_MODE
 
     output_path = expand_path(str(output_raw))
     background_path = expand_path(str(background_raw))
     icon_path = expand_path(str(icon_raw))
     token_path = expand_path(str(token_raw))
+    diagnostics_path = expand_path(str(diagnostics_raw))
 
     if rendering_required and not background_path.exists():
         errors.append(f"BACKGROUND_IMAGE not found: {background_path}")
@@ -208,8 +252,52 @@ def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, 
         "runtime": {
             "oauth_port": int(oauth_port),
             "token_path": token_path,
+            "auth_mode": auth_mode,
+            "diagnostics_path": diagnostics_path,
         },
     }, errors, missing_by_section
+
+
+def _next_steps_for_auth_error(mode: str, exc: Exception, redirect_uri: str, oauth_port: int) -> list[str]:
+    error_text = str(exc).lower()
+    steps: list[str] = []
+
+    if "address already in use" in error_text or "cannot listen" in error_text:
+        steps.append(f"Port {oauth_port} is busy. Set OAUTH_PORT to a free port (for example 8090) and retry.")
+    if "redirect_uri_mismatch" in error_text:
+        steps.append(f"Add this exact redirect URI in Google Cloud OAuth client settings: {redirect_uri}")
+        steps.append("If you cannot change redirect URIs, retry with --auth-mode console.")
+    if any(tag in error_text for tag in ["access blocked", "app is blocked", "app restricted"]):
+        steps.append("On OAuth consent screen, add your Google account as a Test User or publish the app.")
+    if "invalid_client" in error_text:
+        steps.append("Verify GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET belong to the same OAuth client.")
+        steps.append("Use a Desktop app OAuth client for local_server/console flows.")
+    if mode == "device_code" and "unsupported" in error_text:
+        steps.append("This google-auth-oauthlib version lacks device code flow support. Upgrade package or use --auth-mode console.")
+
+    if not steps:
+        steps.append("Review client ID/secret, OAuth consent configuration, and retry with --auth-mode console for headless environments.")
+    return steps
+
+
+def persist_auth_diagnostics(path: Path, details: AuthAttemptDiagnostics) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = details.as_dict()
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def _run_auth_flow(flow: InstalledAppFlow, mode: str, oauth_port: int) -> Credentials:
+    if mode == "local_server":
+        return flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
+    if mode == "console":
+        return flow.run_console()
+    if mode == "device_code":
+        run_device_code = getattr(flow, "run_device_authorization", None)
+        if callable(run_device_code):
+            return run_device_code()
+        raise NotImplementedError("device_code mode is not supported by this google-auth-oauthlib version")
+    raise ValueError(f"Unsupported auth mode: {mode}")
 
 
 def load_font(preferred_size: int, *, use_bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -269,7 +357,14 @@ def save_credentials(creds: Credentials, token_path: Path) -> None:
     logging.info("Saved OAuth token to %s", token_path.resolve())
 
 
-def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_port: int) -> Credentials:
+def get_credentials(
+    client_id: str,
+    client_secret: str,
+    token_path: Path,
+    oauth_port: int,
+    auth_mode: str,
+    diagnostics_path: Path,
+) -> Credentials:
     creds: Credentials | None = None
 
     if token_path.exists():
@@ -291,38 +386,53 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
                 logging.warning("Unable to load token from %s (%s); re-authenticating.", token_path.resolve(), exc)
 
     if creds and creds.valid:
+        persist_auth_diagnostics(
+            diagnostics_path,
+            AuthAttemptDiagnostics(status="success", mode="token_cache", oauth_port=oauth_port, redirect_uri=expected_redirect_uri(oauth_port)),
+        )
         return creds
 
     if creds and creds.expired and creds.refresh_token:
         logging.info("Refreshing existing OAuth token.")
         creds.refresh(Request())
         save_credentials(creds, token_path)
+        persist_auth_diagnostics(
+            diagnostics_path,
+            AuthAttemptDiagnostics(status="success", mode="token_refresh", oauth_port=oauth_port, redirect_uri=expected_redirect_uri(oauth_port)),
+        )
         return creds
 
     redirect_uri = expected_redirect_uri(oauth_port)
-    logging.info("Starting first-run OAuth flow on localhost:%d.", oauth_port)
+    logging.info("Starting OAuth flow (%s) on localhost:%d.", auth_mode, oauth_port)
     logging.info("Expected OAuth redirect URI: %s", redirect_uri)
     flow = InstalledAppFlow.from_client_config(
         build_client_config(client_id, client_secret, oauth_port),
         SCOPES,
     )
     try:
-        creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
-        logging.info("OAuth callback received successfully on localhost:%d.", oauth_port)
+        creds = _run_auth_flow(flow, auth_mode, oauth_port)
+        persist_auth_diagnostics(
+            diagnostics_path,
+            AuthAttemptDiagnostics(status="success", mode=auth_mode, oauth_port=oauth_port, redirect_uri=redirect_uri),
+        )
     except Exception as exc:
-        exc_text = str(exc).lower()
-        if "redirect_uri_mismatch" in exc_text:
-            logging.error(
-                "OAuth redirect mismatch. Add this URI to your Google OAuth client redirect list: %s",
-                redirect_uri,
-            )
-        if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
-            logging.error(
-                "Google blocked this OAuth client. For calendar, use a Desktop OAuth client and add your account as a test user on the consent screen."
-            )
-            logging.error("You can also set GOOGLE_CALENDAR_CLIENT_ID / GOOGLE_CALENDAR_CLIENT_SECRET to use a dedicated calendar OAuth client.")
-        logging.info("Local server auth failed (%s); falling back to console flow.", exc)
-        creds = flow.run_console()
+        next_steps = _next_steps_for_auth_error(auth_mode, exc, redirect_uri, oauth_port)
+        persist_auth_diagnostics(
+            diagnostics_path,
+            AuthAttemptDiagnostics(
+                status="failed",
+                mode=auth_mode,
+                oauth_port=oauth_port,
+                redirect_uri=redirect_uri,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                next_steps=next_steps,
+            ),
+        )
+        logging.error("OAuth flow '%s' failed: %s", auth_mode, exc)
+        for step in next_steps:
+            logging.error("Next step: %s", step)
+        raise
     save_credentials(creds, token_path)
     return creds
 
@@ -567,6 +677,10 @@ def main() -> int:
     api_config = config["api"]
     rendering_config = config["rendering"]
     runtime_config = config["runtime"]
+    selected_auth_mode = (args.auth_mode or runtime_config["auth_mode"]).strip().lower()
+    if selected_auth_mode not in ALLOWED_AUTH_MODES:
+        logging.error("Unsupported auth mode: %s", selected_auth_mode)
+        return 1
 
     if args.check_config:
         print("[calendash-api.py] Configuration check passed.")
@@ -578,6 +692,8 @@ def main() -> int:
             auth_config["client_secret"],
             runtime_config["token_path"],
             runtime_config["oauth_port"],
+            selected_auth_mode,
+            runtime_config["diagnostics_path"],
         )
 
         if args.auth_only:
