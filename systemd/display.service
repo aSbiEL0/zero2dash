@@ -1,13 +1,13 @@
 [Unit]
 Description=Pi-hole TFT Day Display Rotator
-After=network-online.target dev-fb1.device
-Wants=network-online.target dev-fb1.device
-ConditionPathExists=/dev/fb1
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=/opt/zero2dash
 Environment=PYTHONUNBUFFERED=1
+Environment=FB_DEVICE=/dev/fb1
 EnvironmentFile=-/opt/zero2dash/.env
 
 ExecStartPre=/opt/zero2dash/scripts/pihole-display-pre.sh

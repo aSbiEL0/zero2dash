@@ -19,6 +19,9 @@ import os
 import time
 import json
 import argparse
+import hashlib
+import random
+import socket
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from collections import OrderedDict
@@ -33,6 +36,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from PIL import Image, ImageDraw, ImageFont
+from requests import exceptions as requests_exceptions
 
 from _config import get_env, report_validation_errors
 
@@ -41,6 +45,11 @@ CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 DEFAULT_TOKEN_PATH = Path("token.json")
 DEFAULT_OAUTH_PORT = 8080
+DEFAULT_AUTH_MODE = "local_server"
+TOKEN_METADATA_SUFFIX = ".meta.json"
+RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+NON_RETRYABLE_HTTP_STATUSES = {400, 401, 403, 404}
+ALLOWED_AUTH_MODES = {"local_server", "console", "device_code"}
 
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
@@ -50,13 +59,41 @@ def _normalize_scopes(raw_scopes: Any) -> set[str]:
         return {str(scope) for scope in raw_scopes if scope}
     return set()
 
+    def _add_scope_values(raw_value: Any) -> None:
+        if raw_value is None:
+            return
+        if isinstance(raw_value, str):
+            scope_tokens = raw_value.replace(",", " ").split()
+            parsed_scopes.update(token.strip() for token in scope_tokens if token.strip())
+            return
+        if isinstance(raw_value, dict):
+            _add_scope_values(raw_value.get("scope") or raw_value.get("scopes"))
+            return
+        if isinstance(raw_value, (list, tuple, set)):
+            for item in raw_value:
+                _add_scope_values(item)
+            return
 
-def _is_token_compatible_with_calendar(token_payload: dict[str, Any]) -> bool:
-    token_scopes = _normalize_scopes(token_payload.get("scopes") or token_payload.get("scope"))
-    if not token_scopes:
-        # Older token files may not include explicit scopes; let google-auth decide.
-        return True
-    return set(SCOPES).issubset(token_scopes)
+        parsed_scopes.add(str(raw_value).strip())
+
+    _add_scope_values(raw_scopes)
+    parsed_scopes.discard("")
+    return parsed_scopes
+
+
+def _missing_required_scopes(scopes: set[str]) -> set[str]:
+    return set(SCOPES) - scopes
+
+
+def _credentials_have_required_scopes(creds: Credentials) -> bool:
+    token_scopes = _normalize_scopes(getattr(creds, "scopes", None))
+    return not _missing_required_scopes(token_scopes)
+
+
+def _invalidate_token_file(token_path: Path, reason: str) -> None:
+    logging.warning("Marking token invalid at %s: %s", token_path.resolve(), reason)
+    if token_path.exists():
+        token_path.unlink()
 
 
 @dataclass
@@ -65,6 +102,33 @@ class CalendarEvent:
     display_date: str
     summary: str
     all_day: bool
+
+
+@dataclass
+class AuthAttemptDiagnostics:
+    status: str
+    mode: str
+    oauth_port: int
+    redirect_uri: str
+    error_type: str | None = None
+    error_message: str | None = None
+    next_steps: list[str] | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "timestamp": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "status": self.status,
+            "mode": self.mode,
+            "oauth_port": self.oauth_port,
+            "redirect_uri": self.redirect_uri,
+        }
+        if self.error_type:
+            payload["error_type"] = self.error_type
+        if self.error_message:
+            payload["error_message"] = self.error_message
+        if self.next_steps:
+            payload["next_steps"] = self.next_steps
+        return payload
 
 
 def configure_logging() -> None:
@@ -96,7 +160,91 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a calendar summary image.")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
     parser.add_argument("--auth-only", action="store_true", help="Run OAuth/token setup only and exit")
+    parser.add_argument(
+        "--auth-mode",
+        choices=sorted(ALLOWED_AUTH_MODES),
+        help="OAuth flow mode: local_server, console, or device_code.",
+    )
+    parser.add_argument(
+        "--force-token-path-reuse",
+        action="store_true",
+        help="Allow GOOGLE_TOKEN_PATH to match GOOGLE_TOKEN_PATH_PHOTOS and bypass token metadata mismatch checks.",
+    )
     return parser.parse_args()
+
+
+def _scope_fingerprint(scopes: Iterable[str]) -> str:
+    canonical = "\n".join(sorted(set(scopes)))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _token_metadata_path(token_path: Path) -> Path:
+    return token_path.with_name(f"{token_path.name}{TOKEN_METADATA_SUFFIX}")
+
+
+def _write_token_metadata(token_path: Path, provider: str, scopes: Iterable[str]) -> None:
+    metadata_path = _token_metadata_path(token_path)
+    payload = {
+        "provider": provider,
+        "scopes": sorted(set(scopes)),
+        "scope_fingerprint": _scope_fingerprint(scopes),
+    }
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(metadata_path, 0o600)
+
+
+def _preflight_token_path_guard(calendar_token_path: Path, force_token_path_reuse: bool) -> None:
+    photos_token_path = Path(os.getenv("GOOGLE_TOKEN_PATH_PHOTOS", "~/zero2dash/token_photos.json")).expanduser().resolve()
+    if calendar_token_path.resolve() != photos_token_path:
+        return
+    if force_token_path_reuse:
+        logging.warning(
+            "GOOGLE_TOKEN_PATH matches GOOGLE_TOKEN_PATH_PHOTOS (%s), but proceeding due to --force-token-path-reuse.",
+            calendar_token_path.resolve(),
+        )
+        return
+    raise ValueError(
+        "Refusing to reuse a single token path for calendar and photos scripts. "
+        "Update GOOGLE_TOKEN_PATH or GOOGLE_TOKEN_PATH_PHOTOS to different files, "
+        "or pass --force-token-path-reuse to override intentionally."
+    )
+
+
+def _verify_token_metadata(token_path: Path, force_token_path_reuse: bool) -> None:
+    metadata_path = _token_metadata_path(token_path)
+    if not metadata_path.exists():
+        return
+
+    try:
+        metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logging.warning("Ignoring unreadable token metadata at %s (%s).", metadata_path.resolve(), exc)
+        return
+
+    expected_provider = "google_calendar"
+    expected_fingerprint = _scope_fingerprint(SCOPES)
+    provider = str(metadata_payload.get("provider", "")).strip()
+    scope_fingerprint = str(metadata_payload.get("scope_fingerprint", "")).strip()
+
+    if provider == expected_provider and scope_fingerprint == expected_fingerprint:
+        return
+
+    mismatch_message = (
+        f"Token metadata mismatch for {token_path.resolve()} (found provider={provider or 'unknown'}, "
+        f"scope_fingerprint={scope_fingerprint or 'unknown'}; expected provider={expected_provider})."
+    )
+    remediation = (
+        "Remediation: set GOOGLE_TOKEN_PATH to a dedicated calendar token file and "
+        "set GOOGLE_TOKEN_PATH_PHOTOS to a separate photos token file. "
+        "If shared token usage is intentional, rerun with --force-token-path-reuse."
+    )
+
+    if force_token_path_reuse:
+        logging.warning("%s %s", mismatch_message, remediation)
+        return
+
+    raise ValueError(f"{mismatch_message} {remediation}")
 
 
 def validate_timezone(value: str) -> str:
@@ -175,11 +323,21 @@ def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, 
 
     oauth_port = record("OAUTH_PORT", default=DEFAULT_OAUTH_PORT, validator=lambda v: optional_env_int("OAUTH_PORT", DEFAULT_OAUTH_PORT))
     token_raw = record("GOOGLE_TOKEN_PATH", default=str(DEFAULT_TOKEN_PATH))
+    auth_mode_raw = record("GOOGLE_AUTH_MODE", default=DEFAULT_AUTH_MODE)
+    diagnostics_raw = record("GOOGLE_AUTH_DIAGNOSTICS_PATH", default="~/zero2dash/logs/calendash-auth-diagnostics.json")
+
+    auth_mode = str(auth_mode_raw).strip().lower()
+    if auth_mode not in ALLOWED_AUTH_MODES:
+        errors.append(
+            f"GOOGLE_AUTH_MODE must be one of {', '.join(sorted(ALLOWED_AUTH_MODES))}. Received: {auth_mode_raw!r}"
+        )
+        auth_mode = DEFAULT_AUTH_MODE
 
     output_path = expand_path(str(output_raw))
     background_path = expand_path(str(background_raw))
     icon_path = expand_path(str(icon_raw))
     token_path = expand_path(str(token_raw))
+    diagnostics_path = expand_path(str(diagnostics_raw))
 
     if rendering_required and not background_path.exists():
         errors.append(f"BACKGROUND_IMAGE not found: {background_path}")
@@ -203,8 +361,52 @@ def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, 
         "runtime": {
             "oauth_port": int(oauth_port),
             "token_path": token_path,
+            "auth_mode": auth_mode,
+            "diagnostics_path": diagnostics_path,
         },
     }, errors, missing_by_section
+
+
+def _next_steps_for_auth_error(mode: str, exc: Exception, redirect_uri: str, oauth_port: int) -> list[str]:
+    error_text = str(exc).lower()
+    steps: list[str] = []
+
+    if "address already in use" in error_text or "cannot listen" in error_text:
+        steps.append(f"Port {oauth_port} is busy. Set OAUTH_PORT to a free port (for example 8090) and retry.")
+    if "redirect_uri_mismatch" in error_text:
+        steps.append(f"Add this exact redirect URI in Google Cloud OAuth client settings: {redirect_uri}")
+        steps.append("If you cannot change redirect URIs, retry with --auth-mode console.")
+    if any(tag in error_text for tag in ["access blocked", "app is blocked", "app restricted"]):
+        steps.append("On OAuth consent screen, add your Google account as a Test User or publish the app.")
+    if "invalid_client" in error_text:
+        steps.append("Verify GOOGLE_CALENDAR_CLIENT_ID and GOOGLE_CALENDAR_CLIENT_SECRET belong to the same OAuth client.")
+        steps.append("Use a Desktop app OAuth client for local_server/console flows.")
+    if mode == "device_code" and "unsupported" in error_text:
+        steps.append("This google-auth-oauthlib version lacks device code flow support. Upgrade package or use --auth-mode console.")
+
+    if not steps:
+        steps.append("Review client ID/secret, OAuth consent configuration, and retry with --auth-mode console for headless environments.")
+    return steps
+
+
+def persist_auth_diagnostics(path: Path, details: AuthAttemptDiagnostics) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = details.as_dict()
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+
+
+def _run_auth_flow(flow: InstalledAppFlow, mode: str, oauth_port: int) -> Credentials:
+    if mode == "local_server":
+        return flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
+    if mode == "console":
+        return flow.run_console()
+    if mode == "device_code":
+        run_device_code = getattr(flow, "run_device_authorization", None)
+        if callable(run_device_code):
+            return run_device_code()
+        raise NotImplementedError("device_code mode is not supported by this google-auth-oauthlib version")
+    raise ValueError(f"Unsupported auth mode: {mode}")
 
 
 def load_font(preferred_size: int, *, use_bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -271,11 +473,23 @@ def loopback_oauth_guidance(oauth_port: int) -> list[str]:
 def save_credentials(creds: Credentials, token_path: Path) -> None:
     token_path.write_text(creds.to_json(), encoding="utf-8")
     os.chmod(token_path, 0o600)
+    _write_token_metadata(token_path, provider="google_calendar", scopes=SCOPES)
     logging.info("Saved OAuth token to %s", token_path.resolve())
 
 
-def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_port: int) -> Credentials:
+def get_credentials(
+    client_id: str,
+    client_secret: str,
+    token_path: Path,
+    oauth_port: int,
+    auth_mode: str,
+    diagnostics_path: Path,
+    force_token_path_reuse: bool,
+) -> Credentials:
     creds: Credentials | None = None
+
+    _preflight_token_path_guard(token_path, force_token_path_reuse)
+    _verify_token_metadata(token_path, force_token_path_reuse)
 
     if token_path.exists():
         try:
@@ -284,42 +498,73 @@ def get_credentials(client_id: str, client_secret: str, token_path: Path, oauth_
             logging.warning("Ignoring invalid token file at %s (%s).", token_path.resolve(), exc)
             payload = None
 
-        if payload and not _is_token_compatible_with_calendar(payload):
-            logging.warning(
-                "Token at %s does not include calendar scope; re-authenticating.",
-                token_path.resolve(),
-            )
-        else:
+        if payload is not None:
+            token_scopes = _normalize_scopes(payload.get("scopes") or payload.get("scope"))
+            missing_scopes = _missing_required_scopes(token_scopes)
+            if missing_scopes:
+                expected_list = ", ".join(sorted(SCOPES))
+                missing_list = ", ".join(sorted(missing_scopes))
+                _invalidate_token_file(
+                    token_path,
+                    f"missing required calendar scopes ({missing_list}); expected at least: {expected_list}",
+                )
+                payload = None
+
+        if payload is not None:
             try:
                 creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
             except Exception as exc:
                 logging.warning("Unable to load token from %s (%s); re-authenticating.", token_path.resolve(), exc)
 
     if creds and creds.valid:
-        return creds
+        if not _credentials_have_required_scopes(creds):
+            _invalidate_token_file(token_path, "loaded token credentials are incompatible with required calendar scopes")
+            creds = None
+        else:
+            persist_auth_diagnostics(
+                diagnostics_path,
+                AuthAttemptDiagnostics(status="success", mode="token_cache", oauth_port=oauth_port, redirect_uri=expected_redirect_uri(oauth_port)),
+            )
+            return creds
 
     if creds and creds.expired and creds.refresh_token:
         logging.info("Refreshing existing OAuth token.")
-        creds.refresh(Request())
-        save_credentials(creds, token_path)
-        return creds
+        try:
+            creds.refresh(Request())
+        except Exception as exc:
+            _invalidate_token_file(token_path, f"refresh failed ({type(exc).__name__}: {exc})")
+            logging.warning(
+                "Token refresh failed and token was invalidated. Forcing re-authentication to restore calendar access."
+            )
+            creds = None
+
+        if creds and not _credentials_have_required_scopes(creds):
+            _invalidate_token_file(token_path, "refreshed token is missing required calendar scopes")
+            logging.warning(
+                "Refreshed OAuth token lacks required calendar scopes. Forcing re-authentication."
+            )
+            creds = None
+
+        if creds:
+            save_credentials(creds, token_path)
+            persist_auth_diagnostics(
+                diagnostics_path,
+                AuthAttemptDiagnostics(status="success", mode="token_refresh", oauth_port=oauth_port, redirect_uri=expected_redirect_uri(oauth_port)),
+            )
+            return creds
 
     redirect_uri = expected_redirect_uri(oauth_port)
-    logging.info("Starting first-run OAuth flow on localhost:%d.", oauth_port)
+    logging.info("Starting OAuth flow (%s) on localhost:%d.", auth_mode, oauth_port)
     logging.info("Expected OAuth redirect URI: %s", redirect_uri)
     flow = InstalledAppFlow.from_client_config(
         build_client_config(client_id, client_secret, oauth_port),
         SCOPES,
     )
     try:
-        creds = flow.run_local_server(port=oauth_port, open_browser=False, redirect_uri_trailing_slash=True)
-        logging.info("OAuth callback received successfully on localhost:%d.", oauth_port)
-    except Exception as exc:
-        exc_text = str(exc).lower()
-        if "redirect_uri_mismatch" in exc_text:
-            logging.error(
-                "OAuth redirect mismatch. Add this URI to your Google OAuth client redirect list: %s",
-                redirect_uri,
+        creds = _run_auth_flow(flow, auth_mode, oauth_port)
+        if not _credentials_have_required_scopes(creds):
+            raise RuntimeError(
+                "Authenticated token does not include required calendar scopes. Ensure consent grants calendar.readonly access."
             )
         if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
             logging.error(
@@ -373,6 +618,36 @@ def fetch_events(
     }
 
     last_error: Exception | None = None
+
+    def _http_status(exc: HttpError) -> int | None:
+        return getattr(getattr(exc, "resp", None), "status", None)
+
+    def _is_non_retryable(exc: Exception) -> bool:
+        if isinstance(exc, HttpError):
+            return _http_status(exc) in NON_RETRYABLE_HTTP_STATUSES
+        return False
+
+    def _is_retryable(exc: Exception) -> bool:
+        if isinstance(exc, HttpError):
+            return _http_status(exc) in RETRYABLE_HTTP_STATUSES
+        return isinstance(
+            exc,
+            (
+                OSError,
+                TimeoutError,
+                socket.timeout,
+                socket.gaierror,
+                json.JSONDecodeError,
+                requests_exceptions.ConnectionError,
+                requests_exceptions.Timeout,
+                requests_exceptions.RequestException,
+            ),
+        )
+
+    def _backoff_seconds(attempt: int, *, base_delay: float = 1.0, cap_seconds: float = 16.0, jitter_max: float = 0.75) -> float:
+        exponential = min(cap_seconds, base_delay * (2 ** (attempt - 1)))
+        return exponential + random.uniform(0, jitter_max)
+
     for attempt in range(1, retries + 1):
         try:
             logging.info(
@@ -398,12 +673,19 @@ def fetch_events(
                 )
             parsed.sort(key=lambda event: event.starts_at)
             return parsed
-        except (HttpError, OSError, TimeoutError) as exc:
+        except Exception as exc:
             last_error = exc
-            wait_s = 2 ** (attempt - 1)
-            logging.error("Fetch failed (attempt %d/%d): %s", attempt, retries, exc)
+            if _is_non_retryable(exc):
+                logging.error("Fetch failed with non-retryable error (attempt %d/%d): %s", attempt, retries, exc)
+                break
+
+            if not _is_retryable(exc):
+                raise
+
+            wait_s = _backoff_seconds(attempt)
+            logging.error("Fetch failed with retryable error (attempt %d/%d): %s", attempt, retries, exc)
             if attempt < retries:
-                logging.info("Retrying in %d seconds...", wait_s)
+                logging.info("Retrying in %.2f seconds...", wait_s)
                 time.sleep(wait_s)
 
     assert last_error is not None
@@ -536,6 +818,17 @@ def main() -> int:
     api_config = config["api"]
     rendering_config = config["rendering"]
     runtime_config = config["runtime"]
+    selected_auth_mode = (args.auth_mode or runtime_config["auth_mode"]).strip().lower()
+    if selected_auth_mode not in ALLOWED_AUTH_MODES:
+        logging.error("Unsupported auth mode: %s", selected_auth_mode)
+        return 1
+
+    try:
+        _preflight_token_path_guard(runtime_config["token_path"], args.force_token_path_reuse)
+        _verify_token_metadata(runtime_config["token_path"], args.force_token_path_reuse)
+    except ValueError as exc:
+        logging.error(str(exc))
+        return 1
 
     if args.check_config:
         print("[calendash-api.py] Configuration check passed.")
@@ -547,6 +840,9 @@ def main() -> int:
             auth_config["client_secret"],
             runtime_config["token_path"],
             runtime_config["oauth_port"],
+            selected_auth_mode,
+            runtime_config["diagnostics_path"],
+            args.force_token_path_reuse,
         )
 
         if args.auth_only:
@@ -574,6 +870,9 @@ def main() -> int:
         return 0
     except Exception as exc:
         logging.error("Calendar update failed: %s", exc)
+        if args.auth_only:
+            logging.info("Auth-only mode; skipping fallback rendering.")
+            return 1
         try:
             render_image(
                 output_path=rendering_config["output_path"],

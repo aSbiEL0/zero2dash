@@ -99,6 +99,8 @@ Set at minimum for Pi-hole:
 - `PIHOLE_TIMEOUT`
 - `REFRESH_SECS`
 - `ACTIVE_HOURS` (inclusive `start,end` hour window in 24h format; cross-midnight values like `22,7` are supported)
+- `FB_DEVICE` (optional override; defaults to `/dev/fb1`)
+- `FB_WIDTH` / `FB_HEIGHT` (optional override for static renderer geometry; defaults `320x240`)
 
 Google OAuth notes:
 
@@ -125,7 +127,23 @@ journalctl -u display.service -n 50 --no-pager
 journalctl -u pihole-display-dark.service -n 50 --no-pager
 ```
 
+
+## Google Photos shuffle credential precedence
+
+`scripts/photos-shuffle.py` resolves OAuth credentials in this order:
+
+1. `GOOGLE_PHOTOS_CLIENT_SECRETS_PATH` file path from env/`.env` (default: `~/zero2dash/client_secret.json`)
+2. `GOOGLE_PHOTOS_CLIENT_ID` + `GOOGLE_PHOTOS_CLIENT_SECRET` from env/`.env`
+3. `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` from env/`.env` (legacy fallback)
+
+Use `python3 scripts/photos-shuffle.py --check-config` to validate the configuration and print the credential source that will be used.
+
 ## Notes
 
 - `display_rotator.py` excludes `piholestats_v1.2.py` by default so day mode and night mode stay distinct.
 - Static image scripts (for example `tram-info.py`, `weather-dash.py`, `calendash-img.py`) are rotator-friendly page scripts, not systemd service units by themselves.
+
+
+### Framebuffer overrides in systemd
+
+Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.

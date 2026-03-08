@@ -31,17 +31,28 @@ Fallback:
 - Ensure local fallback image exists at ~/zero2dash/images/photos-fallback.png
   (or override with FALLBACK_IMAGE). If online/offline fetch fails, fallback is
   rendered through the same processing pipeline.
+
+Credential precedence:
+1) GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file (from env/.env; defaults to
+   ~/zero2dash/client_secret.json).
+2) GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET env/.env values.
+3) GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET env/.env values (legacy fallback).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
+import socket
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from _config import get_env, report_validation_errors
 
@@ -58,6 +69,13 @@ TEST_OUTPUT = Path("/tmp/photos-shuffle-test.png")
 LOGO_WIDTH_RATIO = 0.14
 LOGO_PADDING_RATIO = 0.03
 BRIGHTNESS_FACTOR = 0.75
+TOKEN_METADATA_SUFFIX = ".meta.json"
+
+CREDENTIAL_SOURCES_CHECKLIST = [
+    "GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file (env/.env; default: ~/zero2dash/client_secret.json)",
+    "GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET (env/.env)",
+    "GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (legacy env/.env fallback)",
+]
 
 
 @dataclass
@@ -73,8 +91,87 @@ class Config:
     cache_dir: Path
     fallback_image: Path
     logo_path: Path
+    logo_attempted_paths: list[Path]
     oauth_port: int
     oauth_open_browser: bool
+    max_online_attempts: int
+
+
+def _scope_fingerprint(scopes: list[str]) -> str:
+    canonical = "\n".join(sorted(set(scopes)))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _token_metadata_path(token_path: Path) -> Path:
+    return token_path.with_name(f"{token_path.name}{TOKEN_METADATA_SUFFIX}")
+
+
+def _write_token_metadata(token_path: Path, provider: str, scopes: list[str]) -> None:
+    metadata_path = _token_metadata_path(token_path)
+    payload = {
+        "provider": provider,
+        "scopes": sorted(set(scopes)),
+        "scope_fingerprint": _scope_fingerprint(scopes),
+    }
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(metadata_path, 0o600)
+
+
+def _calendar_token_path() -> Path:
+    return Path(os.getenv("GOOGLE_TOKEN_PATH", "token.json")).expanduser().resolve()
+
+
+def _preflight_token_path_guard(token_path: Path, force_token_path_reuse: bool) -> None:
+    calendar_token_path = _calendar_token_path()
+    if token_path.resolve() != calendar_token_path:
+        return
+    if force_token_path_reuse:
+        print(
+            "[warning] GOOGLE_TOKEN_PATH_PHOTOS matches GOOGLE_TOKEN_PATH "
+            f"({token_path.resolve()}), but proceeding due to --force-token-path-reuse."
+        )
+        return
+    raise ValueError(
+        "Refusing to reuse a single token path for photos and calendar scripts. "
+        "Set GOOGLE_TOKEN_PATH_PHOTOS and GOOGLE_TOKEN_PATH to different files, "
+        "or pass --force-token-path-reuse to override intentionally."
+    )
+
+
+def _verify_token_metadata(token_path: Path, force_token_path_reuse: bool) -> None:
+    metadata_path = _token_metadata_path(token_path)
+    if not metadata_path.exists():
+        return
+
+    try:
+        metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[warning] Ignoring unreadable token metadata at {metadata_path.resolve()} ({exc}).")
+        return
+
+    expected_provider = "google_photos"
+    expected_fingerprint = _scope_fingerprint(SCOPES)
+    provider = str(metadata_payload.get("provider", "")).strip()
+    scope_fingerprint = str(metadata_payload.get("scope_fingerprint", "")).strip()
+
+    if provider == expected_provider and scope_fingerprint == expected_fingerprint:
+        return
+
+    mismatch_message = (
+        f"Token metadata mismatch for {token_path.resolve()} (found provider={provider or 'unknown'}, "
+        f"scope_fingerprint={scope_fingerprint or 'unknown'}; expected provider={expected_provider})."
+    )
+    remediation = (
+        "Remediation: set GOOGLE_TOKEN_PATH_PHOTOS to a dedicated photos token file and "
+        "set GOOGLE_TOKEN_PATH to a separate calendar token file. "
+        "If shared token usage is intentional, rerun with --force-token-path-reuse."
+    )
+
+    if force_token_path_reuse:
+        print(f"[warning] {mismatch_message} {remediation}")
+        return
+    raise ValueError(f"{mismatch_message} {remediation}")
 
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
@@ -151,7 +248,41 @@ def _as_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def validate_config() -> tuple[Config | None, list[str]]:
+def format_credentials_checklist() -> str:
+    return "Credential sources checked (in order): " + " ; ".join(
+        f"{index}) {source}" for index, source in enumerate(CREDENTIAL_SOURCES_CHECKLIST, start=1)
+    )
+
+
+def resolve_repo_or_script_relative_path(path_raw: str) -> tuple[Path, list[Path]]:
+    expanded = Path(path_raw).expanduser()
+    if expanded.is_absolute():
+        return expanded, [expanded]
+
+    repo_candidate = (REPO_ROOT / expanded).resolve()
+    script_candidate = (SCRIPT_DIR / expanded).resolve()
+    attempted = [repo_candidate]
+    if script_candidate != repo_candidate:
+        attempted.append(script_candidate)
+
+    for candidate in attempted:
+        if candidate.exists():
+            return candidate, attempted
+    return repo_candidate, attempted
+
+
+def selected_credential_source(config: Config) -> str:
+    if config.client_secrets_path.exists():
+        return f"GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file ({config.client_secrets_path})"
+    if config.client_id and config.client_secret:
+        photos_scoped = bool(os.getenv("GOOGLE_PHOTOS_CLIENT_ID") and os.getenv("GOOGLE_PHOTOS_CLIENT_SECRET"))
+        if photos_scoped:
+            return "GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET"
+        return "GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (legacy fallback)"
+    return "none"
+
+
+def validate_config(*, force_token_path_reuse: bool = False) -> tuple[Config | None, list[str]]:
     errors: list[str] = []
 
     def record(name: str, *, default: Any = None, required: bool = False, validator: Any = None) -> Any:
@@ -173,9 +304,16 @@ def validate_config() -> tuple[Config | None, list[str]]:
     height = record("HEIGHT", default=240, validator=lambda v: _as_int("HEIGHT", v))
     cache_raw = record("CACHE_DIR", default=str(DEFAULT_ROOT / "cache" / "google_photos"))
     fallback_raw = record("FALLBACK_IMAGE", default=str(DEFAULT_ROOT / "images" / "photos-fallback.png"))
-    logo_raw = record("LOGO_PATH", default="/images/goo-photos-icon.png")
+    logo_override_raw = os.getenv("LOGO_PATH")
+    logo_raw = logo_override_raw if logo_override_raw is not None else str(DEFAULT_LOGO_RELATIVE_PATH)
+    logo_path, logo_attempted_paths = resolve_repo_or_script_relative_path(str(logo_raw))
     oauth_port = record("OAUTH_PORT", default=8080, validator=lambda v: _as_int("OAUTH_PORT", v))
     oauth_open_browser = record("OAUTH_OPEN_BROWSER", default=False, validator=_as_bool)
+    max_online_attempts = record(
+        "GOOGLE_PHOTOS_MAX_ATTEMPTS",
+        default=0,
+        validator=lambda v: _as_int("GOOGLE_PHOTOS_MAX_ATTEMPTS", v),
+    )
 
     if isinstance(width, int) and width <= 0:
         errors.append("WIDTH is invalid: must be greater than 0")
@@ -183,6 +321,8 @@ def validate_config() -> tuple[Config | None, list[str]]:
         errors.append("HEIGHT is invalid: must be greater than 0")
     if isinstance(oauth_port, int) and oauth_port <= 0:
         errors.append("OAUTH_PORT is invalid: must be greater than 0")
+    if isinstance(max_online_attempts, int) and max_online_attempts < 0:
+        errors.append("GOOGLE_PHOTOS_MAX_ATTEMPTS is invalid: must be >= 0")
 
     fallback_image = Path(str(fallback_raw)).expanduser()
     if not fallback_image.exists():
@@ -199,16 +339,19 @@ def validate_config() -> tuple[Config | None, list[str]]:
         height=int(height),
         cache_dir=Path(str(cache_raw)).expanduser(),
         fallback_image=fallback_image,
-        logo_path=Path(str(logo_raw)).expanduser(),
+        logo_path=logo_path,
+        logo_attempted_paths=logo_attempted_paths,
         oauth_port=int(oauth_port),
         oauth_open_browser=bool(oauth_open_browser),
+        max_online_attempts=int(max_online_attempts),
     )
 
-    calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
-    if config.token_path.resolve() == calendar_default_token:
+    calendar_token_path = _calendar_token_path()
+    if config.token_path.resolve() == calendar_token_path and not force_token_path_reuse:
         errors.append(
-            "GOOGLE_TOKEN_PATH_PHOTOS points to token.json, which is reserved for calendash-api.py. "
-            "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
+            "GOOGLE_TOKEN_PATH_PHOTOS points to the same file as GOOGLE_TOKEN_PATH, which is unsafe for "
+            "cross-script token reuse. Set GOOGLE_TOKEN_PATH_PHOTOS and GOOGLE_TOKEN_PATH to different files, "
+            "or use --force-token-path-reuse to override intentionally."
         )
 
     if not config.client_secrets_path.exists() and not (config.client_id and config.client_secret):
@@ -216,6 +359,7 @@ def validate_config() -> tuple[Config | None, list[str]]:
             f"Google Photos OAuth credentials are required: set GOOGLE_PHOTOS_CLIENT_SECRETS_PATH to an existing file "
             f"or provide GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET (checked path: {config.client_secrets_path})."
         )
+        errors.append(format_credentials_checklist())
 
     if errors:
         return None, errors
@@ -232,7 +376,7 @@ def load_config() -> Config:
     return config
 
 
-def authenticate(config: Config, log: Log) -> Credentials:
+def authenticate(config: Config, log: Log, *, force_token_path_reuse: bool = False) -> Credentials:
     creds: Credentials | None = None
 
     calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
@@ -267,6 +411,8 @@ def authenticate(config: Config, log: Log) -> Credentials:
         log.debug("Refreshing existing Google OAuth token")
         try:
             creds.refresh(Request())
+            _write_token_atomically(config.token_path, creds.to_json())
+            log.info(f"Google OAuth token refreshed and saved to {config.token_path}")
         except Exception as exc:
             log.info(f"Token refresh failed ({exc}); starting OAuth flow")
             creds = None
@@ -307,10 +453,20 @@ def authenticate(config: Config, log: Log) -> Credentials:
                 log.info(message)
             raise RuntimeError("Loopback OAuth setup failed") from exc
 
-    config.token_path.parent.mkdir(parents=True, exist_ok=True)
-    config.token_path.write_text(creds.to_json(), encoding="utf-8")
+    _write_token_atomically(config.token_path, creds.to_json())
+    _write_token_metadata(config.token_path, provider="google_photos", scopes=SCOPES)
     log.debug(f"Saved OAuth token to {config.token_path}")
     return creds
+
+
+def _write_token_atomically(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp_file:
+        tmp_file.write(content)
+        tmp_file.flush()
+        os.fsync(tmp_file.fileno())
+        temp_path = Path(tmp_file.name)
+    temp_path.replace(path)
 
 
 def list_album_images(creds: Credentials, album_id: str, log: Log) -> list[dict[str, Any]]:
@@ -432,20 +588,58 @@ def cache_path_for_item(cache_dir: Path, item: dict[str, Any]) -> Path:
 
 
 def download_to_cache(creds: Credentials, item: dict[str, Any], cache_path: Path, config: Config, log: Log) -> None:
+    from urllib.error import HTTPError, URLError
     base_url = item.get("baseUrl")
     if not base_url:
         raise ValueError("mediaItem missing baseUrl")
 
     sized_url = f"{base_url}=w{config.width * 2}-h{config.height * 2}"
+    split_url = urlsplit(sized_url)
+    query = dict(parse_qsl(split_url.query, keep_blank_values=True))
+    if creds.token and "access_token" not in query:
+        query["access_token"] = creds.token
+    media_url = urlunsplit(split_url._replace(query=urlencode(query)))
+
     from urllib.request import Request as UrlRequest, urlopen
 
-    req = UrlRequest(sized_url, headers={"Authorization": f"Bearer {creds.token}"})
-    with urlopen(req, timeout=20) as resp:  # nosec B310
-        data = resp.read()
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        req = UrlRequest(media_url, headers={"Authorization": f"Bearer {creds.token}"})
+        try:
+            with urlopen(req, timeout=20) as resp:  # nosec B310
+                status_code = getattr(resp, "status", 200)
+                if not 200 <= status_code < 300:
+                    raise MediaDownloadPermanentError(f"HTTP {status_code} for media download")
+                data = resp.read()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(data)
+            log.debug(f"Cached image: {cache_path}")
+            return
+        except HTTPError as exc:
+            status_code = exc.code
+            if 500 <= status_code < 600:
+                if attempt == max_attempts:
+                    raise MediaDownloadTransientError(
+                        f"Transient HTTP {status_code} after {max_attempts} attempts"
+                    ) from exc
+                time.sleep(0.5 * attempt)
+                continue
+            raise MediaDownloadPermanentError(f"HTTP {status_code} for media download") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            if attempt == max_attempts:
+                raise MediaDownloadTransientError(f"Timed out after {max_attempts} attempts") from exc
+            time.sleep(0.5 * attempt)
+            continue
+        except URLError as exc:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, (TimeoutError, socket.timeout)):
+                if attempt == max_attempts:
+                    raise MediaDownloadTransientError(f"Timed out after {max_attempts} attempts") from exc
+                time.sleep(0.5 * attempt)
+                continue
+            raise MediaDownloadPermanentError(f"URL error during media download: {exc}") from exc
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_bytes(data)
-    log.debug(f"Cached image: {cache_path}")
+    raise MediaDownloadTransientError(f"Media download failed after {max_attempts} attempts")
 
 
 def list_cached_images(cache_dir: Path) -> list[Path]:
@@ -515,29 +709,69 @@ def write_framebuffer(img: Image.Image, fb_device: str, width: int, height: int)
         fb.write(payload)
 
 
-def choose_online_image(config: Config, log: Log) -> Path:
-    creds = authenticate(config, log)
+def choose_online_image(config: Config, log: Log, *, force_token_path_reuse: bool = False) -> Path:
+    creds = authenticate(config, log, force_token_path_reuse=force_token_path_reuse)
     items = list_album_images(creds, config.album_id, log)
     if not items:
         raise RuntimeError("No image media items found in album")
 
     random.shuffle(items)
+    attempt_limit = len(items) if config.max_online_attempts == 0 else min(len(items), config.max_online_attempts)
+
+    failures_by_item: dict[str, str] = {}
+    outcomes: dict[str, int] = {"cache_hit": 0, "download_success": 0, "download_failure": 0}
+    attempted_count = 0
+
     for item in items:
+        if attempted_count >= attempt_limit:
+            break
+
         media_id = item.get("id", "unknown")
+        if media_id in failures_by_item:
+            continue
+
         cache_path = cache_path_for_item(config.cache_dir, item)
+        attempted_count += 1
+
         if cache_path.exists() and cache_path.stat().st_size > 0:
+            outcomes["cache_hit"] += 1
             log.info(f"ONLINE: cache hit for {media_id}")
+            log.info(
+                "ONLINE summary: "
+                f"attempted={attempted_count}/{attempt_limit}, "
+                f"cache_hit={outcomes['cache_hit']}, "
+                f"download_success={outcomes['download_success']}, "
+                f"download_failure={outcomes['download_failure']}"
+            )
             return cache_path
 
         log.info(f"ONLINE: cache miss for {media_id}; downloading")
         try:
             download_to_cache(creds, item, cache_path, config, log)
+            outcomes["download_success"] += 1
+            log.info(
+                "ONLINE summary: "
+                f"attempted={attempted_count}/{attempt_limit}, "
+                f"cache_hit={outcomes['cache_hit']}, "
+                f"download_success={outcomes['download_success']}, "
+                f"download_failure={outcomes['download_failure']}"
+            )
             return cache_path
         except Exception as exc:
+            outcomes["download_failure"] += 1
+            failures_by_item[str(media_id)] = str(exc)
             log.debug(f"Download failed for {media_id}: {exc}")
             continue
 
-    raise RuntimeError("Unable to fetch any album image")
+    failure_summary = ", ".join(f"{media_id}={reason}" for media_id, reason in failures_by_item.items()) or "none"
+    log.info(
+        "ONLINE summary: "
+        f"attempted={attempted_count}/{attempt_limit}, "
+        f"cache_hit={outcomes['cache_hit']}, "
+        f"download_success={outcomes['download_success']}, "
+        f"download_failure={outcomes['download_failure']}"
+    )
+    raise RuntimeError(f"Unable to fetch any album image after {attempted_count} attempts; failures: {failure_summary}")
 
 
 def choose_offline_image(config: Config, log: Log) -> Path:
@@ -550,12 +784,25 @@ def choose_offline_image(config: Config, log: Log) -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render one random Google Photos album image to framebuffer.")
+    parser = argparse.ArgumentParser(
+        description="Render one random Google Photos album image to framebuffer.",
+        epilog=(
+            "Credential source precedence: "
+            "1) GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file, "
+            "2) GOOGLE_PHOTOS_CLIENT_ID + GOOGLE_PHOTOS_CLIENT_SECRET, "
+            "3) GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (legacy fallback)."
+        ),
+    )
     parser.add_argument("--test", action="store_true", help="Render to /tmp/photos-shuffle-test.png instead of framebuffer")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logs")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
     parser.add_argument("--auth-only", action="store_true", help="Run OAuth/token setup only and exit")
     parser.add_argument("--smoke-list-fetch", action="store_true", help="Run paginated list fetch smoke check and exit")
+    parser.add_argument(
+        "--force-token-path-reuse",
+        action="store_true",
+        help="Allow GOOGLE_TOKEN_PATH_PHOTOS to match GOOGLE_TOKEN_PATH and bypass token metadata mismatch checks.",
+    )
     return parser.parse_args()
 
 
@@ -572,13 +819,21 @@ def main() -> int:
             return 1
 
     load_dotenv(DEFAULT_ROOT / ".env")
-    config, errors = validate_config()
+    config, errors = validate_config(force_token_path_reuse=args.force_token_path_reuse)
     if errors:
         report_validation_errors("photos-shuffle.py", errors)
         return 1
     assert config is not None
 
+    try:
+        _preflight_token_path_guard(config.token_path, args.force_token_path_reuse)
+        _verify_token_metadata(config.token_path, args.force_token_path_reuse)
+    except ValueError as exc:
+        print(exc)
+        return 1
+
     if args.check_config:
+        print(f"[photos-shuffle.py] Credential source: {selected_credential_source(config)}")
         print("[photos-shuffle.py] Configuration check passed.")
         return 0
 
@@ -589,7 +844,7 @@ def main() -> int:
 
     source_image: Path | None = None
     try:
-        source_image = choose_online_image(config, log)
+        source_image = choose_online_image(config, log, force_token_path_reuse=args.force_token_path_reuse)
     except Exception as exc:
         log.info(f"Online unavailable ({exc}); trying offline cache")
         try:
