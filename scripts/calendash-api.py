@@ -18,6 +18,7 @@ import logging
 import os
 import time
 import json
+import argparse
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
@@ -31,6 +32,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from PIL import Image, ImageDraw, ImageFont
+
+from _config import get_env, report_validation_errors
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CANVAS_WIDTH = 320
@@ -71,21 +74,6 @@ def configure_logging() -> None:
     )
 
 
-def required_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise ValueError(f"Missing required env variable: {name}")
-    return value
-
-
-def required_env_any(*names: str) -> str:
-    for name in names:
-        value = os.getenv(name, "").strip()
-        if value:
-            return value
-    raise ValueError(f"Missing required env variable: one of {', '.join(names)}")
-
-
 def expand_path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
@@ -101,6 +89,75 @@ def optional_env_int(name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"{name} must be greater than 0")
     return value
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate a calendar summary image.")
+    parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
+    return parser.parse_args()
+
+
+def validate_timezone(value: str) -> str:
+    pytz.timezone(value)
+    return value
+
+
+def validate_config() -> tuple[dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+
+    def record(name: str, *, default: Any = None, required: bool = False, validator: Any = None) -> Any:
+        try:
+            return get_env(name, default=default, required=required, validator=validator)
+        except ValueError as exc:
+            errors.append(str(exc))
+            return default
+
+    calendar_client_id = record("GOOGLE_CALENDAR_CLIENT_ID")
+    fallback_client_id = record("GOOGLE_CLIENT_ID")
+    client_id = calendar_client_id or fallback_client_id
+    if not client_id:
+        errors.append("One of GOOGLE_CALENDAR_CLIENT_ID or GOOGLE_CLIENT_ID is required but not set.")
+
+    calendar_client_secret = record("GOOGLE_CALENDAR_CLIENT_SECRET")
+    fallback_client_secret = record("GOOGLE_CLIENT_SECRET")
+    client_secret = calendar_client_secret or fallback_client_secret
+    if not client_secret:
+        errors.append("One of GOOGLE_CALENDAR_CLIENT_SECRET or GOOGLE_CLIENT_SECRET is required but not set.")
+
+    calendar_id = record("GOOGLE_CALENDAR_ID", required=True)
+    tz_name = record("TIMEZONE", required=True, validator=validate_timezone)
+
+    output_raw = record("OUTPUT_PATH", default="~/zero2dash/images/calendash.png")
+    background_raw = record("BACKGROUND_IMAGE", default="~/zero2dash/images/calendash-bkg.png")
+    icon_raw = record("ICON_IMAGE", default="~/zero2dash/images/calendash-icon.png")
+
+    oauth_port = record("OAUTH_PORT", default=DEFAULT_OAUTH_PORT, validator=lambda v: optional_env_int("OAUTH_PORT", DEFAULT_OAUTH_PORT))
+    token_raw = record("GOOGLE_TOKEN_PATH", default=str(DEFAULT_TOKEN_PATH))
+
+    output_path = expand_path(str(output_raw))
+    background_path = expand_path(str(background_raw))
+    icon_path = expand_path(str(icon_raw))
+    token_path = expand_path(str(token_raw))
+
+    if not background_path.exists():
+        errors.append(f"BACKGROUND_IMAGE not found: {background_path}")
+    if not icon_path.exists():
+        errors.append(f"ICON_IMAGE not found: {icon_path}")
+
+    if errors:
+        return None, errors
+
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "calendar_id": calendar_id,
+        "tz_name": tz_name,
+        "output_path": output_path,
+        "background_path": background_path,
+        "icon_path": icon_path,
+        "oauth_port": int(oauth_port),
+        "token_path": token_path,
+    }, []
 
 
 def load_font(preferred_size: int, *, use_bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -404,39 +461,36 @@ def render_image(
 def main() -> int:
     configure_logging()
     load_dotenv()
+    args = parse_args()
 
-    try:
-        client_id = required_env_any("GOOGLE_CALENDAR_CLIENT_ID", "GOOGLE_CLIENT_ID")
-        client_secret = required_env_any("GOOGLE_CALENDAR_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET")
-        calendar_id = required_env("GOOGLE_CALENDAR_ID")
-        tz_name = required_env("TIMEZONE")
-        output_path = expand_path(required_env("OUTPUT_PATH"))
-        background_path = expand_path(required_env("BACKGROUND_IMAGE"))
-        icon_path = expand_path(required_env("ICON_IMAGE"))
-        oauth_port = optional_env_int("OAUTH_PORT", DEFAULT_OAUTH_PORT)
-        token_path = expand_path(os.getenv("GOOGLE_TOKEN_PATH", str(DEFAULT_TOKEN_PATH)))
-    except Exception as exc:
-        logging.error("Configuration error: %s", exc)
+    config, errors = validate_config()
+    if errors:
+        report_validation_errors("calendash-api.py", errors)
         return 1
+    assert config is not None
+
+    if args.check_config:
+        print("[calendash-api.py] Configuration check passed.")
+        return 0
 
     try:
-        creds = get_credentials(client_id, client_secret, token_path, oauth_port)
+        creds = get_credentials(config["client_id"], config["client_secret"], config["token_path"], config["oauth_port"])
         service = build("calendar", "v3", credentials=creds, cache_discovery=False)
-        events = fetch_events(service, calendar_id=calendar_id, tz_name=tz_name, retries=3)
+        events = fetch_events(service, calendar_id=config["calendar_id"], tz_name=config["tz_name"], retries=3)
 
         if not events:
             render_image(
-                output_path=output_path,
-                background_path=background_path,
-                icon_path=icon_path,
+                output_path=config["output_path"],
+                background_path=config["background_path"],
+                icon_path=config["icon_path"],
                 events=[],
                 message="No upcoming events",
             )
         else:
             render_image(
-                output_path=output_path,
-                background_path=background_path,
-                icon_path=icon_path,
+                output_path=config["output_path"],
+                background_path=config["background_path"],
+                icon_path=config["icon_path"],
                 events=events,
             )
         return 0
@@ -444,9 +498,9 @@ def main() -> int:
         logging.error("Calendar update failed: %s", exc)
         try:
             render_image(
-                output_path=output_path,
-                background_path=background_path,
-                icon_path=icon_path,
+                output_path=config["output_path"],
+                background_path=config["background_path"],
+                icon_path=config["icon_path"],
                 events=[],
                 message="Failed to update calendar",
             )

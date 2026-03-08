@@ -3,10 +3,12 @@
 # v6 auth handled elsewhere; this file only renders and calls API
 # Version 1.1 - Introducing dark mode
 
-import os, sys, time, json, urllib.request, urllib.parse, mmap, struct
+import os, sys, time, json, urllib.request, urllib.parse, mmap, struct, argparse
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
+
+from _config import get_env, report_validation_errors
 
 # -------- CONFIG --------
 FBDEV = "/dev/fb1"
@@ -14,9 +16,9 @@ W, H = 320, 240
 REFRESH_SECS = 3
 ACTIVE_HOURS = (7, 22)
 
-PIHOLE_HOST = os.environ.get("PIHOLE_HOST", "127.0.0.1")
-PIHOLE_PASSWORD = os.environ.get("PIHOLE_PASSWORD", "")
-PIHOLE_API_TOKEN = os.environ.get("PIHOLE_API_TOKEN", "")
+PIHOLE_HOST = "127.0.0.1"
+PIHOLE_PASSWORD = ""
+PIHOLE_API_TOKEN = ""
 TITLE = "Pi-hole"
 # Colours
 COL_BG   = (0, 0, 0)
@@ -32,31 +34,75 @@ _SID = None
 _SID_EXP = 0.0
 
 
-def _env_int(name, default):
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
+def _parse_int(value: str) -> int:
     try:
-        return int(raw)
-    except ValueError:
-        return default
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"expected integer, got {value!r}") from exc
 
 
-def _env_hours(name, default):
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    parts = [part.strip() for part in raw.split(",")]
+def _parse_active_hours(value: str) -> tuple[int, int]:
+    parts = [part.strip() for part in value.split(",")]
     if len(parts) != 2:
-        return default
+        raise ValueError("expected format start,end (e.g. 22,7)")
     try:
-        return int(parts[0]), int(parts[1])
-    except ValueError:
-        return default
+        start_hour, end_hour = int(parts[0]), int(parts[1])
+    except ValueError as exc:
+        raise ValueError(f"expected integers in start,end, got {value!r}") from exc
+    for hour in (start_hour, end_hour):
+        if hour < 0 or hour > 23:
+            raise ValueError("hours must be in range 0-23")
+    return start_hour, end_hour
 
 
-REFRESH_SECS = max(1, _env_int("REFRESH_SECS", REFRESH_SECS))
-ACTIVE_HOURS = _env_hours("ACTIVE_HOURS", ACTIVE_HOURS)
+def validate_config() -> tuple[dict[str, object] | None, list[str]]:
+    errors: list[str] = []
+
+    def record(name: str, *, default=None, required=False, validator=None):
+        try:
+            return get_env(name, default=default, required=required, validator=validator)
+        except ValueError as exc:
+            errors.append(str(exc))
+            return default
+
+    fbdev = record("FB_DEVICE", default=FBDEV)
+    host = record("PIHOLE_HOST", default="127.0.0.1")
+    password = record("PIHOLE_PASSWORD", required=True)
+    api_token = record("PIHOLE_API_TOKEN", default="")
+    refresh_secs = record("REFRESH_SECS", default=REFRESH_SECS, validator=_parse_int)
+    active_hours = record("ACTIVE_HOURS", default=f"{ACTIVE_HOURS[0]},{ACTIVE_HOURS[1]}", validator=_parse_active_hours)
+
+    if isinstance(refresh_secs, int) and refresh_secs < 1:
+        errors.append("REFRESH_SECS is invalid: must be greater than or equal to 1")
+
+    if errors:
+        return None, errors
+
+    return {
+        "fbdev": str(fbdev),
+        "pihole_host": str(host),
+        "pihole_password": str(password),
+        "pihole_api_token": str(api_token),
+        "refresh_secs": int(refresh_secs),
+        "active_hours": active_hours if isinstance(active_hours, tuple) else ACTIVE_HOURS,
+    }, []
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Pi-hole framebuffer dashboard")
+    parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
+    return parser.parse_args()
+
+
+def apply_config(config: dict[str, object]) -> None:
+    global FBDEV, PIHOLE_HOST, PIHOLE_PASSWORD, PIHOLE_API_TOKEN, REFRESH_SECS, ACTIVE_HOURS, BASE_URL
+    FBDEV = str(config["fbdev"])
+    PIHOLE_HOST = str(config["pihole_host"])
+    PIHOLE_PASSWORD = str(config["pihole_password"])
+    PIHOLE_API_TOKEN = str(config["pihole_api_token"])
+    REFRESH_SECS = int(config["refresh_secs"])
+    ACTIVE_HOURS = config["active_hours"]
+    BASE_URL = _normalize_host(PIHOLE_HOST)
 
 # ---------- utils ----------
 def load_font(size, bold=False):
@@ -274,9 +320,22 @@ def draw_frame(stats, temp_c, uptime, active):
 
 # ---------- main ----------
 def main():
+    args = parse_args()
+    config, errors = validate_config()
+    if errors:
+        report_validation_errors("piholestats_v1.1.py", errors)
+        return 1
+    assert config is not None
+
+    if args.check_config:
+        print("[piholestats_v1.1.py] Configuration check passed.")
+        return 0
+
+    apply_config(config)
+
     if not Path(FBDEV).exists():
         print(f"Framebuffer {FBDEV} not found.", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     cached = {"total":0,"blocked":0,"percent":0.0,"ok":False}
     try:
@@ -299,8 +358,10 @@ def main():
         fb_write(frame)
         time.sleep(REFRESH_SECS)
 
+    return 0
+
 if __name__ == "__main__":
     try:
-        main()
+        raise SystemExit(main())
     except KeyboardInterrupt:
         pass
