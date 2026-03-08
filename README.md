@@ -96,7 +96,7 @@ Set at minimum:
 - `PIHOLE_PASSWORD`
 - `PIHOLE_API_TOKEN` (optional fallback)
 - `REFRESH_SECS`
-- `ACTIVE_HOURS`
+- `ACTIVE_HOURS` (inclusive `start,end` hour window in 24h format; cross-midnight values like `22,7` are supported)
 
 ## Run via systemd
 

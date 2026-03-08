@@ -51,9 +51,47 @@ def _parse_active_hours(value: str) -> tuple[int, int]:
     except ValueError as exc:
         raise ValueError(f"expected integers in start,end, got {value!r}") from exc
     for hour in (start_hour, end_hour):
-        if hour < 0 or hour > 23:
-            raise ValueError("hours must be in range 0-23")
+        validate_hour_bounds(hour)
     return start_hour, end_hour
+
+
+def validate_hour_bounds(hour: int) -> None:
+    if hour < 0 or hour > 23:
+        raise ValueError(f"hour must be in range 0-23, got {hour}")
+
+
+def is_hour_active(now_hour: int, start: int, end: int) -> bool:
+    validate_hour_bounds(now_hour)
+    validate_hour_bounds(start)
+    validate_hour_bounds(end)
+    if start <= end:
+        return start <= now_hour <= end
+    return now_hour >= start or now_hour <= end
+
+
+def run_self_checks() -> None:
+    # Non-wrapping range.
+    assert is_hour_active(8, 8, 17)
+    assert is_hour_active(17, 8, 17)
+    assert not is_hour_active(7, 8, 17)
+    # Cross-midnight range.
+    assert is_hour_active(23, 22, 7)
+    assert is_hour_active(3, 22, 7)
+    assert not is_hour_active(12, 22, 7)
+    # Single-hour range.
+    assert is_hour_active(0, 0, 0)
+    assert not is_hour_active(1, 0, 0)
+    # Late-night to early-morning range.
+    assert is_hour_active(23, 23, 2)
+    assert is_hour_active(1, 23, 2)
+    assert not is_hour_active(10, 23, 2)
+
+    for invalid_hour in (-1, 24):
+        try:
+            is_hour_active(invalid_hour, 8, 17)
+            raise AssertionError("expected ValueError for out-of-range hour")
+        except ValueError:
+            pass
 
 
 def validate_config() -> tuple[dict[str, object] | None, list[str]]:
@@ -92,6 +130,7 @@ def validate_config() -> tuple[dict[str, object] | None, list[str]]:
 def parse_args():
     parser = argparse.ArgumentParser(description="Pi-hole framebuffer dashboard")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
+    parser.add_argument("--self-test", action="store_true", help="Run active-hours self checks and exit")
     return parser.parse_args()
 
 
@@ -322,6 +361,12 @@ def draw_frame(stats, temp_c, uptime, active):
 # ---------- main ----------
 def main():
     args = parse_args()
+
+    if args.self_test:
+        run_self_checks()
+        print(f"[piholestats_v1.1.py] Self checks passed.")
+        return 0
+
     config, errors = validate_config()
     if errors:
         report_validation_errors("piholestats_v1.1.py", errors)
@@ -346,7 +391,7 @@ def main():
 
     while True:
         hr = time.localtime().tm_hour
-        active = (ACTIVE_HOURS[0] <= hr <= ACTIVE_HOURS[1])
+        active = is_hour_active(hr, ACTIVE_HOURS[0], ACTIVE_HOURS[1])
 
         s = fetch_pihole()
         if s["ok"]:
