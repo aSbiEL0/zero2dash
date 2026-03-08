@@ -454,6 +454,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Print discovered scripts and why each one is included/excluded, then exit.",
     )
+    parser.add_argument(
+        "--probe-touch",
+        action="store_true",
+        help="Probe touch input selection and print the chosen device/reason, then exit.",
+    )
     return parser.parse_args(argv)
 
 
@@ -634,51 +639,108 @@ def _has_touch_abs(event_path: str) -> bool:
     return bool(mask & (1 << ABS_X) or mask & (1 << ABS_MT_POSITION_X))
 
 
-def _touch_priority(event_path: str) -> tuple[int, int]:
+def _read_sysfs_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _capability_mask(event_path: str, capability: str) -> int:
+    raw = _read_sysfs_text(Path("/sys/class/input") / Path(event_path).name / "device" / "capabilities" / capability)
+    if not raw:
+        return 0
+    try:
+        return int(raw, 16)
+    except ValueError:
+        return 0
+
+
+def _touch_candidate_details(event_path: str) -> tuple[tuple[int, int, int, int], str]:
     base = Path("/sys/class/input") / Path(event_path).name / "device"
-    score = 0
-    try:
-        name = (base / "name").read_text(encoding="utf-8").strip().lower()
-        if "touch" in name:
-            score += 4
-    except Exception:
-        pass
+    name = _read_sysfs_text(base / "name")
+    name_lc = name.lower()
+    abs_mask = _capability_mask(event_path, "abs")
+    key_mask = _capability_mask(event_path, "key")
 
-    has_abs = _has_touch_abs(event_path)
-    if has_abs:
-        score += 3
+    has_abs_x = bool(abs_mask & (1 << ABS_X))
+    has_abs_mt_x = bool(abs_mask & (1 << ABS_MT_POSITION_X))
+    has_touch_abs = has_abs_x or has_abs_mt_x
+    has_btn_touch = bool(key_mask & (1 << BTN_TOUCH))
 
-    keycaps = Path("/sys/class/input") / Path(event_path).name / "device" / "capabilities" / "key"
-    try:
-        keymask = int(keycaps.read_text(encoding="utf-8").strip(), 16)
-        if keymask & (1 << BTN_TOUCH):
-            score += 3
-    except Exception:
-        pass
+    name_bonus = 0
+    if "touchscreen" in name_lc:
+        name_bonus = 5
+    elif "touch" in name_lc:
+        name_bonus = 3
+    elif "mouse" in name_lc or "keyboard" in name_lc:
+        name_bonus = -3
 
-    if not has_abs:
-        score -= 5
+    score = (7 if has_touch_abs else -7) + (5 if has_btn_touch else -1) + name_bonus
 
     match = re.search(r"event(\d+)$", event_path)
     index = int(match.group(1)) if match else 999
-    return score, -index
+
+    reason = (
+        f"score={score}; name='{name or 'unknown'}'; "
+        f"touch_abs={'yes' if has_touch_abs else 'no'} "
+        f"(ABS_X={'yes' if has_abs_x else 'no'}, ABS_MT_POSITION_X={'yes' if has_abs_mt_x else 'no'}); "
+        f"BTN_TOUCH={'yes' if has_btn_touch else 'no'}"
+    )
+    return (score, int(has_touch_abs), int(has_btn_touch), -index), reason
 
 
-def select_touch_device() -> str | None:
-    forced = os.environ.get("ROTATOR_TOUCH_DEVICE", "").strip()
-    if forced:
-        return forced if Path(forced).exists() else None
+def _resolve_forced_touch_device() -> tuple[str | None, str | None]:
+    forced = os.environ.get("TOUCH_DEVICE", "").strip() or os.environ.get("ROTATOR_TOUCH_DEVICE", "").strip()
+    if not forced:
+        return None, None
+
+    resolved = forced
+    if forced.startswith("event") and forced[5:].isdigit():
+        resolved = f"/dev/input/{forced}"
+
+    if Path(resolved).exists():
+        return resolved, f"forced by {'TOUCH_DEVICE' if os.environ.get('TOUCH_DEVICE', '').strip() else 'ROTATOR_TOUCH_DEVICE'}={forced}"
+    return None, f"configured override '{forced}' was not found"
+
+
+def touch_probe() -> tuple[str | None, str]:
+    forced_path, forced_reason = _resolve_forced_touch_device()
+    if forced_reason and forced_path is not None:
+        return forced_path, forced_reason
 
     candidates = sorted(glob.glob("/dev/input/event*"))
     if not candidates:
-        return None
+        return None, "no /dev/input/event* devices found"
 
-    ranked = sorted(((path, _touch_priority(path)) for path in candidates), key=lambda item: item[1], reverse=True)
-    best_path, best_score = ranked[0]
-    if best_score[0] <= 0:
-        print("[rotator] No suitable touch input device detected; touch controls disabled.", flush=True)
-        return None
-    return best_path
+    ranked: list[tuple[tuple[int, int, int, int], str, str]] = []
+    for path in candidates:
+        rank, reason = _touch_candidate_details(path)
+        ranked.append((rank, path, reason))
+    ranked.sort(reverse=True)
+
+    best_rank, best_path, best_reason = ranked[0]
+    if best_rank[0] <= 0:
+        details = "; ".join(f"{path}: {reason}" for _rank, path, reason in ranked)
+        return None, f"no candidates scored above zero ({details})"
+    return best_path, f"auto-selected highest rank ({best_reason})"
+
+
+def select_touch_device() -> str | None:
+    selected, reason = touch_probe()
+    if selected:
+        print(f"[rotator] Touch device selected: {selected} ({reason})", flush=True)
+        return selected
+
+    print(
+        (
+            "[rotator] Warning: no suitable touch input device found; touch controls disabled. "
+            f"Reason: {reason}. To force one, set TOUCH_DEVICE=/dev/input/eventX "
+            "(or ROTATOR_TOUCH_DEVICE for backward compatibility)."
+        ),
+        flush=True,
+    )
+    return None
 
 
 def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_width: int, tap_debounce_secs: float) -> None:
@@ -748,6 +810,25 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
         print(f"[rotator] Touch worker stopped ({device}): {exc}", flush=True)
 
 
+
+
+def run_touch_probe(default_width: int) -> int:
+    device, reason = touch_probe()
+    if device:
+        width, min_x = detect_touch_width(device, default_width)
+        print(f"[rotator] Touch probe selected {device}", flush=True)
+        print(f"[rotator] Probe reason: {reason}", flush=True)
+        print(f"[rotator] Probe width calibration: width={width} min_x={min_x}", flush=True)
+        return 0
+
+    print("[rotator] Touch probe found no usable device.", flush=True)
+    print(f"[rotator] Probe reason: {reason}", flush=True)
+    print(
+        "[rotator] Hint: export TOUCH_DEVICE=/dev/input/eventX to force the touchscreen device.",
+        flush=True,
+    )
+    return 1
+
 def main() -> int:
     args = parse_args(sys.argv[1:])
     base_dir = Path(__file__).resolve().parent
@@ -758,6 +839,9 @@ def main() -> int:
     quarantine_cycles = parse_quarantine_cycles()
     backoff_cap_secs = parse_backoff_max_secs()
     fbdev = os.environ.get("ROTATOR_FBDEV", DEFAULT_FBDEV)
+
+    if args.probe_touch:
+        return run_touch_probe(touch_width)
 
     pages = [
         resolved
