@@ -279,27 +279,106 @@ def authenticate(config: Config, log: Log) -> Credentials:
 
 def list_album_images(creds: Credentials, album_id: str, log: Log) -> list[dict[str, Any]]:
     service = build("photoslibrary", "v1", credentials=creds, cache_discovery=False)
+    return _list_album_images_from_service(service, album_id, log)
+
+
+def _list_album_images_from_service(service: Any, album_id: str, log: Log) -> list[dict[str, Any]]:
+    if not album_id:
+        raise ValueError("album_id is required")
 
     page_token: str | None = None
     images: list[dict[str, Any]] = []
+    page_count = 0
 
     while True:
+        page_count += 1
         body: dict[str, Any] = {"albumId": album_id, "pageSize": 100}
         if page_token:
             body["pageToken"] = page_token
 
-        response = service.albums().mediaItems().search(body=body).execute()
-        for item in response.get("mediaItems", []):
+        response = service.mediaItems().search(body=body).execute()
+        if not isinstance(response, dict):
+            raise ValueError("Google Photos API response must be a JSON object")
+
+        media_items = response.get("mediaItems", [])
+        if media_items is None:
+            media_items = []
+        if not isinstance(media_items, list):
+            raise ValueError("Google Photos API response field 'mediaItems' must be a list when present")
+
+        for item in media_items:
+            if not isinstance(item, dict):
+                continue
             mime = (item.get("mimeType") or "").lower()
             if mime.startswith("image/"):
                 images.append(item)
 
         page_token = response.get("nextPageToken")
+        if page_token is not None and not isinstance(page_token, str):
+            raise ValueError("Google Photos API response field 'nextPageToken' must be a string when present")
         if not page_token:
             break
 
-    log.debug(f"Album returned {len(images)} image media items")
+    log.debug(f"Album returned {len(images)} image media items across {page_count} pages")
     return images
+
+
+def smoke_check_list_fetch(log: Log) -> None:
+    class _Request:
+        def __init__(self, response: dict[str, Any]):
+            self._response = response
+
+        def execute(self) -> dict[str, Any]:
+            return self._response
+
+    class _MediaItems:
+        def __init__(self, pages: list[dict[str, Any]], calls: list[dict[str, Any]]):
+            self._pages = pages
+            self._calls = calls
+            self._index = 0
+
+        def search(self, body: dict[str, Any]) -> _Request:
+            self._calls.append(body)
+            if self._index >= len(self._pages):
+                raise AssertionError("search called more times than available pages")
+            response = self._pages[self._index]
+            self._index += 1
+            return _Request(response)
+
+    class _Service:
+        def __init__(self, pages: list[dict[str, Any]], calls: list[dict[str, Any]]):
+            self._media_items = _MediaItems(pages, calls)
+
+        def mediaItems(self) -> _MediaItems:
+            return self._media_items
+
+    calls: list[dict[str, Any]] = []
+    pages = [
+        {
+            "mediaItems": [
+                {"id": "a", "mimeType": "image/jpeg"},
+                {"id": "b", "mimeType": "video/mp4"},
+            ],
+            "nextPageToken": "token-2",
+        },
+        {
+            "mediaItems": [{"id": "c", "mimeType": "image/png"}],
+        },
+    ]
+    images = _list_album_images_from_service(_Service(pages, calls), "album-123", log)
+
+    if [item.get("id") for item in images] != ["a", "c"]:
+        raise AssertionError("Smoke check failed: expected image filtering and aggregation across pages")
+    if len(calls) != 2:
+        raise AssertionError("Smoke check failed: expected two paginated search calls")
+    if calls[0].get("albumId") != "album-123" or calls[1].get("albumId") != "album-123":
+        raise AssertionError("Smoke check failed: expected albumId in every search request")
+    if "pageToken" in calls[0]:
+        raise AssertionError("Smoke check failed: first request should not include pageToken")
+    if calls[1].get("pageToken") != "token-2":
+        raise AssertionError("Smoke check failed: second request must use nextPageToken from previous page")
+
+    log.info("List fetch smoke check passed")
 
 
 def extension_for_item(item: dict[str, Any]) -> str:
@@ -439,12 +518,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test", action="store_true", help="Render to /tmp/photos-shuffle-test.png instead of framebuffer")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logs")
     parser.add_argument("--check-config", action="store_true", help="Validate env configuration and exit")
+    parser.add_argument("--smoke-list-fetch", action="store_true", help="Run paginated list fetch smoke check and exit")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     log = Log(debug=args.debug)
+
+    if args.smoke_list_fetch:
+        try:
+            smoke_check_list_fetch(log)
+            return 0
+        except Exception as exc:
+            print(f"List fetch smoke check failed: {exc}")
+            return 1
 
     load_dotenv(DEFAULT_ROOT / ".env")
     config, errors = validate_config()
