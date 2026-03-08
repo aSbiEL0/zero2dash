@@ -43,10 +43,12 @@ import argparse
 import json
 import os
 import random
-import tempfile
+import socket
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from _config import get_env, report_validation_errors
 
@@ -113,6 +115,18 @@ class Log:
     def debug(self, message: str) -> None:
         if self.debug_enabled:
             print(f"[debug] {message}")
+
+
+class MediaDownloadError(RuntimeError):
+    pass
+
+
+class MediaDownloadPermanentError(MediaDownloadError):
+    pass
+
+
+class MediaDownloadTransientError(MediaDownloadError):
+    pass
 
 
 def _as_int(name: str, value: str) -> int:
@@ -438,20 +452,58 @@ def cache_path_for_item(cache_dir: Path, item: dict[str, Any]) -> Path:
 
 
 def download_to_cache(creds: Credentials, item: dict[str, Any], cache_path: Path, config: Config, log: Log) -> None:
+    from urllib.error import HTTPError, URLError
     base_url = item.get("baseUrl")
     if not base_url:
         raise ValueError("mediaItem missing baseUrl")
 
     sized_url = f"{base_url}=w{config.width * 2}-h{config.height * 2}"
+    split_url = urlsplit(sized_url)
+    query = dict(parse_qsl(split_url.query, keep_blank_values=True))
+    if creds.token and "access_token" not in query:
+        query["access_token"] = creds.token
+    media_url = urlunsplit(split_url._replace(query=urlencode(query)))
+
     from urllib.request import Request as UrlRequest, urlopen
 
-    req = UrlRequest(sized_url, headers={"Authorization": f"Bearer {creds.token}"})
-    with urlopen(req, timeout=20) as resp:  # nosec B310
-        data = resp.read()
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        req = UrlRequest(media_url, headers={"Authorization": f"Bearer {creds.token}"})
+        try:
+            with urlopen(req, timeout=20) as resp:  # nosec B310
+                status_code = getattr(resp, "status", 200)
+                if not 200 <= status_code < 300:
+                    raise MediaDownloadPermanentError(f"HTTP {status_code} for media download")
+                data = resp.read()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(data)
+            log.debug(f"Cached image: {cache_path}")
+            return
+        except HTTPError as exc:
+            status_code = exc.code
+            if 500 <= status_code < 600:
+                if attempt == max_attempts:
+                    raise MediaDownloadTransientError(
+                        f"Transient HTTP {status_code} after {max_attempts} attempts"
+                    ) from exc
+                time.sleep(0.5 * attempt)
+                continue
+            raise MediaDownloadPermanentError(f"HTTP {status_code} for media download") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            if attempt == max_attempts:
+                raise MediaDownloadTransientError(f"Timed out after {max_attempts} attempts") from exc
+            time.sleep(0.5 * attempt)
+            continue
+        except URLError as exc:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, (TimeoutError, socket.timeout)):
+                if attempt == max_attempts:
+                    raise MediaDownloadTransientError(f"Timed out after {max_attempts} attempts") from exc
+                time.sleep(0.5 * attempt)
+                continue
+            raise MediaDownloadPermanentError(f"URL error during media download: {exc}") from exc
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_bytes(data)
-    log.debug(f"Cached image: {cache_path}")
+    raise MediaDownloadTransientError(f"Media download failed after {max_attempts} attempts")
 
 
 def list_cached_images(cache_dir: Path) -> list[Path]:
