@@ -40,10 +40,12 @@ Credential precedence:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
 import socket
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,9 +67,7 @@ TEST_OUTPUT = Path("/tmp/photos-shuffle-test.png")
 LOGO_WIDTH_RATIO = 0.14
 LOGO_PADDING_RATIO = 0.03
 BRIGHTNESS_FACTOR = 0.75
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-DEFAULT_LOGO_RELATIVE_PATH = Path("images/goo-photos-icon.png")
+TOKEN_METADATA_SUFFIX = ".meta.json"
 
 CREDENTIAL_SOURCES_CHECKLIST = [
     "GOOGLE_PHOTOS_CLIENT_SECRETS_PATH file (env/.env; default: ~/zero2dash/client_secret.json)",
@@ -93,6 +93,83 @@ class Config:
     oauth_port: int
     oauth_open_browser: bool
     max_online_attempts: int
+
+
+def _scope_fingerprint(scopes: list[str]) -> str:
+    canonical = "\n".join(sorted(set(scopes)))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _token_metadata_path(token_path: Path) -> Path:
+    return token_path.with_name(f"{token_path.name}{TOKEN_METADATA_SUFFIX}")
+
+
+def _write_token_metadata(token_path: Path, provider: str, scopes: list[str]) -> None:
+    metadata_path = _token_metadata_path(token_path)
+    payload = {
+        "provider": provider,
+        "scopes": sorted(set(scopes)),
+        "scope_fingerprint": _scope_fingerprint(scopes),
+    }
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.chmod(metadata_path, 0o600)
+
+
+def _calendar_token_path() -> Path:
+    return Path(os.getenv("GOOGLE_TOKEN_PATH", "token.json")).expanduser().resolve()
+
+
+def _preflight_token_path_guard(token_path: Path, force_token_path_reuse: bool) -> None:
+    calendar_token_path = _calendar_token_path()
+    if token_path.resolve() != calendar_token_path:
+        return
+    if force_token_path_reuse:
+        print(
+            "[warning] GOOGLE_TOKEN_PATH_PHOTOS matches GOOGLE_TOKEN_PATH "
+            f"({token_path.resolve()}), but proceeding due to --force-token-path-reuse."
+        )
+        return
+    raise ValueError(
+        "Refusing to reuse a single token path for photos and calendar scripts. "
+        "Set GOOGLE_TOKEN_PATH_PHOTOS and GOOGLE_TOKEN_PATH to different files, "
+        "or pass --force-token-path-reuse to override intentionally."
+    )
+
+
+def _verify_token_metadata(token_path: Path, force_token_path_reuse: bool) -> None:
+    metadata_path = _token_metadata_path(token_path)
+    if not metadata_path.exists():
+        return
+
+    try:
+        metadata_payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[warning] Ignoring unreadable token metadata at {metadata_path.resolve()} ({exc}).")
+        return
+
+    expected_provider = "google_photos"
+    expected_fingerprint = _scope_fingerprint(SCOPES)
+    provider = str(metadata_payload.get("provider", "")).strip()
+    scope_fingerprint = str(metadata_payload.get("scope_fingerprint", "")).strip()
+
+    if provider == expected_provider and scope_fingerprint == expected_fingerprint:
+        return
+
+    mismatch_message = (
+        f"Token metadata mismatch for {token_path.resolve()} (found provider={provider or 'unknown'}, "
+        f"scope_fingerprint={scope_fingerprint or 'unknown'}; expected provider={expected_provider})."
+    )
+    remediation = (
+        "Remediation: set GOOGLE_TOKEN_PATH_PHOTOS to a dedicated photos token file and "
+        "set GOOGLE_TOKEN_PATH to a separate calendar token file. "
+        "If shared token usage is intentional, rerun with --force-token-path-reuse."
+    )
+
+    if force_token_path_reuse:
+        print(f"[warning] {mismatch_message} {remediation}")
+        return
+    raise ValueError(f"{mismatch_message} {remediation}")
 
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
@@ -179,7 +256,7 @@ def selected_credential_source(config: Config) -> str:
     return "none"
 
 
-def validate_config() -> tuple[Config | None, list[str]]:
+def validate_config(*, force_token_path_reuse: bool = False) -> tuple[Config | None, list[str]]:
     errors: list[str] = []
 
     def record(name: str, *, default: Any = None, required: bool = False, validator: Any = None) -> Any:
@@ -243,11 +320,12 @@ def validate_config() -> tuple[Config | None, list[str]]:
         max_online_attempts=int(max_online_attempts),
     )
 
-    calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
-    if config.token_path.resolve() == calendar_default_token:
+    calendar_token_path = _calendar_token_path()
+    if config.token_path.resolve() == calendar_token_path and not force_token_path_reuse:
         errors.append(
-            "GOOGLE_TOKEN_PATH_PHOTOS points to token.json, which is reserved for calendash-api.py. "
-            "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
+            "GOOGLE_TOKEN_PATH_PHOTOS points to the same file as GOOGLE_TOKEN_PATH, which is unsafe for "
+            "cross-script token reuse. Set GOOGLE_TOKEN_PATH_PHOTOS and GOOGLE_TOKEN_PATH to different files, "
+            "or use --force-token-path-reuse to override intentionally."
         )
 
     if not config.client_secrets_path.exists() and not (config.client_id and config.client_secret):
@@ -272,15 +350,11 @@ def load_config() -> Config:
     return config
 
 
-def authenticate(config: Config, log: Log) -> Credentials:
+def authenticate(config: Config, log: Log, *, force_token_path_reuse: bool = False) -> Credentials:
     creds: Credentials | None = None
 
-    calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
-    if config.token_path.resolve() == calendar_default_token:
-        raise ValueError(
-            "GOOGLE_TOKEN_PATH points to token.json, which is reserved for calendash-api.py. "
-            "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
-        )
+    _preflight_token_path_guard(config.token_path, force_token_path_reuse)
+    _verify_token_metadata(config.token_path, force_token_path_reuse)
 
     if config.token_path.exists():
         try:
@@ -352,6 +426,7 @@ def authenticate(config: Config, log: Log) -> Credentials:
             raise
 
     _write_token_atomically(config.token_path, creds.to_json())
+    _write_token_metadata(config.token_path, provider="google_photos", scopes=SCOPES)
     log.debug(f"Saved OAuth token to {config.token_path}")
     return creds
 
@@ -606,8 +681,8 @@ def write_framebuffer(img: Image.Image, fb_device: str, width: int, height: int)
         fb.write(payload)
 
 
-def choose_online_image(config: Config, log: Log) -> Path:
-    creds = authenticate(config, log)
+def choose_online_image(config: Config, log: Log, *, force_token_path_reuse: bool = False) -> Path:
+    creds = authenticate(config, log, force_token_path_reuse=force_token_path_reuse)
     items = list_album_images(creds, config.album_id, log)
     if not items:
         raise RuntimeError("No image media items found in album")
@@ -698,6 +773,11 @@ def parse_args() -> argparse.Namespace:
         help="Validate config (including credential-source precedence) and exit",
     )
     parser.add_argument("--smoke-list-fetch", action="store_true", help="Run paginated list fetch smoke check and exit")
+    parser.add_argument(
+        "--force-token-path-reuse",
+        action="store_true",
+        help="Allow GOOGLE_TOKEN_PATH_PHOTOS to match GOOGLE_TOKEN_PATH and bypass token metadata mismatch checks.",
+    )
     return parser.parse_args()
 
 
@@ -714,17 +794,18 @@ def main() -> int:
             return 1
 
     load_dotenv(DEFAULT_ROOT / ".env")
-    config, errors = validate_config()
+    config, errors = validate_config(force_token_path_reuse=args.force_token_path_reuse)
     if errors:
         report_validation_errors("photos-shuffle.py", errors)
         return 1
     assert config is not None
 
-    if not config.logo_path.exists():
-        attempted = ", ".join(str(path) for path in config.logo_attempted_paths)
-        log.info(
-            f"WARNING: LOGO_PATH not found; rendering without logo. Tried: {attempted}"
-        )
+    try:
+        _preflight_token_path_guard(config.token_path, args.force_token_path_reuse)
+        _verify_token_metadata(config.token_path, args.force_token_path_reuse)
+    except ValueError as exc:
+        print(exc)
+        return 1
 
     if args.check_config:
         print(f"[photos-shuffle.py] Credential source: {selected_credential_source(config)}")
@@ -733,7 +814,7 @@ def main() -> int:
 
     source_image: Path | None = None
     try:
-        source_image = choose_online_image(config, log)
+        source_image = choose_online_image(config, log, force_token_path_reuse=args.force_token_path_reuse)
     except Exception as exc:
         log.info(f"Online unavailable ({exc}); trying offline cache")
         try:
