@@ -38,6 +38,10 @@ DOUBLE_TAP_WINDOW_SECS = 0.35
 TAP_DEBOUNCE_SECS = 0.20
 DEFAULT_FB_BLANK_FAILURE_THRESHOLD = 3
 DEFAULT_POWER_SUMMARY_INTERVAL_SECS = 300
+DEFAULT_BACKOFF_STEPS = (10, 30, 60)
+DEFAULT_BACKOFF_MAX_SECS = 300
+DEFAULT_QUARANTINE_FAILURE_THRESHOLD = 3
+DEFAULT_QUARANTINE_CYCLES = 3
 
 # linux/input-event-codes.h
 EV_SYN = 0x00
@@ -355,6 +359,49 @@ def parse_tap_debounce() -> float:
     return max(0.0, value)
 
 
+def parse_quarantine_failure_threshold() -> int:
+    raw = os.environ.get("ROTATOR_QUARANTINE_FAILURE_THRESHOLD", str(DEFAULT_QUARANTINE_FAILURE_THRESHOLD)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = DEFAULT_QUARANTINE_FAILURE_THRESHOLD
+    return max(1, value)
+
+
+def parse_quarantine_cycles() -> int:
+    raw = os.environ.get("ROTATOR_QUARANTINE_CYCLES", str(DEFAULT_QUARANTINE_CYCLES)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = DEFAULT_QUARANTINE_CYCLES
+    return max(1, value)
+
+
+def parse_backoff_max_secs() -> int:
+    raw = os.environ.get("ROTATOR_BACKOFF_MAX_SECS", str(DEFAULT_BACKOFF_MAX_SECS)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = DEFAULT_BACKOFF_MAX_SECS
+    return max(1, value)
+
+
+def calculate_backoff_secs(consecutive_failures: int, backoff_cap_secs: int) -> int:
+    if consecutive_failures <= 0:
+        return 0
+    if consecutive_failures <= len(DEFAULT_BACKOFF_STEPS):
+        return min(DEFAULT_BACKOFF_STEPS[consecutive_failures - 1], backoff_cap_secs)
+    return min(DEFAULT_BACKOFF_STEPS[-1], backoff_cap_secs)
+
+
+def format_failure_reason(returncode: int | None) -> str:
+    if returncode is None:
+        return "process stopped without a return code"
+    if returncode < 0:
+        return f"terminated by signal {-returncode}"
+    return f"exit code {returncode}"
+
+
 def _candidate_absinfo_paths(device: str) -> list[Path]:
     event_name = Path(device).name
     base = Path("/sys/class/input") / event_name
@@ -581,6 +628,9 @@ def main() -> int:
     rotate_secs = parse_rotate_secs()
     touch_width = parse_width()
     tap_debounce_secs = parse_tap_debounce()
+    quarantine_failure_threshold = parse_quarantine_failure_threshold()
+    quarantine_cycles = parse_quarantine_cycles()
+    backoff_cap_secs = parse_backoff_max_secs()
     fbdev = os.environ.get("ROTATOR_FBDEV", DEFAULT_FBDEV)
 
     pages = [
@@ -616,18 +666,53 @@ def main() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
+    page_state = {
+        script: {
+            "consecutive_failures": 0,
+            "last_failure_ts": 0.0,
+            "retry_after": 0.0,
+            "quarantine_cycles_remaining": 0,
+        }
+        for script in pages
+    }
+
     index = 0
     while not stop_requested:
         script = pages[index]
+        state = page_state[script]
+        if state["quarantine_cycles_remaining"] > 0:
+            state["quarantine_cycles_remaining"] -= 1
+            print(
+                (
+                    f"[rotator] Quarantine skip: {script} "
+                    f"(remaining cycles: {state['quarantine_cycles_remaining']})"
+                ),
+                flush=True,
+            )
+            index = (index + 1) % len(pages)
+            continue
+
+        now = time.monotonic()
+        if state["retry_after"] > now:
+            retry_in = max(1, int(state["retry_after"] - now))
+            print(f"[rotator] Backoff skip: {script} (retry in {retry_in}s)", flush=True)
+            index = (index + 1) % len(pages)
+            continue
+
         active_child = launch_page(script)
 
         rotate_due = time.monotonic() + rotate_secs
         next_index = (index + 1) % len(pages)
+        early_exit = False
+        completed_full_duration = False
+        last_returncode: int | None = None
 
         while not stop_requested:
             if active_child.poll() is not None:
+                early_exit = True
+                last_returncode = active_child.returncode
                 print(
-                    f"[rotator] Page exited early with code {active_child.returncode}: {script}",
+                    f"[rotator] Page exited early with code {last_returncode}: {script}",
                     flush=True,
                 )
                 active_child = None
@@ -651,6 +736,7 @@ def main() -> int:
                 break
 
             if time.monotonic() >= rotate_due:
+                completed_full_duration = True
                 break
 
             try:
@@ -669,6 +755,40 @@ def main() -> int:
 
         stop_child(active_child)
         active_child = None
+
+        if early_exit:
+            state["consecutive_failures"] += 1
+            state["last_failure_ts"] = time.time()
+            backoff_secs = calculate_backoff_secs(state["consecutive_failures"], backoff_cap_secs)
+            state["retry_after"] = time.monotonic() + backoff_secs
+            reason = format_failure_reason(last_returncode)
+            retry_wall_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() + backoff_secs))
+            print(
+                (
+                    f"[rotator] Failure recorded for {script}: {reason}; "
+                    f"consecutive_failures={state['consecutive_failures']} "
+                    f"next_retry={retry_wall_time}"
+                ),
+                flush=True,
+            )
+
+            if state["consecutive_failures"] >= quarantine_failure_threshold:
+                state["quarantine_cycles_remaining"] = quarantine_cycles
+                print(
+                    (
+                        f"[rotator] Quarantining {script} for {quarantine_cycles} cycles "
+                        f"after {state['consecutive_failures']} consecutive failures."
+                    ),
+                    flush=True,
+                )
+        elif completed_full_duration:
+            if state["consecutive_failures"] > 0 or state["quarantine_cycles_remaining"] > 0:
+                print(f"[rotator] Resetting failure counters after successful run: {script}", flush=True)
+            state["consecutive_failures"] = 0
+            state["last_failure_ts"] = 0.0
+            state["retry_after"] = 0.0
+            state["quarantine_cycles_remaining"] = 0
+
         index = next_index
 
     stop_evt.set()
