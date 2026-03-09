@@ -534,14 +534,10 @@ def download_to_cache(creds: Credentials, item: dict[str, Any], cache_path: Path
     log.debug(f"Cached image: {cache_path}")
 
 
-def list_image_files(directory: Path, *, recursive: bool = False) -> list[Path]:
-    if not directory.exists():
+def list_cached_images(cache_dir: Path) -> list[Path]:
+    if not cache_dir.exists():
         return []
     allowed = {".jpg", ".jpeg", ".png", ".webp"}
-<<<<<<< HEAD
-    iterator = directory.rglob("*") if recursive else directory.iterdir()
-    return sorted(p for p in iterator if p.is_file() and p.suffix.lower() in allowed)
-=======
     return [p for p in cache_dir.iterdir() if p.is_file() and p.suffix.lower() in allowed]
 
 def load_drive_inventory(state_path: Path) -> dict[str, dict[str, str]]:
@@ -574,7 +570,6 @@ def list_drive_managed_images(config: Config, log: Log) -> list[Path]:
             log.debug(f"Drive inventory entry {item_id} points to missing file {candidate}")
     return managed
 
->>>>>>> 89ce8b64a418bdd7d711529e6db19f2c42095322
 
 def center_crop_fill(img: Image.Image, width: int, height: int) -> Image.Image:
     src_w, src_h = img.size
@@ -637,9 +632,6 @@ def write_framebuffer(img: Image.Image, fb_device: str, width: int, height: int)
 
 
 def choose_local_image(config: Config, log: Log) -> Path:
-<<<<<<< HEAD
-    local_images = list_image_files(config.local_photos_dir, recursive=True)
-=======
     if config.drive_folder_id:
         drive_images = list_drive_managed_images(config, log)
         if not drive_images:
@@ -651,7 +643,6 @@ def choose_local_image(config: Config, log: Log) -> Path:
         return chosen
 
     local_images = list_cached_images(config.local_photos_dir)
->>>>>>> 89ce8b64a418bdd7d711529e6db19f2c42095322
     if not local_images:
         raise RuntimeError(f"Local photos directory empty: {config.local_photos_dir}")
     chosen = random.choice(local_images)
@@ -687,7 +678,7 @@ def choose_online_image(config: Config, log: Log) -> Path:
 
 
 def choose_offline_image(config: Config, log: Log) -> Path:
-    cached = list_image_files(config.cache_dir)
+    cached = list_cached_images(config.cache_dir)
     if not cached:
         raise RuntimeError("Offline cache empty")
     chosen = random.choice(cached)
@@ -791,9 +782,6 @@ if __name__ == "__main__":
 
 
 
-<<<<<<< HEAD
-=======
 
 
 
->>>>>>> 89ce8b64a418bdd7d711529e6db19f2c42095322
