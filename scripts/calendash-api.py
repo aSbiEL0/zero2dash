@@ -566,10 +566,17 @@ def get_credentials(
             raise RuntimeError(
                 "Authenticated token does not include required calendar scopes. Ensure consent grants calendar.readonly access."
             )
+<<<<<<< HEAD
     except Exception as exc:
         exc_text = str(exc).lower()
         if "redirect_uri_mismatch" in exc_text:
             logging.error("OAuth redirect mismatch. Expected redirect URI: %s", expected_redirect_uri(oauth_port))
+=======
+        save_credentials(creds, token_path)
+        return creds
+    except Exception as exc:
+        exc_text = str(exc).lower()
+>>>>>>> 89ce8b64a418bdd7d711529e6db19f2c42095322
         if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
             logging.error(
                 "Google blocked this OAuth client. For calendar, use a Desktop OAuth client and add your account as a test user on the consent screen."
@@ -578,8 +585,6 @@ def get_credentials(
         for message in loopback_oauth_guidance(oauth_port):
             logging.error(message)
         raise RuntimeError("Loopback OAuth setup failed.") from exc
-    save_credentials(creds, token_path)
-    return creds
 
 
 def parse_event_start(raw_event: dict[str, Any], tz_obj: pytz.BaseTzInfo) -> tuple[datetime, bool]:

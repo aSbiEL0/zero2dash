@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Pi-hole TFT Dashboard -> direct framebuffer RGB565 (no X, no SDL)
-# Version 1.2.2 - shared API diagnostics and stricter payload handling
+# Version 1.1.1 - legacy daytime variant with shared API diagnostics
 
 from __future__ import annotations
 
@@ -22,12 +22,12 @@ from _config import get_env, report_validation_errors
 from pihole_api import PiHoleClient, detect_auth_mode
 
 DEFAULT_ROOT = Path('~/zero2dash').expanduser()
-SCRIPT_NAME = 'piholestats_v1.2.py'
+SCRIPT_NAME = 'piholestats_v1.1.py'
 
 FBDEV = '/dev/fb1'
 W, H = 320, 240
 REFRESH_SECS = 3
-ACTIVE_HOURS = (22, 7)
+ACTIVE_HOURS = (7, 22)
 
 PIHOLE_HOST = '127.0.0.1'
 PIHOLE_SCHEME = ''
@@ -38,12 +38,12 @@ PIHOLE_API_TOKEN = ''
 PIHOLE_AUTH_MODE = ''
 TITLE = 'Pi-hole'
 COL_BG = (0, 0, 0)
-COL_TXT = (140, 140, 140)
-COL_OK = (0, 20, 50)
-COL_BAD = (50, 0, 0)
-COL_MIX = (80, 50, 0)
-COL_TEMP = (0, 40, 25)
-COL_UP = (24, 12, 40)
+COL_TXT = (200, 200, 200)
+COL_OK = (0, 45, 100)
+COL_BAD = (100, 10, 10)
+COL_MIX = (150, 100, 0)
+COL_TEMP = (0, 85, 50)
+COL_UP = (60, 30, 100)
 
 REQUEST_TIMEOUT = 4.0
 OUTPUT_IMAGE = ''
@@ -383,6 +383,13 @@ def draw_frame(stats: dict[str, object], temp_c: float | None, uptime: str, acti
         value_w, value_h = text_size(draw, str(value), val_font)
         draw.text((rect[0] + (rect[2] - value_w) // 2, rect[1] + (rect[3] - value_h) // 2), str(value), font=val_font, fill=COL_TXT)
 
+    if not active:
+        draw.rounded_rectangle([margin, margin, W - margin, H - margin], radius=12, fill=(20, 20, 20))
+        message = f'{TITLE}: Sleeping'
+        width, height = text_size(draw, message, mid)
+        draw.text(((W - width) // 2, (H - height) // 2), message, font=mid, fill=(180, 180, 180))
+        return img
+
     total = int(stats['total'])
     blocked = int(stats['blocked'])
     percent = float(stats['percent']) if total > 0 else 0.0
@@ -439,21 +446,6 @@ def main() -> int:
         return 1
 
     cached: dict[str, object] = {'total': 0, 'blocked': 0, 'percent': 0.0, 'ok': False, 'status': 'INIT'}
-    try:
-        if PIHOLE_CLIENT is not None:
-            PIHOLE_CLIENT.fetch()
-    except Exception:
-        pass
-
-    hour = time.localtime().tm_hour
-    active = is_hour_active(hour, ACTIVE_HOURS[0], ACTIVE_HOURS[1])
-    temp_c = read_temp_c()
-    uptime = read_uptime_str()
-    fb_write(draw_frame(cached, temp_c, uptime, active))
-
-    if OUTPUT_IMAGE:
-        print(f'[{SCRIPT_NAME}] Rendered test frame to {OUTPUT_IMAGE}.')
-        return 0
 
     while True:
         hour = time.localtime().tm_hour
@@ -465,6 +457,9 @@ def main() -> int:
             cached = {**cached, **{k: v for k, v in stats.items() if k in {'ok', 'status', 'failure', 'source'}}}
         frame = draw_frame(cached, read_temp_c(), read_uptime_str(), active)
         fb_write(frame)
+        if OUTPUT_IMAGE:
+            print(f'[{SCRIPT_NAME}] Rendered test frame to {OUTPUT_IMAGE}.')
+            return 0
         time.sleep(REFRESH_SECS)
 
 
@@ -473,3 +468,5 @@ if __name__ == '__main__':
         raise SystemExit(main())
     except KeyboardInterrupt:
         pass
+
+

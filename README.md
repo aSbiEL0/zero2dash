@@ -30,14 +30,19 @@ Use the following names as the **source of truth** for systemd-managed runtime m
 zero2dash/
 ├── display_rotator.py
 ├── scripts/
+│   ├── _config.py
+│   ├── pihole_api.py
 │   ├── pihole-display-pre.sh
 │   ├── piholestats_v1.1.py      # legacy daytime variant
 │   ├── piholestats_v1.2.py      # canonical dark-mode service target
+│   ├── piholestats_v1.3.py
 │   ├── calendash-api.py
 │   ├── calendash-img.py
 │   ├── currency-rate.py
 │   ├── currency.py
 │   ├── photos-shuffle.py
+│   ├── drive-sync.py
+│   └── photo-resize.py
 ├── systemd/
 │   ├── display.service
 │   ├── pihole-display-dark.service

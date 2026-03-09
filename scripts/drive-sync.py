@@ -42,6 +42,8 @@ class Config:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sync a shared Google Drive folder into LOCAL_PHOTOS_DIR.")
     parser.add_argument("--check-config", action="store_true", help="Validate configuration and exit")
+    parser.add_argument("--list-remote", action="store_true", help="List the remote Drive images for GOOGLE_DRIVE_FOLDER_ID and exit")
+    parser.add_argument("--debug", action="store_true", help="Print per-file diagnostic output")
     parser.add_argument("--skip-resize", action="store_true", help="Skip the follow-up resize step")
     return parser.parse_args()
 
@@ -160,6 +162,17 @@ def list_folder_images(creds, folder_id: str) -> list[dict[str, str]]:
     return [item for item in images if item["id"]]
 
 
+def print_remote_inventory(folder_id: str, items: list[dict[str, str]], *, debug: bool = False) -> None:
+    print(f"[drive-sync.py] Drive folder {folder_id}: {len(items)} image file(s) discovered.")
+    for item in items:
+        if debug:
+            print(
+                f"  - id={item['id']} name={item['name']} mimeType={item['mimeType']} modifiedTime={item['modifiedTime']}"
+            )
+        else:
+            print(f"  - {item['name']} ({item['id']})")
+
+
 def safe_stem(name: str) -> str:
     stem = Path(name).stem or "image"
     return re.sub(r"[^A-Za-z0-9._-]+", "-", stem).strip("-._") or "image"
@@ -199,9 +212,12 @@ def run_resize(config: Config) -> None:
         raise RuntimeError(f"Resize step failed with exit code {result.returncode}")
 
 
-def sync_drive(config: Config) -> None:
+def sync_drive(config: Config, *, debug: bool = False) -> None:
     creds = build_credentials(config)
     items = list_folder_images(creds, config.folder_id)
+    print(f"[drive-sync.py] Syncing Drive folder {config.folder_id} into {config.local_photos_dir}")
+    if debug:
+        print_remote_inventory(config.folder_id, items, debug=True)
     config.local_photos_dir.mkdir(parents=True, exist_ok=True)
 
     state = load_state(config.state_path)
@@ -219,12 +235,18 @@ def sync_drive(config: Config) -> None:
             previous_target.unlink()
         if previous.get("modifiedTime") == item["modifiedTime"] and target.exists():
             skipped += 1
+            if debug:
+                print(f"[drive-sync.py] SKIP   id={item['id']} name={item['name']} target={target.name}")
         else:
             download_file(creds, item["id"], target)
             downloaded += 1
+            if debug:
+                print(f"[drive-sync.py] FETCH  id={item['id']} name={item['name']} target={target.name}")
         next_state[item["id"]] = {
             "modifiedTime": item["modifiedTime"],
             "local_name": target.name,
+            "name": item["name"],
+            "mimeType": item["mimeType"],
         }
 
     stale_ids = set(state) - set(next_state)
@@ -234,6 +256,8 @@ def sync_drive(config: Config) -> None:
         if stale_path and stale_path.exists() and stale_path.name.startswith("drive-"):
             stale_path.unlink()
             removed += 1
+            if debug:
+                print(f"[drive-sync.py] REMOVE id={stale_id} target={stale_path.name}")
 
     save_state(config.state_path, next_state)
     print(f"[drive-sync.py] Synced {len(items)} images: downloaded={downloaded}, skipped={skipped}, removed={removed}.")
@@ -251,9 +275,16 @@ def main() -> int:
         print("[drive-sync.py] Configuration check passed.")
         return 0
 
-    sync_drive(config)
+    creds = build_credentials(config)
+    items = list_folder_images(creds, config.folder_id)
+    if args.list_remote:
+        print_remote_inventory(config.folder_id, items, debug=args.debug)
+        return 0
+
+    sync_drive(config, debug=args.debug)
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
