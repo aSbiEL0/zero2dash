@@ -11,9 +11,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Callable
-
-from PIL import Image
+from typing import Any, Callable
 
 DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "current-currency.png"
 DEFAULT_REFRESH_SCRIPT = Path(__file__).resolve().parent / "currency-rate.py"
@@ -21,10 +19,9 @@ FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 REFRESH_WAIT_SECS = 30.0
-RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
 
-def rgb888_to_rgb565(image: Image.Image) -> bytes:
+def rgb888_to_rgb565(image: Any) -> bytes:
     r, g, b = image.split()
     r = r.point(lambda value: value >> 3)
     g = g.point(lambda value: value >> 2)
@@ -38,13 +35,16 @@ def rgb888_to_rgb565(image: Image.Image) -> bytes:
     return bytes(rgb565)
 
 
-def load_frame(image_path: Path, width: int, height: int) -> Image.Image:
+def load_frame(image_path: Path, width: int, height: int) -> Any:
+    from PIL import Image
+
+    resampling_lanczos = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
     if not image_path.exists():
         raise FileNotFoundError(f"Currency image not found: {image_path}")
-    return Image.open(image_path).convert("RGB").resize((width, height), RESAMPLING_LANCZOS)
+    return Image.open(image_path).convert("RGB").resize((width, height), resampling_lanczos)
 
 
-def write_to_framebuffer(image: Image.Image, fbdev: str, width: int, height: int) -> None:
+def write_to_framebuffer(image: Any, fbdev: str, width: int, height: int) -> None:
     payload = rgb888_to_rgb565(image)
     expected = width * height * 2
     if len(payload) != expected:
@@ -146,7 +146,7 @@ def main() -> int:
         frame.save(args.output)
         print(f"Saved preview image to {args.output}")
 
-    if args.no-framebuffer:
+    if args.no_framebuffer:
         print("Skipping framebuffer write (--no-framebuffer set)")
         return 0
 

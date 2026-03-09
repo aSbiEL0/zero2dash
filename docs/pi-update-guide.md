@@ -6,7 +6,7 @@ This guide walks you through safely updating a Pi that already runs `zero2dash`,
 
 ```bash
 ssh pi@<pi-ip>
-sudo systemctl stop display.service pihole-display-dark.service day.timer night.timer currency-update.timer
+sudo systemctl stop display.service pihole-display-dark.service currency-update.service day.timer night.timer currency-update.timer
 sudo mkdir -p /opt/backups
 sudo tar -czf /opt/backups/zero2dash-$(date +%F-%H%M).tgz /opt/zero2dash
 ```
@@ -112,15 +112,17 @@ sudo systemctl start pihole-display-dark.service
 ```bash
 systemctl status display.service --no-pager
 systemctl status pihole-display-dark.service --no-pager
-systemctl list-timers --all | grep -E 'day.timer|night.timer'
+systemctl status currency-update.service --no-pager
+systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.timer'
 journalctl -u display.service -n 50 --no-pager
 journalctl -u pihole-display-dark.service -n 50 --no-pager
+journalctl -u currency-update.service -n 50 --no-pager
 ```
 
 ## 8) Quick rollback (if needed)
 
 ```bash
-sudo systemctl stop display.service pihole-display-dark.service
+sudo systemctl stop display.service pihole-display-dark.service currency-update.service
 sudo rm -rf /opt/zero2dash
 sudo tar -xzf /opt/backups/<backup-file>.tgz -C /
 sudo systemctl daemon-reload
@@ -130,4 +132,5 @@ sudo systemctl start display.service
 ## Notes about the IDE `.env` path in your context
 
 Your IDE referenced a Windows path (`C:/Users/Default.DESKTOP-MR88P09/.env`). For the Pi runtime, the file that matters is `/opt/zero2dash/.env` because that is what the systemd units load.
+
 

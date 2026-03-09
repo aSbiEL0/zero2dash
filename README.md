@@ -13,19 +13,17 @@ Use the following names as the **source of truth** for systemd-managed runtime m
 | Service name | Script target | Mode |
 | --- | --- | --- |
 | `display.service` | `display_rotator.py` | **Day rotator** (multi-page cycle, touch navigation) |
-| pihole-display-dark.service | scripts/piholestats_v1.2.py | **Night dark mode** (single Pi-hole dashboard) |
-| currency-update.service | scripts/currency-rate.py | **06:00 currency image refresh** |
-
+| `pihole-display-dark.service` | `scripts/piholestats_v1.2.py` | **Night dark mode** (single Pi-hole dashboard) |
+| `currency-update.service` | `scripts/currency-rate.py` | **06:00 currency image refresh** |
 ### Compatibility table (service → script → mode)
 
 | Service | Script path | Mode / status |
 | --- | --- | --- |
 | `display.service` | `/opt/zero2dash/display_rotator.py` | Canonical day mode |
-| pihole-display-dark.service | /opt/zero2dash/scripts/piholestats_v1.2.py | Canonical night mode |
-| currency-update.service | /opt/zero2dash/scripts/currency-rate.py | Daily GBP/PLN image refresh |
+| `pihole-display-dark.service` | `/opt/zero2dash/scripts/piholestats_v1.2.py` | Canonical night mode |
+| `currency-update.service` | `/opt/zero2dash/scripts/currency-rate.py` | Daily GBP/PLN image refresh |
 | `day-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `display.service` |
 | `dark-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `pihole-display-dark.service` |
-
 ## Repository layout
 
 ```text
@@ -37,10 +35,14 @@ zero2dash/
 │   ├── piholestats_v1.2.py      # canonical dark-mode service target
 │   ├── calendash-api.py
 │   ├── calendash-img.py
+│   ├── currency-rate.py
+│   ├── currency.py
 │   ├── photos-shuffle.py
 ├── systemd/
 │   ├── display.service
 │   ├── pihole-display-dark.service
+│   ├── currency-update.service
+│   ├── currency-update.timer
 │   ├── day.timer
 │   └── night.timer
 └── README.md
@@ -131,6 +133,7 @@ Useful checks:
 ```sh
 journalctl -u display.service -n 50 --no-pager
 journalctl -u pihole-display-dark.service -n 50 --no-pager
+journalctl -u currency-update.service -n 50 --no-pager
 ```
 
 
@@ -165,13 +168,16 @@ python3 scripts/photos-shuffle.py --test
 
 ## Notes
 
-- `display_rotator.py` excludes `piholestats_v1.2.py`, `calendash-api.py`, `_config.py`, `drive-sync.py`, and `photo-resize.py` by default so helper scripts do not end up in the day rotator.
+- `display_rotator.py` excludes `piholestats_v1.2.py`, `calendash-api.py`, `currency-rate.py`, `_config.py`, `drive-sync.py`, and `photo-resize.py` by default so helper scripts do not end up in the day rotator.
 - `calendash-img.py` is a rotator-friendly page script, not a systemd service unit by itself.
+- `currency-rate.py` is the scheduled generator; `currency.py` is the rotator-friendly page script that only displays the generated image.
 
 
 ### Framebuffer overrides in systemd
 
 Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
+
+
 
 
 

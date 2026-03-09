@@ -566,6 +566,10 @@ def get_credentials(
             raise RuntimeError(
                 "Authenticated token does not include required calendar scopes. Ensure consent grants calendar.readonly access."
             )
+    except Exception as exc:
+        exc_text = str(exc).lower()
+        if "redirect_uri_mismatch" in exc_text:
+            logging.error("OAuth redirect mismatch. Expected redirect URI: %s", expected_redirect_uri(oauth_port))
         if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
             logging.error(
                 "Google blocked this OAuth client. For calendar, use a Desktop OAuth client and add your account as a test user on the consent screen."
