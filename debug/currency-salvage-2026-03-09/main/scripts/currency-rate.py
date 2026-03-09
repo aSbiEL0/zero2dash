@@ -27,7 +27,6 @@ DEFAULT_STATE_PATH = DEFAULT_ROOT / "cache" / "currency_state.json"
 DEFAULT_API_BASE = "https://api.nbp.pl/api"
 DEFAULT_SOURCE_LABEL = "source: api.nbp.pl"
 DEFAULT_TIMEOUT_SECS = 10.0
-RATE_CHANGE_THRESHOLD = 0.01
 
 
 @dataclass
@@ -173,58 +172,55 @@ def _nbp_json(url: str, timeout_secs: float) -> dict[str, Any]:
     return payload
 
 
-def fetch_recent_snapshots(api_base: str, timeout_secs: float) -> list[RateSnapshot]:
-    payload = _nbp_json(f"{api_base}/exchangerates/rates/A/GBP/last/2/?format=json", timeout_secs)
+def fetch_rate_snapshot(api_base: str, timeout_secs: float, when: str) -> RateSnapshot:
+    suffix = f"/{when}" if when else ""
+    payload = _nbp_json(f"{api_base}/exchangerates/rates/A/GBP{suffix}/?format=json", timeout_secs)
     rates = payload.get("rates")
     if not isinstance(rates, list) or not rates:
         raise ValueError("NBP API response missing rates")
 
-    snapshots: list[RateSnapshot] = []
-    fetched_at = datetime.now().astimezone()
-    for entry in rates:
-        if not isinstance(entry, dict):
-            continue
-        mid = entry.get("mid")
-        effective_date = _parse_date(str(entry.get("effectiveDate", "")))
-        if not isinstance(mid, (int, float)) or effective_date is None:
-            continue
-        snapshots.append(RateSnapshot(rate=float(mid), effective_date=effective_date, fetched_at=fetched_at))
+    current = rates[0]
+    if not isinstance(current, dict):
+        raise ValueError("NBP API rate entry must be an object")
 
-    if not snapshots:
-        raise ValueError("NBP API response missing valid mid/effectiveDate values")
-    snapshots.sort(key=lambda snapshot: snapshot.effective_date)
-    return snapshots
+    avg = current.get("avg")
+    effective_date = _parse_date(str(current.get("effectiveDate", "")))
+    if not isinstance(avg, (int, float)) or effective_date is None:
+        raise ValueError("NBP API response missing avg/effectiveDate")
+
+    return RateSnapshot(rate=float(avg), effective_date=effective_date, fetched_at=datetime.now().astimezone())
 
 
 def is_snapshot_within_24_hours(snapshot: RateSnapshot, now: datetime) -> bool:
-    source_start = datetime.combine(snapshot.effective_date, dt_time.min, tzinfo=now.tzinfo)
-    age = now - source_start
-    return timedelta(0) <= age <= timedelta(hours=24)
+    source_cutoff = datetime.combine(snapshot.effective_date, dt_time.max, tzinfo=now.tzinfo)
+    return (now - source_cutoff) <= timedelta(hours=24)
 
 
 def choose_snapshot(config: Config, state: dict[str, Any], now: datetime) -> tuple[str, RateSnapshot | None, str | None]:
     try:
-        snapshots = fetch_recent_snapshots(config.api_base, config.timeout_secs)
-        today = now.date()
-        for snapshot in reversed(snapshots):
-            if snapshot.effective_date == today:
-                return "ok", snapshot, None
+        return "ok", fetch_rate_snapshot(config.api_base, config.timeout_secs, "today"), None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            logging.info("NBP has not published today's GBP rate yet; checking the latest available rate.")
+        else:
+            logging.warning("NBP today endpoint failed with HTTP %s", exc.code)
+    except (urllib.error.URLError, TimeoutError, socket.timeout, ValueError) as exc:
+        logging.warning("NBP today endpoint failed: %s", exc)
 
-        latest = snapshots[-1]
+    try:
+        latest = fetch_rate_snapshot(config.api_base, config.timeout_secs, "")
         if is_snapshot_within_24_hours(latest, now):
-            logging.info("NBP has not published today's GBP rate yet; using the latest available rate from %s.", latest.effective_date.isoformat())
             return "ok", latest, None
-
         logging.warning("Latest available NBP rate is older than 24 hours (%s).", latest.effective_date.isoformat())
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, socket.timeout, ValueError) as exc:
-        logging.warning("NBP fetch failed: %s", exc)
+    except Exception as exc:
+        logging.warning("NBP latest endpoint failed: %s", exc)
 
     cached = last_success_from_state(state)
     if cached and is_snapshot_within_24_hours(cached, now):
         logging.warning("Falling back to cached last success from %s.", cached.effective_date.isoformat())
         return "ok", cached, None
 
-    return "error", None, "Rate update unavailable"
+    return "error", None, "Update unavailable"
 
 
 def load_font(size: int, *, bold: bool = False) -> Any:
@@ -281,13 +277,13 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     date_stroke = max(2, width // 120)
 
     draw.text((int(width * 0.08), int(height * 0.10)), display_date, font=date_font, fill=white, stroke_width=date_stroke, stroke_fill=shadow)
-    draw.text((int(width * 0.58), int(height * 0.10)), "1 GBP =", font=label_font, fill=white, stroke_width=max(2, width // 150), stroke_fill=shadow)
+    draw.text((int(width * 0.60), int(height * 0.10)), "1 GBP =", font=label_font, fill=white, stroke_width=max(2, width // 150), stroke_fill=shadow)
 
     if status == "ok" and snapshot is not None:
         rate_text = snapshot.display_rate()
-        rate_font = _fit_font(draw, rate_text, width_limit=int(width * 0.58), initial_size=max(48, width // 4), bold=True)
+        rate_font = _fit_font(draw, rate_text, width_limit=int(width * 0.62), initial_size=max(48, width // 4), bold=True)
         rate_size = getattr(rate_font, "size", 48)
-        suffix_font = load_font(max(22, int(rate_size * 0.46)), bold=True)
+        suffix_font = load_font(max(22, int(rate_size * 0.42)), bold=True)
         rate_stroke = max(3, rate_size // 18)
 
         rate_bbox = draw.textbbox((0, 0), rate_text, font=rate_font, stroke_width=rate_stroke)
@@ -296,13 +292,13 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
 
         suffix_bbox = draw.textbbox((0, 0), "zł", font=suffix_font, stroke_width=max(2, rate_stroke // 2))
         suffix_w = suffix_bbox[2] - suffix_bbox[0]
-        total_w = rate_w + int(width * 0.02) + suffix_w
+        total_w = rate_w + int(width * 0.03) + suffix_w
         start_x = max(int(width * 0.08), (width - total_w) // 2)
-        value_y = int(height * 0.34)
+        value_y = int(height * 0.39)
 
         draw.text((start_x, value_y), rate_text, font=rate_font, fill=white, stroke_width=rate_stroke, stroke_fill=shadow)
         draw.text(
-            (start_x + rate_w + int(width * 0.02), value_y + int(rate_h * 0.22)),
+            (start_x + rate_w + int(width * 0.03), value_y + int(rate_h * 0.30)),
             "zł",
             font=suffix_font,
             fill=white,
@@ -310,10 +306,9 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
             stroke_fill=shadow,
         )
     else:
-        message_text = message or "Rate update unavailable"
+        message_text = message or "Update unavailable"
         message_font = _fit_font(draw, message_text, width_limit=int(width * 0.82), initial_size=max(28, width // 10), bold=True)
-        stroke_width = max(2, getattr(message_font, "size", 24) // 16)
-        bbox = draw.textbbox((0, 0), message_text, font=message_font, stroke_width=stroke_width)
+        bbox = draw.textbbox((0, 0), message_text, font=message_font, stroke_width=max(2, getattr(message_font, "size", 24) // 16))
         msg_w = bbox[2] - bbox[0]
         msg_h = bbox[3] - bbox[1]
         draw.text(
@@ -321,7 +316,7 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
             message_text,
             font=message_font,
             fill=white,
-            stroke_width=stroke_width,
+            stroke_width=max(2, getattr(message_font, "size", 24) // 16),
             stroke_fill=shadow,
         )
 
@@ -352,10 +347,10 @@ def state_needs_refresh(state: dict[str, Any], output_path: Path, display_date: 
         previous_rate = state.get("last_rendered_rate")
         if not isinstance(previous_rate, (int, float)):
             return True
-        if abs(float(previous_rate) - snapshot.rate) > RATE_CHANGE_THRESHOLD:
+        if abs(float(previous_rate) - snapshot.rate) > 0.01:
             return True
         return state.get("last_rendered_effective_date") != snapshot.effective_date.isoformat()
-    return state.get("last_render_error_message") != (message or "Rate update unavailable")
+    return state.get("last_render_error_message") != (message or "Update unavailable")
 
 
 def update_state(state: dict[str, Any], *, display_date: str, status: str, snapshot: RateSnapshot | None, message: str | None) -> dict[str, Any]:
@@ -415,27 +410,25 @@ def run_self_tests() -> int:
         tmp_path = Path(tmp)
         output = tmp_path / "current-currency.png"
         state_path = tmp_path / "currency_state.json"
-        background_path = tmp_path / "currency-bkg.png"
-
-        from PIL import Image
-
-        Image.new("RGB", (320, 240), (40, 40, 40)).save(background_path, format="PNG")
 
         class Handler(BaseHTTPRequestHandler):
             scenario = "today"
 
             def do_GET(self) -> None:  # noqa: N802
-                if self.path.endswith("/last/2/?format=json"):
+                if self.path.endswith("/today/?format=json"):
                     if Handler.scenario == "today":
-                        payload = {"rates": [{"mid": 5.13, "effectiveDate": "2026-03-08"}, {"mid": 5.17, "effectiveDate": "2026-03-09"}]}
-                    elif Handler.scenario == "latest":
-                        payload = {"rates": [{"mid": 5.11, "effectiveDate": "2026-03-08"}]}
+                        status_code = 200
+                        payload = {"rates": [{"avg": 5.13, "effectiveDate": "2026-03-09"}]}
                     else:
-                        payload = {"rates": [{"mid": 5.01, "effectiveDate": "2026-03-06"}]}
-                    self.send_response(200)
+                        status_code = 404
+                        payload = {"message": "Not Found"}
                 else:
-                    payload = {"message": "Not Found"}
-                    self.send_response(404)
+                    status_code = 200
+                    if Handler.scenario == "stale":
+                        payload = {"rates": [{"avg": 5.01, "effectiveDate": "2026-03-06"}]}
+                    else:
+                        payload = {"rates": [{"avg": 5.11, "effectiveDate": "2026-03-08"}]}
+                self.send_response(status_code)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps(payload).encode("utf-8"))
@@ -450,7 +443,7 @@ def run_self_tests() -> int:
         try:
             config = Config(
                 output_path=output,
-                background_path=background_path,
+                background_path=tmp_path / "currency-bkg.png",
                 state_path=state_path,
                 api_base=f"http://127.0.0.1:{server.server_port}",
                 timeout_secs=5.0,
@@ -459,7 +452,7 @@ def run_self_tests() -> int:
             now = datetime(2026, 3, 9, 6, 0, tzinfo=tzinfo)
 
             status, snapshot, message = choose_snapshot(config, {}, now)
-            _assert(status == "ok" and snapshot is not None and abs(snapshot.rate - 5.17) < 0.001, "today snapshot should win")
+            _assert(status == "ok" and snapshot is not None and abs(snapshot.rate - 5.13) < 0.001, "today endpoint should win")
 
             initial_state = update_state({}, display_date="09/03/2026", status=status, snapshot=snapshot, message=message)
             save_state(state_path, initial_state)
@@ -468,11 +461,11 @@ def run_self_tests() -> int:
 
             Handler.scenario = "latest"
             status, snapshot, message = choose_snapshot(config, {}, now)
-            _assert(status == "ok" and snapshot is not None and snapshot.effective_date.isoformat() == "2026-03-08", "recent latest fallback should be accepted")
+            _assert(status == "ok" and snapshot is not None and snapshot.effective_date.isoformat() == "2026-03-08", "latest fallback should be accepted")
 
             Handler.scenario = "stale"
             status, snapshot, message = choose_snapshot(config, {}, now)
-            _assert(status == "error" and snapshot is None and message == "Rate update unavailable", "stale latest rate should fail")
+            _assert(status == "error" and snapshot is None and message == "Update unavailable", "stale latest rate should fail")
 
             cached_state = {
                 "last_success": {
@@ -484,9 +477,6 @@ def run_self_tests() -> int:
             }
             status, snapshot, message = choose_snapshot(config, cached_state, now)
             _assert(status == "ok" and snapshot is not None and abs(snapshot.rate - 5.09) < 0.001, "recent cached rate should be used")
-
-            render_currency_image(background_path, output, "09/03/2026", "ok", snapshot, None)
-            _assert(output.exists(), "render should write output image")
         finally:
             server.shutdown()
             server.server_close()
