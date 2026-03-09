@@ -67,6 +67,8 @@ BRIGHTNESS_FACTOR = 0.75
 class Config:
     local_photos_dir: Path
     album_id: str
+    drive_folder_id: str
+    drive_sync_state_path: Path
     client_secrets_path: Path
     client_id: str
     client_secret: str
@@ -167,6 +169,8 @@ def validate_config() -> tuple[Config | None, list[str]]:
 
     local_photos_raw = record("LOCAL_PHOTOS_DIR", default=str(DEFAULT_ROOT / "photos"))
     album_id = record("GOOGLE_PHOTOS_ALBUM_ID", default="")
+    drive_folder_id = record("GOOGLE_DRIVE_FOLDER_ID", default="")
+    drive_state_raw = record("GOOGLE_DRIVE_SYNC_STATE_PATH", default=str(DEFAULT_ROOT / "cache" / "drive_sync_state.json"))
     client_secrets_raw = record("GOOGLE_PHOTOS_CLIENT_SECRETS_PATH", default=str(DEFAULT_ROOT / "client_secret.json"))
 
     client_id = record("GOOGLE_PHOTOS_CLIENT_ID") or record("GOOGLE_CLIENT_ID") or ""
@@ -196,6 +200,8 @@ def validate_config() -> tuple[Config | None, list[str]]:
     config = Config(
         local_photos_dir=Path(str(local_photos_raw)).expanduser(),
         album_id=str(album_id),
+        drive_folder_id=str(drive_folder_id),
+        drive_sync_state_path=Path(str(drive_state_raw)).expanduser(),
         client_secrets_path=Path(str(client_secrets_raw)).expanduser(),
         client_id=str(client_id),
         client_secret=str(client_secret),
@@ -534,6 +540,36 @@ def list_cached_images(cache_dir: Path) -> list[Path]:
     allowed = {".jpg", ".jpeg", ".png", ".webp"}
     return [p for p in cache_dir.iterdir() if p.is_file() and p.suffix.lower() in allowed]
 
+def load_drive_inventory(state_path: Path) -> dict[str, dict[str, str]]:
+    if not state_path.exists():
+        return {}
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+def list_drive_managed_images(config: Config, log: Log) -> list[Path]:
+    inventory = load_drive_inventory(config.drive_sync_state_path)
+    if not inventory:
+        return []
+
+    managed: list[Path] = []
+    allowed = {".jpg", ".jpeg", ".png", ".webp"}
+    for item_id, meta in inventory.items():
+        if not isinstance(meta, dict):
+            continue
+        local_name = str(meta.get("local_name") or "").strip()
+        if not local_name:
+            log.debug(f"Drive inventory entry {item_id} missing local_name")
+            continue
+        candidate = config.local_photos_dir / local_name
+        if candidate.is_file() and candidate.suffix.lower() in allowed:
+            managed.append(candidate)
+        else:
+            log.debug(f"Drive inventory entry {item_id} points to missing file {candidate}")
+    return managed
+
 
 def center_crop_fill(img: Image.Image, width: int, height: int) -> Image.Image:
     src_w, src_h = img.size
@@ -596,6 +632,16 @@ def write_framebuffer(img: Image.Image, fb_device: str, width: int, height: int)
 
 
 def choose_local_image(config: Config, log: Log) -> Path:
+    if config.drive_folder_id:
+        drive_images = list_drive_managed_images(config, log)
+        if not drive_images:
+            raise RuntimeError(
+                f"Drive-managed local photos unavailable for folder {config.drive_folder_id} (state: {config.drive_sync_state_path})"
+            )
+        chosen = random.choice(drive_images)
+        log.info(f"LOCAL-DRIVE: selected {chosen.name}")
+        return chosen
+
     local_images = list_cached_images(config.local_photos_dir)
     if not local_images:
         raise RuntimeError(f"Local photos directory empty: {config.local_photos_dir}")
@@ -729,6 +775,10 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
 
 
 
