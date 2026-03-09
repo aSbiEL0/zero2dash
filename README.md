@@ -13,14 +13,16 @@ Use the following names as the **source of truth** for systemd-managed runtime m
 | Service name | Script target | Mode |
 | --- | --- | --- |
 | `display.service` | `display_rotator.py` | **Day rotator** (multi-page cycle, touch navigation) |
-| `pihole-display-dark.service` | `scripts/piholestats_v1.2.py` | **Night dark mode** (single Pi-hole dashboard) |
+| pihole-display-dark.service | scripts/piholestats_v1.2.py | **Night dark mode** (single Pi-hole dashboard) |
+| currency-update.service | scripts/currency-rate.py | **06:00 currency image refresh** |
 
 ### Compatibility table (service → script → mode)
 
 | Service | Script path | Mode / status |
 | --- | --- | --- |
 | `display.service` | `/opt/zero2dash/display_rotator.py` | Canonical day mode |
-| `pihole-display-dark.service` | `/opt/zero2dash/scripts/piholestats_v1.2.py` | Canonical night mode |
+| pihole-display-dark.service | /opt/zero2dash/scripts/piholestats_v1.2.py | Canonical night mode |
+| currency-update.service | /opt/zero2dash/scripts/currency-rate.py | Daily GBP/PLN image refresh |
 | `day-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `display.service` |
 | `dark-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `pihole-display-dark.service` |
 
@@ -121,7 +123,7 @@ sudo cp /opt/zero2dash/systemd/*.service /etc/systemd/system/
 sudo cp /opt/zero2dash/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now display.service
-sudo systemctl enable --now day.timer night.timer
+sudo systemctl enable --now day.timer night.timer currency-update.timer
 ```
 
 Useful checks:
@@ -170,6 +172,7 @@ python3 scripts/photos-shuffle.py --test
 ### Framebuffer overrides in systemd
 
 Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
+
 
 
 

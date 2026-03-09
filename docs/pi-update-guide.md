@@ -6,7 +6,7 @@ This guide walks you through safely updating a Pi that already runs `zero2dash`,
 
 ```bash
 ssh pi@<pi-ip>
-sudo systemctl stop display.service pihole-display-dark.service day.timer night.timer
+sudo systemctl stop display.service pihole-display-dark.service day.timer night.timer currency-update.timer
 sudo mkdir -p /opt/backups
 sudo tar -czf /opt/backups/zero2dash-$(date +%F-%H%M).tgz /opt/zero2dash
 ```
@@ -98,7 +98,7 @@ This shows which credential source is being used and whether config is complete.
 
 ```bash
 sudo systemctl enable --now display.service
-sudo systemctl enable --now day.timer night.timer
+sudo systemctl enable --now day.timer night.timer currency-update.timer
 ```
 
 If you want to immediately test night mode too:
@@ -130,3 +130,4 @@ sudo systemctl start display.service
 ## Notes about the IDE `.env` path in your context
 
 Your IDE referenced a Windows path (`C:/Users/Default.DESKTOP-MR88P09/.env`). For the Pi runtime, the file that matters is `/opt/zero2dash/.env` because that is what the systemd units load.
+

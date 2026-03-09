@@ -528,12 +528,12 @@ def download_to_cache(creds: Credentials, item: dict[str, Any], cache_path: Path
     log.debug(f"Cached image: {cache_path}")
 
 
-def list_cached_images(cache_dir: Path) -> list[Path]:
-    if not cache_dir.exists():
+def list_image_files(directory: Path, *, recursive: bool = False) -> list[Path]:
+    if not directory.exists():
         return []
     allowed = {".jpg", ".jpeg", ".png", ".webp"}
-    return [p for p in cache_dir.iterdir() if p.is_file() and p.suffix.lower() in allowed]
-
+    iterator = directory.rglob("*") if recursive else directory.iterdir()
+    return sorted(p for p in iterator if p.is_file() and p.suffix.lower() in allowed)
 
 def center_crop_fill(img: Image.Image, width: int, height: int) -> Image.Image:
     src_w, src_h = img.size
@@ -596,7 +596,7 @@ def write_framebuffer(img: Image.Image, fb_device: str, width: int, height: int)
 
 
 def choose_local_image(config: Config, log: Log) -> Path:
-    local_images = list_cached_images(config.local_photos_dir)
+    local_images = list_image_files(config.local_photos_dir, recursive=True)
     if not local_images:
         raise RuntimeError(f"Local photos directory empty: {config.local_photos_dir}")
     chosen = random.choice(local_images)
@@ -632,7 +632,7 @@ def choose_online_image(config: Config, log: Log) -> Path:
 
 
 def choose_offline_image(config: Config, log: Log) -> Path:
-    cached = list_cached_images(config.cache_dir)
+    cached = list_image_files(config.cache_dir)
     if not cached:
         raise RuntimeError("Offline cache empty")
     chosen = random.choice(cached)
@@ -729,6 +729,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

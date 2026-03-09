@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh GBP/PLN currency image at 06:00
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+AccuracySec=1min
+Unit=currency-update.service
+
+[Install]
+WantedBy=timers.target
