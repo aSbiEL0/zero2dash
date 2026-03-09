@@ -20,7 +20,8 @@ from typing import Any
 
 from _config import get_env, report_validation_errors
 
-DEFAULT_ROOT = Path("~/zero2dash").expanduser()
+SCRIPT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_ROOT = Path(os.environ.get("CURRENCY_ROOT", str(SCRIPT_ROOT))).expanduser()
 DEFAULT_OUTPUT_PATH = DEFAULT_ROOT / "images" / "current-currency.png"
 DEFAULT_BACKGROUND_PATH = DEFAULT_ROOT / "images" / "currency-bkg.png"
 DEFAULT_STATE_PATH = DEFAULT_ROOT / "cache" / "currency_state.json"
@@ -456,7 +457,8 @@ def run_self_tests() -> int:
                 timeout_secs=5.0,
             )
             tzinfo = datetime.now().astimezone().tzinfo
-            now = datetime(2026, 3, 9, 6, 0, tzinfo=tzinfo)
+            now = datetime(2026, 3, 9, 0, 0, tzinfo=tzinfo)
+            beyond_24h = now + timedelta(hours=26)
 
             status, snapshot, message = choose_snapshot(config, {}, now)
             _assert(status == "ok" and snapshot is not None and abs(snapshot.rate - 5.17) < 0.001, "today snapshot should win")
@@ -468,7 +470,13 @@ def run_self_tests() -> int:
 
             Handler.scenario = "latest"
             status, snapshot, message = choose_snapshot(config, {}, now)
-            _assert(status == "ok" and snapshot is not None and snapshot.effective_date.isoformat() == "2026-03-08", "recent latest fallback should be accepted")
+            _assert(
+                status == "ok" and snapshot is not None and snapshot.effective_date.isoformat() == "2026-03-08",
+                "latest rate within 24 hours should be accepted",
+            )
+
+            status, snapshot, message = choose_snapshot(config, {}, beyond_24h)
+            _assert(status == "error" and snapshot is None and message == "Rate update unavailable", "latest rate older than 24 hours should fail")
 
             Handler.scenario = "stale"
             status, snapshot, message = choose_snapshot(config, {}, now)
@@ -484,6 +492,12 @@ def run_self_tests() -> int:
             }
             status, snapshot, message = choose_snapshot(config, cached_state, now)
             _assert(status == "ok" and snapshot is not None and abs(snapshot.rate - 5.09) < 0.001, "recent cached rate should be used")
+
+            status, snapshot, message = choose_snapshot(config, cached_state, beyond_24h)
+            _assert(
+                status == "error" and snapshot is None and message == "Rate update unavailable",
+                "cached rate older than 24 hours should fail",
+            )
 
             render_currency_image(background_path, output, "09/03/2026", "ok", snapshot, None)
             _assert(output.exists(), "render should write output image")

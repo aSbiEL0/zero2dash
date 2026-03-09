@@ -13,8 +13,10 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "current-currency.png"
-DEFAULT_REFRESH_SCRIPT = Path(__file__).resolve().parent / "currency-rate.py"
+SCRIPT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_ROOT = Path(os.environ.get("CURRENCY_ROOT", str(SCRIPT_ROOT))).expanduser()
+DEFAULT_IMAGE = Path(os.environ.get("CURRENCY_OUTPUT_PATH", str(DEFAULT_ROOT / "images" / "current-currency.png"))).expanduser()
+DEFAULT_REFRESH_SCRIPT = Path(os.environ.get("CURRENCY_REFRESH_SCRIPT", str(Path(__file__).resolve().parent / "currency-rate.py"))).expanduser()
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
