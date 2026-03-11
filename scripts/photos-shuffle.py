@@ -247,10 +247,10 @@ def load_config() -> Config:
 def authenticate(config: Config, log: Log) -> Credentials:
     creds: Credentials | None = None
 
-    calendar_default_token = (DEFAULT_ROOT / "token.json").resolve()
+    calendar_default_token = (DEFAULT_ROOT / "calendash-token.json").resolve()
     if config.album_id and config.token_path.resolve() == calendar_default_token:
         raise ValueError(
-            "GOOGLE_TOKEN_PATH_PHOTOS points to token.json, which is reserved for calendash-api.py. "
+            "GOOGLE_TOKEN_PATH_PHOTOS points to calendash-token.json, which is reserved for calendash-api.py. "
             "Use a separate photos token path (default: ~/zero2dash/token_photos.json)."
         )
 
