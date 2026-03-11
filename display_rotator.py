@@ -32,6 +32,7 @@ DEFAULT_PAGES_DIR = "scripts"
 DEFAULT_PAGE_GLOB = "*.py"
 DEFAULT_EXCLUDE_PATTERNS = [
     "piholestats_v1.2.py",
+    "pihole_api.py",
     "calendash-api.py",
     "currency-rate.py",
     "_config.py",
@@ -1021,6 +1022,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 
 
 
