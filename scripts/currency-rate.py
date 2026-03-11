@@ -253,15 +253,30 @@ def load_font(size: int, *, bold: bool = False) -> Any:
     return ImageFont.load_default()
 
 
-def _fit_font(draw: Any, text: str, *, width_limit: int, initial_size: int, bold: bool = True) -> Any:
+def _fit_font(draw: Any, text: str, *, width_limit: int, initial_size: int, bold: bool = True, stroke_width: int = 0) -> Any:
     size = initial_size
     while size >= 10:
         font = load_font(size, bold=bold)
-        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=max(1, size // 18))
+        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
         if (bbox[2] - bbox[0]) <= width_limit:
             return font
         size -= 2
     return load_font(10, bold=bold)
+
+
+def _draw_text_with_shadow(
+    draw: Any,
+    position: tuple[int, int],
+    text: str,
+    *,
+    font: Any,
+    fill: tuple[int, int, int, int],
+    shadow_fill: tuple[int, int, int, int],
+    shadow_offset: tuple[int, int],
+) -> None:
+    shadow_x, shadow_y = shadow_offset
+    draw.text((position[0] + shadow_x, position[1] + shadow_y), text, font=font, fill=shadow_fill)
+    draw.text(position, text, font=font, fill=fill)
 
 
 def render_currency_image(background_path: Path, output_path: Path, display_date: str, status: str, snapshot: RateSnapshot | None, message: str | None) -> None:
@@ -273,67 +288,110 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     width, height = frame.size
     draw = ImageDraw.Draw(frame)
     white = (255, 255, 255, 255)
-    shadow = (0, 0, 0, 255)
+    shadow = (0, 0, 0, 144)
+    shadow_offset = (max(1, width // 160), max(2, height // 120))
+    side_margin = int(width * 0.05)
+    top_margin = int(height * 0.03)
+    bottom_margin = int(height * 0.04)
 
-    date_font = load_font(max(18, width // 15), bold=True)
-    label_font = load_font(max(16, width // 17), bold=True)
-    source_font = load_font(max(14, width // 24), bold=True)
-    date_stroke = max(2, width // 120)
+    date_font = load_font(max(22, width // 12), bold=True)
+    label_font = _fit_font(draw, "1 GBP =", width_limit=int(width * 0.34), initial_size=max(22, width // 12), bold=True)
+    source_font = load_font(max(11, width // 30), bold=True)
 
-    draw.text((int(width * 0.08), int(height * 0.10)), display_date, font=date_font, fill=white, stroke_width=date_stroke, stroke_fill=shadow)
-    draw.text((int(width * 0.58), int(height * 0.10)), "1 GBP =", font=label_font, fill=white, stroke_width=max(2, width // 150), stroke_fill=shadow)
+    date_bbox = draw.textbbox((0, 0), display_date, font=date_font)
+    date_h = date_bbox[3] - date_bbox[1]
+    label_bbox = draw.textbbox((0, 0), "1 GBP =", font=label_font)
+    label_w = label_bbox[2] - label_bbox[0]
+    label_h = label_bbox[3] - label_bbox[1]
+    top_y = top_margin
+
+    _draw_text_with_shadow(
+        draw,
+        (side_margin, top_y),
+        display_date,
+        font=date_font,
+        fill=white,
+        shadow_fill=shadow,
+        shadow_offset=shadow_offset,
+    )
+    _draw_text_with_shadow(
+        draw,
+        (width - side_margin - label_w, top_y + max(0, date_h - label_h)),
+        "1 GBP =",
+        font=label_font,
+        fill=white,
+        shadow_fill=shadow,
+        shadow_offset=shadow_offset,
+    )
 
     if status == "ok" and snapshot is not None:
         rate_text = snapshot.display_rate()
-        rate_font = _fit_font(draw, rate_text, width_limit=int(width * 0.58), initial_size=max(48, width // 4), bold=True)
-        rate_size = getattr(rate_font, "size", 48)
-        suffix_font = load_font(max(22, int(rate_size * 0.46)), bold=True)
-        rate_stroke = max(3, rate_size // 18)
+        rate_font = _fit_font(draw, rate_text, width_limit=int(width * 0.78), initial_size=max(84, width // 3), bold=True)
+        gap = max(3, width // 100)
+        rate_size = getattr(rate_font, "size", 84)
 
-        rate_bbox = draw.textbbox((0, 0), rate_text, font=rate_font, stroke_width=rate_stroke)
-        rate_w = rate_bbox[2] - rate_bbox[0]
-        rate_h = rate_bbox[3] - rate_bbox[1]
+        while True:
+            suffix_font = load_font(max(26, int(rate_size * 0.60)), bold=True)
+            rate_bbox = draw.textbbox((0, 0), rate_text, font=rate_font)
+            suffix_bbox = draw.textbbox((0, 0), "zł", font=suffix_font)
+            rate_w = rate_bbox[2] - rate_bbox[0]
+            suffix_w = suffix_bbox[2] - suffix_bbox[0]
+            total_w = rate_w + gap + suffix_w
+            if total_w <= width - (side_margin * 2) or rate_size <= 10:
+                break
+            rate_size -= 2
+            rate_font = load_font(rate_size, bold=True)
 
-        suffix_bbox = draw.textbbox((0, 0), "zł", font=suffix_font, stroke_width=max(2, rate_stroke // 2))
-        suffix_w = suffix_bbox[2] - suffix_bbox[0]
-        total_w = rate_w + int(width * 0.02) + suffix_w
-        start_x = max(int(width * 0.08), (width - total_w) // 2)
-        value_y = int(height * 0.34)
+        start_x = max(side_margin, (width - total_w) // 2)
+        value_y = int(height * 0.28)
+        rate_bottom = value_y + rate_bbox[3]
+        suffix_y = rate_bottom - suffix_bbox[3]
 
-        draw.text((start_x, value_y), rate_text, font=rate_font, fill=white, stroke_width=rate_stroke, stroke_fill=shadow)
-        draw.text(
-            (start_x + rate_w + int(width * 0.02), value_y + int(rate_h * 0.22)),
+        _draw_text_with_shadow(
+            draw,
+            (start_x, value_y),
+            rate_text,
+            font=rate_font,
+            fill=white,
+            shadow_fill=shadow,
+            shadow_offset=shadow_offset,
+        )
+        _draw_text_with_shadow(
+            draw,
+            (start_x + rate_w + gap, suffix_y),
             "zł",
             font=suffix_font,
             fill=white,
-            stroke_width=max(2, rate_stroke // 2),
-            stroke_fill=shadow,
+            shadow_fill=shadow,
+            shadow_offset=shadow_offset,
         )
     else:
         message_text = message or "Rate update unavailable"
         message_font = _fit_font(draw, message_text, width_limit=int(width * 0.82), initial_size=max(28, width // 10), bold=True)
-        stroke_width = max(2, getattr(message_font, "size", 24) // 16)
-        bbox = draw.textbbox((0, 0), message_text, font=message_font, stroke_width=stroke_width)
+        bbox = draw.textbbox((0, 0), message_text, font=message_font)
         msg_w = bbox[2] - bbox[0]
         msg_h = bbox[3] - bbox[1]
-        draw.text(
+        _draw_text_with_shadow(
+            draw,
             ((width - msg_w) // 2, (height - msg_h) // 2),
             message_text,
             font=message_font,
             fill=white,
-            stroke_width=stroke_width,
-            stroke_fill=shadow,
+            shadow_fill=shadow,
+            shadow_offset=shadow_offset,
         )
 
-    source_bbox = draw.textbbox((0, 0), DEFAULT_SOURCE_LABEL, font=source_font, stroke_width=max(1, width // 180))
+    source_bbox = draw.textbbox((0, 0), DEFAULT_SOURCE_LABEL, font=source_font)
     source_w = source_bbox[2] - source_bbox[0]
-    draw.text(
-        ((width - source_w) // 2, int(height * 0.88)),
+    source_h = source_bbox[3] - source_bbox[1]
+    _draw_text_with_shadow(
+        draw,
+        ((width - source_w) // 2, height - bottom_margin - source_h),
         DEFAULT_SOURCE_LABEL,
         font=source_font,
         fill=white,
-        stroke_width=max(1, width // 180),
-        stroke_fill=shadow,
+        shadow_fill=(0, 0, 0, 112),
+        shadow_offset=(1, 1),
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
