@@ -56,7 +56,15 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from PIL import Image, ImageEnhance
 
 SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata"]
-DEFAULT_ROOT = Path("~/zero2dash").expanduser()
+
+def resolve_root() -> Path:
+    override = os.environ.get("ZERO2DASH_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(__file__).resolve().parents[1]
+
+
+DEFAULT_ROOT = resolve_root()
 TEST_OUTPUT = Path("/tmp/photos-shuffle-test.png")
 LOGO_WIDTH_RATIO = 0.14
 LOGO_PADDING_RATIO = 0.03
@@ -775,6 +783,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
