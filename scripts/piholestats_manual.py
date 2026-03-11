@@ -599,7 +599,7 @@ def draw_frame(stats, temp_c):
         ("Status:", stats["status"] if not stats["ok"] else "OK"),
         ("Total:", str(stats["total"])),
         ("Blocked:", str(stats["blocked"])),
-        ("Percentage blocked:", f"{stats['percent']:0.1f}%"),
+        ("% blocked:", f"{stats['percent']:0.1f}%"),
         ("Pi Temp:", _format_temp(temp_c)),
     ]
 
