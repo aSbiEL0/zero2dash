@@ -44,7 +44,7 @@ REQUEST_TLS_VERIFY: bool | str = True
 OUTPUT_IMAGE = ""
 IO_RETRIES = 2
 IO_RETRY_DELAY_SECS = 0.15
-
+SESSION_CACHE_PATH = DEFAULT_ROOT / "cache" / "pihole_session_v1.3.json"
 
 def _parse_int(value: str) -> int:
     try:
@@ -362,6 +362,40 @@ def _transport_failure(msg: str) -> RuntimeError:
     return RuntimeError(f"TRANSPORT_FAILURE: {msg}")
 
 
+
+def _load_cached_sid() -> bool:
+    global _SID, _SID_EXP
+    try:
+        payload = json.loads(SESSION_CACHE_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return False
+
+    sid = payload.get("sid")
+    expires_at = payload.get("expires_at")
+    if not isinstance(sid, str) or not sid:
+        return False
+    if not isinstance(expires_at, (int, float)):
+        return False
+    if time.time() >= float(expires_at):
+        return False
+
+    _SID = sid
+    _SID_EXP = float(expires_at)
+    return True
+
+
+def _persist_sid() -> None:
+    if not _SID or _SID_EXP <= time.time():
+        return
+    try:
+        SESSION_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SESSION_CACHE_PATH.write_text(
+            json.dumps({"sid": _SID, "expires_at": _SID_EXP}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
 def _auth_get_sid():
     global _SID, _SID_EXP
     if not PIHOLE_PASSWORD:
@@ -380,11 +414,14 @@ def _auth_get_sid():
         raise _auth_failure("v6 session response invalid (check PIHOLE_PASSWORD)")
     _SID = sess["sid"]
     _SID_EXP = time.time() + int(sess.get("validity", 1800)) - 10
+    _persist_sid()
     return _SID
 
 
 def _ensure_sid():
     if _SID and time.time() < _SID_EXP:
+        return _SID
+    if _load_cached_sid():
         return _SID
     return _auth_get_sid()
 
@@ -653,7 +690,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         pass
-
-
-
 
