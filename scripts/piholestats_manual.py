@@ -580,8 +580,8 @@ def _format_temp(temp_c: float | None) -> str:
 
 
 def _draw_stat_row(draw, *, y: int, label: str, value: str, label_x: int, value_right: int):
-    label_font = load_font(16, False)
-    value_font = fit_font(draw, value, preferred_size=18, min_size=13, bold=False, max_width=122)
+    label_font = load_font(20, False)
+    value_font = fit_font(draw, value, preferred_size=22, min_size=13, bold=False, max_width=122)
     _, label_h = text_size(draw, label, label_font)
     value_w, value_h = text_size(draw, value, value_font)
     row_height = max(label_h, value_h)
