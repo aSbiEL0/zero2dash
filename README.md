@@ -35,7 +35,7 @@ zero2dash/
 │   ├── pihole-display-pre.sh
 │   ├── piholestats_v1.1.py      # legacy daytime variant
 │   ├── piholestats_v1.2.py      # canonical dark-mode service target
-│   ├── piholestats_v1.3.py
+│   ├── piholestats_manual.py
 │   ├── calendash-api.py
 │   ├── calendash-img.py
 │   ├── currency-rate.py
@@ -181,10 +181,4 @@ python3 scripts/photos-shuffle.py --test
 ### Framebuffer overrides in systemd
 
 Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
-
-
-
-
-
-
 

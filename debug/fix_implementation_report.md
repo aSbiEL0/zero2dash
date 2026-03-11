@@ -144,3 +144,6 @@ All previously listed Block F items (#22, #23, #24, #26, #27) are now implemente
 - **#24** Implemented with non-blocking buffered Linux input event parsing in `calendash-img.py`.
 - **#26** Implemented by wiring `FB_DEVICE` into canonical systemd services and removing hard-coded fb device unit dependencies.
 - **#27** Implemented with command-presence checks, sysfs write guards, and warning logs in pre-start shell script.
+## Manual Pi-hole display variant
+
+- `scripts/piholestats_manual.py` is the manual Pi-hole dashboard variant that supersedes the old `scripts/piholestats_v1.3.py` layout.

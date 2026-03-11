@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 # Pi-hole TFT Dashboard -> direct framebuffer RGB565 (no X, no SDL)
 # v6 auth handled elsewhere; this file only renders and calls API
-# Version 1.3 - Always-on stats display
-# Manual always-on variant; canonical night service uses piholestats_v1.2.py
+# Manual Pi-hole stats display; canonical night service uses piholestats_v1.2.py
 
-import os, sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl, errno
+import sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl, errno
 from pathlib import Path
-from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
 from _config import get_env, report_validation_errors
 
 DEFAULT_ROOT = Path('~/zero2dash').expanduser()
+SCRIPT_NAME = "piholestats_manual.py"
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+BACKGROUND_IMAGE_PATH = REPO_ROOT / "images" / "pihole-bkg.png"
 
 # -------- CONFIG --------
 FBDEV = "/dev/fb1"
@@ -26,15 +28,8 @@ PIHOLE_CA_BUNDLE = ""
 PIHOLE_PASSWORD = ""
 PIHOLE_API_TOKEN = ""
 PIHOLE_AUTH_MODE = ""
-TITLE = "Pi-hole"
-# Colours
-COL_BG   = (0, 0, 0)
-COL_TXT  = (200,200,200)
-COL_OK   = (0,45,100)
-COL_BAD  = (100,10,10)
-COL_MIX  = (150,100,0)
-COL_TEMP = (0,85,50)
-COL_UP   = (60,30,100)
+COL_BG = (0, 0, 0)
+COL_TXT = (245, 245, 245)
 # ------------------------
 
 _SID = None
@@ -44,15 +39,15 @@ REQUEST_TLS_VERIFY: bool | str = True
 OUTPUT_IMAGE = ""
 IO_RETRIES = 2
 IO_RETRY_DELAY_SECS = 0.15
-SESSION_CACHE_PATH = DEFAULT_ROOT / "cache" / "pihole_session_v1.3.json"
+SESSION_CACHE_PATH = DEFAULT_ROOT / "cache" / "pihole_session_manual.json"
+BACKGROUND_TEMPLATE: Image.Image | None = None
+
 
 def _parse_int(value: str) -> int:
     try:
         return int(value)
     except ValueError as exc:
         raise ValueError(f"expected integer, got {value!r}") from exc
-
-
 
 
 def _parse_float(value: str) -> float:
@@ -87,12 +82,6 @@ def _host_requires_explicit_scheme(raw_host: str) -> bool:
     if not hostname:
         return False
     return hostname not in {"localhost", "::1"} and not hostname.startswith("127.")
-
-
-
-
-
-
 
 
 def validate_config() -> tuple[dict[str, object] | None, list[str]]:
@@ -174,15 +163,12 @@ def apply_config(config: dict[str, object], output_image: str = "") -> None:
     BASE_URL = _normalize_host(PIHOLE_HOST, preferred_scheme=PIHOLE_SCHEME)
     REQUEST_TLS_VERIFY = _resolve_tls_verify(BASE_URL, PIHOLE_VERIFY_TLS, PIHOLE_CA_BUNDLE)
 
-# ---------- utils ----------
+
 def load_font(size, bold=False):
     candidates = [
-        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-         else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        ("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf" if bold
-         else "/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
-        ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
-         else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf" if bold else "/usr/share/fonts/truetype/freefont/FreeSans.ttf"),
+        ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
     ]
     for p in candidates:
         try:
@@ -191,9 +177,22 @@ def load_font(size, bold=False):
             pass
     return ImageFont.load_default()
 
+
 def text_size(draw, text, font):
-    x0, y0, x1, y1 = draw.textbbox((0,0), text, font=font)
+    x0, y0, x1, y1 = draw.textbbox((0, 0), text, font=font)
     return x1 - x0, y1 - y0
+
+
+def fit_font(draw, text: str, *, preferred_size: int, min_size: int, bold: bool, max_width: int):
+    best_font = load_font(min_size, bold)
+    for size in range(preferred_size, min_size - 1, -1):
+        font = load_font(size, bold)
+        width, _ = text_size(draw, text, font)
+        if width <= max_width:
+            return font
+        best_font = font
+    return best_font
+
 
 def rgb888_to_rgb565(img_rgb):
     r, g, b = img_rgb.split()
@@ -201,7 +200,9 @@ def rgb888_to_rgb565(img_rgb):
     g = g.point(lambda i: i >> 2)
     b = b.point(lambda i: i >> 3)
     arr = bytearray()
-    rp = r.tobytes(); gp = g.tobytes(); bp = b.tobytes()
+    rp = r.tobytes()
+    gp = g.tobytes()
+    bp = b.tobytes()
     for i in range(len(rp)):
         v = ((rp[i] & 0x1F) << 11) | ((gp[i] & 0x3F) << 5) | (bp[i] & 0x1F)
         arr += struct.pack("<H", v)
@@ -255,6 +256,7 @@ def _write_framebuffer_payload(payload: bytes) -> None:
         if fb_file is not None:
             fb_file.close()
 
+
 def fb_write(img):
     if img.size != (W, H):
         img = img.resize((W, H), Image.BILINEAR)
@@ -269,6 +271,7 @@ def fb_write(img):
     payload = rgb888_to_rgb565(img)
     _retry_io(lambda: _write_framebuffer_payload(payload), f"Framebuffer write to {FBDEV}")
 
+
 def read_temp_c():
     try:
         with open("/sys/class/thermal/thermal_zone0/temp") as f:
@@ -276,18 +279,7 @@ def read_temp_c():
     except Exception:
         return None
 
-def read_uptime_str():
-    try:
-        with open("/proc/uptime") as f:
-            secs = float(f.read().split()[0])
-        d = int(secs // 86400); secs -= d*86400
-        h = int(secs // 3600);  secs -= h*3600
-        m = int(secs // 60);    s = int(secs - m*60)
-        return (f"{d}d {h:02d}:{m:02d}" if d else f"{h:02d}:{m:02d}")
-    except Exception:
-        return "N/A"
 
-# ---------- Pi-hole v6 auth + fetch ----------
 def _is_local_host(hostname: str) -> bool:
     normalized = hostname.strip("[]").lower()
     return normalized in {"localhost", "::1"} or normalized.startswith("127.")
@@ -362,7 +354,6 @@ def _transport_failure(msg: str) -> RuntimeError:
     return RuntimeError(f"TRANSPORT_FAILURE: {msg}")
 
 
-
 def _load_cached_sid() -> bool:
     global _SID, _SID_EXP
     try:
@@ -396,13 +387,13 @@ def _persist_sid() -> None:
     except OSError:
         pass
 
+
 def _auth_get_sid():
     global _SID, _SID_EXP
     if not PIHOLE_PASSWORD:
         raise _auth_failure("PIHOLE_PASSWORD is not configured")
     try:
-        js = _http_json(f"{BASE_URL}/api/auth", method="POST",
-                        body={"password": PIHOLE_PASSWORD}, timeout=4)
+        js = _http_json(f"{BASE_URL}/api/auth", method="POST", body={"password": PIHOLE_PASSWORD}, timeout=4)
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403}:
             raise _auth_failure("v6 session login rejected (check PIHOLE_PASSWORD)") from exc
@@ -469,7 +460,7 @@ def fetch_pihole():
 
         fallback_summary = legacy.get("failure", {}).get("summary") or legacy.get("status", "LEGACY FAIL")
         print(
-            f"[piholestats_v1.3.py] Summary fetch failed. primary={primary_summary}; fallback={fallback_summary}",
+            f"[{SCRIPT_NAME}] Summary fetch failed. primary={primary_summary}; fallback={fallback_summary}",
             file=sys.stderr,
         )
         return {
@@ -510,10 +501,10 @@ def _fetch_legacy_summary():
             failure_exc = _transport_failure(f"legacy HTTP error {exc.code}")
             message = _status_from_exception(failure_exc, "LEGACY")
         return {
-            "total":0,
-            "blocked":0,
-            "percent":0.0,
-            "ok":False,
+            "total": 0,
+            "blocked": 0,
+            "percent": 0.0,
+            "ok": False,
             "status": message,
             "failure": _failure_from_exception(failure_exc, source="legacy"),
         }
@@ -521,19 +512,19 @@ def _fetch_legacy_summary():
         failure_exc = _transport_failure(f"legacy transport error: {exc.reason}")
         message = _status_from_exception(failure_exc, "LEGACY")
         return {
-            "total":0,
-            "blocked":0,
-            "percent":0.0,
-            "ok":False,
+            "total": 0,
+            "blocked": 0,
+            "percent": 0.0,
+            "ok": False,
             "status": message,
             "failure": _failure_from_exception(failure_exc, source="legacy"),
         }
     except Exception as exc:
         return {
-            "total":0,
-            "blocked":0,
-            "percent":0.0,
-            "ok":False,
+            "total": 0,
+            "blocked": 0,
+            "percent": 0.0,
+            "ok": False,
             "status": _status_from_exception(exc, "LEGACY"),
             "failure": _failure_from_exception(exc, source="legacy"),
         }
@@ -571,88 +562,76 @@ def _failure_from_exception(exc: Exception, source: str) -> dict[str, str]:
         "source": source,
     }
 
-# ---------- rendering ----------
-def draw_degree_circle(d, x, y, r, colour):
-    # draw smooth small degree mark with no leftover black box
-    bbox = (x - r, y - r, x + r, y + r)
-    d.ellipse(bbox, fill=colour, outline=colour)
 
-def draw_temp_value(d, rect, temp_c, font, colour):
+def _load_background_template() -> Image.Image:
+    global BACKGROUND_TEMPLATE
+    if BACKGROUND_TEMPLATE is None:
+        try:
+            BACKGROUND_TEMPLATE = Image.open(BACKGROUND_IMAGE_PATH).convert("RGB")
+        except OSError:
+            BACKGROUND_TEMPLATE = Image.new("RGB", (W, H), COL_BG)
+    return BACKGROUND_TEMPLATE.copy()
+
+
+def _format_temp(temp_c: float | None) -> str:
     if temp_c is None:
-        text = "N/A"
-        tw, th = text_size(d, text, font)
-        d.text((rect[0] + (rect[2]-tw)//2, rect[1] + (rect[3]-th)//2),
-               text, font=font, fill=colour)
-        return
-    # Render "39.7 C" with no degree circle
-    num = f"{temp_c:0.1f} C"
-    tw, th = text_size(d, num, font)
-    x = rect[0] + (rect[2]-tw)//2
-    y = rect[1] + (rect[3]-th)//2
-    d.text((x, y), num, font=font, fill=colour)
+        return "N/A"
+    return f"{temp_c:0.1f}\N{DEGREE SIGN}C"
 
 
-def draw_frame(stats, temp_c, uptime):
-    img = Image.new("RGB", (W, H), COL_BG)
+def _draw_stat_row(draw, *, y: int, label: str, value: str, label_x: int, value_right: int):
+    label_font = load_font(20, False)
+    value_font = fit_font(draw, value, preferred_size=20, min_size=13, bold=False, max_width=122)
+    _, label_h = text_size(draw, label, label_font)
+    value_w, value_h = text_size(draw, value, value_font)
+    row_height = max(label_h, value_h)
+    draw.text((label_x, y), label, font=label_font, fill=COL_TXT)
+    draw.text((value_right - value_w, y + max(0, (row_height - value_h) // 2)), value, font=value_font, fill=COL_TXT)
+
+
+def draw_frame(stats, temp_c):
+    img = _load_background_template()
+    if img.size != (W, H):
+        img = img.resize((W, H), Image.BILINEAR)
     d = ImageDraw.Draw(img)
-    big   = load_font(28, True)
-    mid   = load_font(22, True)   # slightly larger purple block font
-    small = load_font(14, False)
 
-    margin = 8
-    tile_w = (W - margin*3) // 2
-    tile_h = (H - margin*4) // 3
-    y1 = margin
-    y2 = margin*2 + tile_h
-    y3 = margin*3 + tile_h*2
+    rows = [
+        ("Status:", stats["status"] if not stats["ok"] else "OK"),
+        ("Total:", str(stats["total"])),
+        ("Blocked:", str(stats["blocked"])),
+        ("Percentage blocked:", f"{stats['percent']:0.1f}%"),
+        ("Pi Temp:", _format_temp(temp_c)),
+    ]
 
-    def tile(x, y, color, title, value, val_font, value_is_temp=False):
-        r = (x, y, tile_w, tile_h)
-        d.rounded_rectangle([r[0],r[1],r[0]+r[2],r[1]+r[3]], radius=12, fill=color)
-        tw, th = text_size(d, title, small)
-        d.text((r[0]+(r[2]-tw)//2, r[1]+6), title, font=small, fill=COL_TXT)
-        if value_is_temp:
-            draw_temp_value(d, r, value, val_font, COL_TXT)
-        else:
-            tw, th = text_size(d, value, val_font)
-            d.text((r[0]+(r[2]-tw)//2, r[1]+(r[3]-th)//2), value, font=val_font, fill=COL_TXT)
-
-
-    total   = stats["total"]
-    blocked = stats["blocked"]
-    percent = stats["percent"] if total>0 else 0.0
-
-    tile(margin,           y1, COL_OK,   "TOTAL",     f"{total:,}",   big)
-    tile(margin*2+tile_w,  y1, COL_BAD,  "BLOCKED",   f"{blocked:,}", big)
-    tile(margin,           y2, COL_MIX,  "% BLOCKED", f"{percent:0.1f}%", big)
-    tile(margin*2+tile_w,  y2, COL_TEMP, "TEMP",      temp_c,         big, value_is_temp=True)
-
-    # Footer card: larger font for readability
-    d.rounded_rectangle([margin, y3, W-margin, y3+tile_h], radius=12, fill=COL_UP)
-    line1 = f"Uptime: {uptime}"
-    line2 = f"{TITLE} {'OK' if stats['ok'] else 'N/A'}  |  {datetime.now().strftime('%H:%M')}"
-    tw1, th1 = text_size(d, line1, mid)
-    tw2, th2 = text_size(d, line2, mid)
-    cy = y3 + tile_h//2
-    d.text((margin + (W-2*margin - tw1)//2, cy - th1 - 2), line1, font=mid, fill=COL_TXT)
-    d.text((margin + (W-2*margin - tw2)//2, cy + 2),       line2, font=mid, fill=COL_TXT)
+    start_y = 92
+    row_gap = 28
+    label_x = 20
+    value_right = 295
+    for index, (label, value) in enumerate(rows):
+        _draw_stat_row(
+            d,
+            y=start_y + index * row_gap,
+            label=label,
+            value=value,
+            label_x=label_x,
+            value_right=value_right,
+        )
 
     return img
 
-# ---------- main ----------
+
 def main():
     args = parse_args()
 
-
-    load_dotenv(DEFAULT_ROOT / '.env')
+    load_dotenv(DEFAULT_ROOT / ".env")
     config, errors = validate_config()
     if errors:
-        report_validation_errors("piholestats_v1.3.py", errors)
+        report_validation_errors(SCRIPT_NAME, errors)
         return 1
     assert config is not None
 
     if args.check_config:
-        print("[piholestats_v1.3.py] Configuration check passed.")
+        print(f"[{SCRIPT_NAME}] Configuration check passed.")
         return 0
 
     apply_config(config, output_image=args.output_image)
@@ -661,33 +640,35 @@ def main():
         print(f"Framebuffer {FBDEV} not found.", file=sys.stderr)
         return 1
 
-    cached = {"total":0,"blocked":0,"percent":0.0,"ok":False}
+    cached = {"total": 0, "blocked": 0, "percent": 0.0, "ok": False, "status": "AUTH ONLY ERROR"}
     try:
         _auth_get_sid()
     except Exception:
         pass
 
     while True:
-
         s = fetch_pihole()
         if s["ok"]:
             cached = s
+        else:
+            cached["ok"] = False
+            cached["status"] = s["status"]
 
         temp_c = read_temp_c()
-        uptime = read_uptime_str()
-
-        frame = draw_frame(cached, temp_c, uptime)
+        frame = draw_frame(cached, temp_c)
         fb_write(frame)
         if OUTPUT_IMAGE:
-            print(f"[piholestats_v1.3.py] Rendered test frame to {OUTPUT_IMAGE}.")
+            print(f"[{SCRIPT_NAME}] Rendered test frame to {OUTPUT_IMAGE}.")
             return 0
         time.sleep(REFRESH_SECS)
 
     return 0
+
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:
         pass
+
 
