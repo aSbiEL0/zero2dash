@@ -11,7 +11,7 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 | Unit | Purpose | Entrypoint |
 | --- | --- | --- |
 | `display.service` | Daytime page rotator | `display_rotator.py` |
-| `night.service` | Night blackout screen | `blackout.py` |
+| `night.service` | Night blackout screen | `modules/blackout/blackout.py` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
 
 ## Repository structure
@@ -19,12 +19,13 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 ```text
 zero2dash/
 ├── _config.py
-├── blackout.py
 ├── display_rotator.py
 ├── modules.txt
 ├── pihole-display-pre.sh
-├── raspberry-pi-icon.png
 ├── modules/
+│   ├── blackout/
+│   │   ├── blackout.py
+│   │   └── raspberry-pi-icon.png
 │   ├── calendash/
 │   │   ├── calendash-api.py
 │   │   ├── calendash-bkg.png
@@ -63,6 +64,7 @@ zero2dash/
 
 ## Module ownership
 
+- `modules/blackout/` owns the night blackout renderer and its icon asset.
 - `modules/pihole/` owns the Pi-hole renderer, Pi-hole API helpers, and Pi-hole page background.
 - `modules/calendash/` owns the calendar display script, calendar generator, and calendar assets/output PNG.
 - `modules/currency/` owns the currency display script, scheduled refresh script, and currency assets/output PNG.
@@ -303,6 +305,8 @@ python3 modules/photos/photos-shuffle.py --test
 
 ## Notes
 
-- `blackout.py` uses `raspberry-pi-icon.png` from the project root.
+- `modules/blackout/blackout.py` uses `modules/blackout/raspberry-pi-icon.png`.
 - `pihole-display-pre.sh` is used by both day and night services.
 - The module directories are the source of truth for page-specific scripts and page-specific assets.
+
+

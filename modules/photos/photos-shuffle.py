@@ -32,7 +32,7 @@ OAuth setup:
 Fallback:
 - Preferred source is LOCAL_PHOTOS_DIR (default: ~/zero2dash/photos). If it is empty, the
   script can still try Google Photos when configured, then CACHE_DIR, then FALLBACK_IMAGE.
-- Ensure local fallback image exists at ~/zero2dash/images/photos-fallback.png
+- Ensure local fallback image exists at ~/zero2dash/modules/photos/photos-fallback.png
   (or override with FALLBACK_IMAGE).
 """
 
@@ -194,8 +194,8 @@ def validate_config() -> tuple[Config | None, list[str]]:
     width = record("WIDTH", default=320, validator=lambda v: _as_int("WIDTH", v))
     height = record("HEIGHT", default=240, validator=lambda v: _as_int("HEIGHT", v))
     cache_raw = record("CACHE_DIR", default=str(DEFAULT_ROOT / "cache" / "google_photos"))
-    fallback_raw = record("FALLBACK_IMAGE", default="/home/pihole/zero2dash/images/photos-fallback.png")
-    logo_raw = record("LOGO_PATH", default="/images/goo-photos-icon.png")
+    fallback_raw = record("FALLBACK_IMAGE", default=str(MODULE_DIR / "photos-fallback.png"))
+    logo_raw = record("LOGO_PATH", default=str(MODULE_DIR / "google-photos-icon.png"))
     oauth_port = record("OAUTH_PORT", default=8080, validator=lambda v: _as_int("OAUTH_PORT", v))
     oauth_open_browser = record("OAUTH_OPEN_BROWSER", default=False, validator=_as_bool)
 
@@ -788,6 +788,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
