@@ -63,6 +63,19 @@ def rgb888_to_rgb565(image: Image.Image) -> bytes:
     return bytes(rgb565)
 
 
+def rgba_pixel_to_rgb565(red: int, green: int, blue: int, alpha: int) -> bytes:
+    if alpha <= 0:
+        return b"\x00\x00"
+
+    if alpha < 255:
+        red = (red * alpha) // 255
+        green = (green * alpha) // 255
+        blue = (blue * alpha) // 255
+
+    value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
+    return struct.pack("<H", value)
+
+
 class FramebufferWriter:
     def __init__(self, fbdev: str, width: int, height: int) -> None:
         self.fbdev = fbdev
@@ -78,18 +91,32 @@ class FramebufferWriter:
         self._handle = handle
         self._mapping = mapping
 
-    def write(self, image: Image.Image) -> None:
+    def clear(self) -> None:
+        if self._mapping is None:
+            raise RuntimeError("Framebuffer is not open")
+        self._mapping.seek(0)
+        self._mapping.write(b"\x00" * self.expected)
+
+    def clear_region(self, left: int, top: int, right: int, bottom: int) -> None:
+        if self._mapping is None:
+            raise RuntimeError("Framebuffer is not open")
+        if left >= right or top >= bottom:
+            return
+
+        row_payload = b"\x00" * ((right - left) * 2)
+        for row in range(top, bottom):
+            offset = ((row * self.width) + left) * 2
+            self._mapping.seek(offset)
+            self._mapping.write(row_payload)
+
+    def blit_icon(self, rows: list[bytes], x: int, y: int) -> None:
         if self._mapping is None:
             raise RuntimeError("Framebuffer is not open")
 
-        payload = rgb888_to_rgb565(image)
-        if len(payload) != self.expected:
-            raise RuntimeError(
-                f"Framebuffer payload size mismatch: expected {self.expected} bytes, got {len(payload)} bytes"
-            )
-
-        self._mapping.seek(0)
-        self._mapping.write(payload)
+        for row_index, row_payload in enumerate(rows):
+            offset = (((y + row_index) * self.width) + x) * 2
+            self._mapping.seek(offset)
+            self._mapping.write(row_payload)
 
     def close(self) -> None:
         if self._mapping is not None:
@@ -119,6 +146,19 @@ def load_icon(icon_path: Path, width: int, height: int) -> Image.Image:
     resized = icon.copy()
     resized.thumbnail((target, target), RESAMPLING_LANCZOS)
     return resized
+
+
+def build_icon_rows(icon: Image.Image) -> list[bytes]:
+    rows: list[bytes] = []
+    width, height = icon.size
+    pixels = icon.load()
+    for y in range(height):
+        row = bytearray()
+        for x in range(width):
+            red, green, blue, alpha = pixels[x, y]
+            row.extend(rgba_pixel_to_rgb565(red, green, blue, alpha))
+        rows.append(bytes(row))
+    return rows
 
 
 def render_frame(width: int, height: int, icon: Image.Image, x: int, y: int) -> Image.Image:
@@ -159,6 +199,14 @@ def advance_position(
     return next_x, next_y, vx, vy
 
 
+def dirty_bounds(old_x: int, old_y: int, new_x: int, new_y: int, icon_width: int, icon_height: int) -> tuple[int, int, int, int]:
+    left = min(old_x, new_x)
+    top = min(old_y, new_y)
+    right = max(old_x + icon_width, new_x + icon_width)
+    bottom = max(old_y + icon_height, new_y + icon_height)
+    return left, top, right, bottom
+
+
 def validate_args(args: argparse.Namespace) -> int | None:
     if args.width <= 0 or args.height <= 0:
         print("Width/height must be positive integers.", file=sys.stderr)
@@ -190,6 +238,7 @@ def main() -> int:
         return 1
 
     icon_width, icon_height = icon.size
+    icon_rows = build_icon_rows(icon)
     x = 0
     y = 0
     vx = STEP_X
@@ -221,17 +270,23 @@ def main() -> int:
 
     try:
         with FramebufferWriter(args.fbdev, args.width, args.height) as framebuffer:
+            framebuffer.clear()
+            framebuffer.blit_icon(icon_rows, x, y)
+
+            if args.output and not preview_written:
+                render_frame(args.width, args.height, icon, x, y).save(args.output)
+                print(f"Saved preview image to {args.output}")
+                preview_written = True
+
             while not _STOP_REQUESTED:
                 started = time.monotonic()
-                frame = render_frame(args.width, args.height, icon, x, y)
-                framebuffer.write(frame)
-
-                if args.output and not preview_written:
-                    frame.save(args.output)
-                    print(f"Saved preview image to {args.output}")
-                    preview_written = True
-
+                previous_x = x
+                previous_y = y
                 x, y, vx, vy = advance_position(x, y, vx, vy, args.width, args.height, icon_width, icon_height)
+                left, top, right, bottom = dirty_bounds(previous_x, previous_y, x, y, icon_width, icon_height)
+                framebuffer.clear_region(left, top, right, bottom)
+                framebuffer.blit_icon(icon_rows, x, y)
+
                 remaining = frame_interval - (time.monotonic() - started)
                 if remaining > 0:
                     time.sleep(remaining)
