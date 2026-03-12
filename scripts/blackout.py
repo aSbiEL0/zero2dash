@@ -17,7 +17,7 @@ from PIL import Image
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
-FPS_DEFAULT = 50.0
+FPS_DEFAULT = 40.0
 ICON_DEFAULT = Path(__file__).resolve().parent.parent / "images" / "raspberry-pi-icon.png"
 ICON_SIZE_RATIO = 0.18
 ICON_MIN_SIZE = 28
@@ -63,19 +63,6 @@ def rgb888_to_rgb565(image: Image.Image) -> bytes:
     return bytes(rgb565)
 
 
-def rgba_pixel_to_rgb565(red: int, green: int, blue: int, alpha: int) -> bytes:
-    if alpha <= 0:
-        return b"\x00\x00"
-
-    if alpha < 255:
-        red = (red * alpha) // 255
-        green = (green * alpha) // 255
-        blue = (blue * alpha) // 255
-
-    value = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3)
-    return struct.pack("<H", value)
-
-
 class FramebufferWriter:
     def __init__(self, fbdev: str, width: int, height: int) -> None:
         self.fbdev = fbdev
@@ -97,26 +84,18 @@ class FramebufferWriter:
         self._mapping.seek(0)
         self._mapping.write(b"\x00" * self.expected)
 
-    def clear_region(self, left: int, top: int, right: int, bottom: int) -> None:
-        if self._mapping is None:
-            raise RuntimeError("Framebuffer is not open")
-        if left >= right or top >= bottom:
-            return
-
-        row_payload = b"\x00" * ((right - left) * 2)
-        for row in range(top, bottom):
-            offset = ((row * self.width) + left) * 2
-            self._mapping.seek(offset)
-            self._mapping.write(row_payload)
-
-    def blit_icon(self, rows: list[bytes], x: int, y: int) -> None:
+    def write_region(self, image: Image.Image, left: int, top: int) -> None:
         if self._mapping is None:
             raise RuntimeError("Framebuffer is not open")
 
-        for row_index, row_payload in enumerate(rows):
-            offset = (((y + row_index) * self.width) + x) * 2
+        payload = rgb888_to_rgb565(image)
+        row_bytes = image.width * 2
+        for row in range(image.height):
+            start = row * row_bytes
+            end = start + row_bytes
+            offset = (((top + row) * self.width) + left) * 2
             self._mapping.seek(offset)
-            self._mapping.write(row_payload)
+            self._mapping.write(payload[start:end])
 
     def close(self) -> None:
         if self._mapping is not None:
@@ -148,23 +127,29 @@ def load_icon(icon_path: Path, width: int, height: int) -> Image.Image:
     return resized
 
 
-def build_icon_rows(icon: Image.Image) -> list[bytes]:
-    rows: list[bytes] = []
-    width, height = icon.size
-    pixels = icon.load()
-    for y in range(height):
-        row = bytearray()
-        for x in range(width):
-            red, green, blue, alpha = pixels[x, y]
-            row.extend(rgba_pixel_to_rgb565(red, green, blue, alpha))
-        rows.append(bytes(row))
-    return rows
-
-
 def render_frame(width: int, height: int, icon: Image.Image, x: int, y: int) -> Image.Image:
     frame = Image.new("RGB", (width, height), (0, 0, 0))
     frame.paste(icon, (x, y), icon)
     return frame
+
+
+def render_dirty_region(
+    icon: Image.Image,
+    previous_x: int,
+    previous_y: int,
+    x: int,
+    y: int,
+    icon_width: int,
+    icon_height: int,
+) -> tuple[Image.Image, int, int]:
+    left = min(previous_x, x)
+    top = min(previous_y, y)
+    right = max(previous_x + icon_width, x + icon_width)
+    bottom = max(previous_y + icon_height, y + icon_height)
+
+    region = Image.new("RGB", (right - left, bottom - top), (0, 0, 0))
+    region.paste(icon, (x - left, y - top), icon)
+    return region, left, top
 
 
 def advance_position(
@@ -199,14 +184,6 @@ def advance_position(
     return next_x, next_y, vx, vy
 
 
-def dirty_bounds(old_x: int, old_y: int, new_x: int, new_y: int, icon_width: int, icon_height: int) -> tuple[int, int, int, int]:
-    left = min(old_x, new_x)
-    top = min(old_y, new_y)
-    right = max(old_x + icon_width, new_x + icon_width)
-    bottom = max(old_y + icon_height, new_y + icon_height)
-    return left, top, right, bottom
-
-
 def validate_args(args: argparse.Namespace) -> int | None:
     if args.width <= 0 or args.height <= 0:
         print("Width/height must be positive integers.", file=sys.stderr)
@@ -238,7 +215,6 @@ def main() -> int:
         return 1
 
     icon_width, icon_height = icon.size
-    icon_rows = build_icon_rows(icon)
     x = 0
     y = 0
     vx = STEP_X
@@ -271,10 +247,11 @@ def main() -> int:
     try:
         with FramebufferWriter(args.fbdev, args.width, args.height) as framebuffer:
             framebuffer.clear()
-            framebuffer.blit_icon(icon_rows, x, y)
+            initial_frame = render_frame(args.width, args.height, icon, x, y)
+            framebuffer.write_region(initial_frame, 0, 0)
 
             if args.output and not preview_written:
-                render_frame(args.width, args.height, icon, x, y).save(args.output)
+                initial_frame.save(args.output)
                 print(f"Saved preview image to {args.output}")
                 preview_written = True
 
@@ -283,9 +260,8 @@ def main() -> int:
                 previous_x = x
                 previous_y = y
                 x, y, vx, vy = advance_position(x, y, vx, vy, args.width, args.height, icon_width, icon_height)
-                left, top, right, bottom = dirty_bounds(previous_x, previous_y, x, y, icon_width, icon_height)
-                framebuffer.clear_region(left, top, right, bottom)
-                framebuffer.blit_icon(icon_rows, x, y)
+                dirty_frame, left, top = render_dirty_region(icon, previous_x, previous_y, x, y, icon_width, icon_height)
+                framebuffer.write_region(dirty_frame, left, top)
 
                 remaining = frame_interval - (time.monotonic() - started)
                 if remaining > 0:
