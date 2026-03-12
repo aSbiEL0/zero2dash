@@ -22,8 +22,8 @@ ICON_DEFAULT = Path(__file__).resolve().parent.parent / "images" / "raspberry-pi
 ICON_SIZE_RATIO = 0.18
 ICON_MIN_SIZE = 28
 ICON_MAX_SIZE = 72
-STEP_X = 2
-STEP_Y = 2
+STEP_X = 3
+STEP_Y = 3
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 _STOP_REQUESTED = False
 
