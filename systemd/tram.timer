@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Firswood Metrolink GTFS cache every morning
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+AccuracySec=5min
+Unit=tram.service
+
+[Install]
+WantedBy=timers.target
