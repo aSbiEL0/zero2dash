@@ -28,19 +28,9 @@ import time
 from pathlib import Path
 
 
-DEFAULT_PAGES_DIR = "scripts"
-DEFAULT_PAGE_GLOB = "*.py"
-DEFAULT_EXCLUDE_PATTERNS = [
-    "blackout.py",
-    "piholestats_v1.2.py",
-    "pihole_api.py",
-    "calendash-api.py",
-    "currency-rate.py",
-    "_config.py",
-    "drive-sync.py",
-    "photo-resize.py",
-]
-DEFAULT_INCLUDE_PATTERNS: list[str] = []
+DEFAULT_MODULES_DIR = "modules"
+DEFAULT_MODULE_ORDER_FILE = "modules.txt"
+DEFAULT_MODULE_ENTRYPOINT = "display.py"
 DEFAULT_ROTATE_SECS = 13
 SHUTDOWN_WAIT_SECS = 5
 DEFAULT_FBDEV = "/dev/fb1"
@@ -56,24 +46,19 @@ DEFAULT_QUARANTINE_CYCLES = 3
 
 DISCOVERY_CONFIG_DOCS = [
     {
-        "env": "ROTATOR_PAGES_DIR",
-        "default": DEFAULT_PAGES_DIR,
-        "description": "Directory to scan for page scripts.",
+        "env": "ROTATOR_MODULES_DIR",
+        "default": DEFAULT_MODULES_DIR,
+        "description": "Directory containing rotator module folders.",
     },
     {
-        "env": "ROTATOR_PAGE_GLOB",
-        "default": DEFAULT_PAGE_GLOB,
-        "description": "Comma-separated glob(s) used to discover page scripts.",
+        "env": "ROTATOR_MODULE_ORDER_FILE",
+        "default": DEFAULT_MODULE_ORDER_FILE,
+        "description": "Optional module-order manifest. When absent, modules are discovered alphabetically.",
     },
     {
-        "env": "ROTATOR_INCLUDE_PATTERNS",
-        "default": "",
-        "description": "Optional comma-separated exact filename/path or glob patterns to force-include.",
-    },
-    {
-        "env": "ROTATOR_EXCLUDE_PATTERNS",
-        "default": ",".join(DEFAULT_EXCLUDE_PATTERNS),
-        "description": "Comma-separated exact filename/path or glob patterns to exclude.",
+        "env": "ROTATOR_MODULE_ENTRYPOINT",
+        "default": DEFAULT_MODULE_ENTRYPOINT,
+        "description": "Entrypoint filename expected inside each module directory.",
     },
 ]
 
@@ -323,118 +308,94 @@ class ScreenPower:
             pass
 
 
-def _parse_csv_patterns(raw: str) -> list[str]:
-    return [entry.strip() for entry in raw.split(",") if entry.strip()]
+def _resolve_path(raw_path: str, *, base_dir: Path) -> Path:
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = base_dir / path
+    return path
 
 
-def parse_exclude_patterns() -> tuple[list[str], bool]:
-    raw = os.environ.get("ROTATOR_EXCLUDE_PATTERNS", "").strip()
-    if raw:
-        return _parse_csv_patterns(raw), True
-    return DEFAULT_EXCLUDE_PATTERNS.copy(), False
+def _read_module_manifest(order_file: Path) -> list[tuple[int, str]]:
+    modules: list[tuple[int, str]] = []
+    for line_number, raw_line in enumerate(order_file.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        modules.append((line_number, line))
+    return modules
 
 
-def parse_include_patterns() -> list[str]:
-    raw = os.environ.get("ROTATOR_INCLUDE_PATTERNS", "").strip()
-    if not raw:
-        return DEFAULT_INCLUDE_PATTERNS.copy()
-    return _parse_csv_patterns(raw)
+def _module_entrypoint(module_dir: Path, entrypoint_name: str) -> Path:
+    return module_dir / entrypoint_name
 
 
-def _has_glob_tokens(pattern: str) -> bool:
-    return any(token in pattern for token in "*?[]")
-
-
-def _pattern_matches(path: Path, pattern: str, page_dir: Path, base_dir: Path) -> bool:
-    relative_to_page_dir = path.relative_to(page_dir).as_posix()
-    relative_to_base = path.relative_to(base_dir).as_posix()
-    path_name = path.name
-
-    if _has_glob_tokens(pattern):
-        return (
-            path.match(pattern)
-            or Path(relative_to_page_dir).match(pattern)
-            or Path(relative_to_base).match(pattern)
-        )
-
-    return pattern in {path_name, relative_to_page_dir, relative_to_base}
-
-
-def _collect_page_candidates(page_dir: Path, page_globs: list[str]) -> list[Path]:
-    seen: set[Path] = set()
+def _discover_module_entrypoints(modules_dir: Path, entrypoint_name: str) -> list[Path]:
     discovered: list[Path] = []
-    for page_glob in page_globs:
-        for path in sorted(page_dir.glob(page_glob)):
-            if not path.is_file() or path in seen:
-                continue
-            seen.add(path)
-            discovered.append(path)
+    for child in sorted(modules_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        entrypoint = _module_entrypoint(child, entrypoint_name)
+        if entrypoint.is_file():
+            discovered.append(entrypoint)
     return discovered
 
 
-def _resolve_exact_pattern_candidate(page_dir: Path, pattern: str) -> Path | None:
-    candidate = page_dir / pattern
-    if candidate.exists() and candidate.is_file():
-        return candidate
-    return None
-
-
 def discover_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
-    page_dir_raw = os.environ.get("ROTATOR_PAGES_DIR", DEFAULT_PAGES_DIR).strip() or DEFAULT_PAGES_DIR
-    page_glob_raw = os.environ.get("ROTATOR_PAGE_GLOB", DEFAULT_PAGE_GLOB).strip() or DEFAULT_PAGE_GLOB
-    page_globs = [entry.strip() for entry in page_glob_raw.split(",") if entry.strip()]
-    excludes, exclude_is_user_configured = parse_exclude_patterns()
-    includes = parse_include_patterns()
+    modules_dir_raw = os.environ.get("ROTATOR_MODULES_DIR", DEFAULT_MODULES_DIR).strip() or DEFAULT_MODULES_DIR
+    module_order_file_raw = os.environ.get("ROTATOR_MODULE_ORDER_FILE", DEFAULT_MODULE_ORDER_FILE).strip() or DEFAULT_MODULE_ORDER_FILE
+    module_entrypoint = os.environ.get("ROTATOR_MODULE_ENTRYPOINT", DEFAULT_MODULE_ENTRYPOINT).strip() or DEFAULT_MODULE_ENTRYPOINT
 
-    page_dir = Path(page_dir_raw)
-    if not page_dir.is_absolute():
-        page_dir = base_dir / page_dir
-
-    if not page_dir.exists():
-        print(f"[rotator] Page directory does not exist: {page_dir}", flush=True)
+    modules_dir = _resolve_path(modules_dir_raw, base_dir=base_dir)
+    if not modules_dir.exists():
+        print(f"[rotator] Modules directory does not exist: {modules_dir}", flush=True)
         return []
-
-    candidates = _collect_page_candidates(page_dir, page_globs)
-
-    for pattern in includes:
-        if _has_glob_tokens(pattern):
-            continue
-        exact = _resolve_exact_pattern_candidate(page_dir, pattern)
-        if exact and exact not in candidates:
-            candidates.append(exact)
 
     included: list[str] = []
     discovery_report: list[tuple[str, str]] = []
-    user_excludes = excludes if exclude_is_user_configured else []
-    default_excludes = DEFAULT_EXCLUDE_PATTERNS if not exclude_is_user_configured else []
-    for path in sorted(candidates):
-        relative = str(path.relative_to(base_dir))
+    seen_modules: set[str] = set()
 
-        user_include_match = next((pat for pat in includes if _pattern_matches(path, pat, page_dir, base_dir)), None)
-        user_exclude_match = next((pat for pat in user_excludes if _pattern_matches(path, pat, page_dir, base_dir)), None)
-        default_exclude_match = next(
-            (pat for pat in default_excludes if _pattern_matches(path, pat, page_dir, base_dir)),
-            None,
-        )
+    order_file = _resolve_path(module_order_file_raw, base_dir=base_dir)
+    discovery_source = "fallback scan"
 
-        if user_exclude_match:
-            discovery_report.append((relative, f"excluded (user exclude: {user_exclude_match})"))
-            continue
-        if user_include_match:
+    if order_file.exists():
+        try:
+            order_file_display = order_file.relative_to(base_dir).as_posix()
+        except ValueError:
+            order_file_display = str(order_file)
+        discovery_source = f"manifest {order_file_display}"
+
+        for line_number, module_name in _read_module_manifest(order_file):
+            if "/" in module_name or "\\" in module_name:
+                discovery_report.append((module_name, f"skipped (invalid module name at line {line_number})"))
+                continue
+            if module_name in seen_modules:
+                discovery_report.append((module_name, f"skipped (duplicate module at line {line_number})"))
+                continue
+            seen_modules.add(module_name)
+
+            module_dir = modules_dir / module_name
+            entrypoint = _module_entrypoint(module_dir, module_entrypoint)
+            if not module_dir.is_dir():
+                discovery_report.append((module_name, f"skipped (missing module directory at line {line_number})"))
+                continue
+            if not entrypoint.is_file():
+                discovery_report.append((module_name, f"skipped (missing {module_entrypoint} at line {line_number})"))
+                continue
+
+            relative = entrypoint.relative_to(base_dir).as_posix()
             included.append(relative)
-            discovery_report.append((relative, f"included (user include: {user_include_match})"))
-            continue
-        if default_exclude_match:
-            discovery_report.append((relative, f"excluded (default exclude: {default_exclude_match})"))
-            continue
-
-        included.append(relative)
-        discovery_report.append((relative, "included (matched discovery globs)"))
+            discovery_report.append((relative, f"included (manifest line {line_number})"))
+    else:
+        for entrypoint in _discover_module_entrypoints(modules_dir, module_entrypoint):
+            relative = entrypoint.relative_to(base_dir).as_posix()
+            included.append(relative)
+            discovery_report.append((relative, "included (fallback alphabetical scan)"))
 
     print("[rotator] Discovery config:", flush=True)
     for item in DISCOVERY_CONFIG_DOCS:
         value = os.environ.get(item["env"], str(item["default"])).strip() or str(item["default"])
         print(f"[rotator]   {item['env']}={value} ({item['description']})", flush=True)
+    print(f"[rotator]   source={discovery_source}", flush=True)
 
     print("[rotator] Discovery result:", flush=True)
     for script, status in discovery_report:
@@ -1023,11 +984,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
-
-
 

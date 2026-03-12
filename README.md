@@ -29,18 +29,27 @@ Use the following names as the **source of truth** for systemd-managed runtime m
 ```text
 zero2dash/
 ├── display_rotator.py
+├── modules.txt                  # explicit rotator order (optional but recommended)
+├── modules/
+│   ├── pihole/
+│   │   └── display.py
+│   ├── calendash/
+│   │   └── display.py
+│   ├── currency/
+│   │   └── display.py
+│   └── photos/
+│       └── display.py
 ├── scripts/
 │   ├── _config.py
 │   ├── pihole_api.py
 │   ├── pihole-display-pre.sh
-│   ├── piholestats_v1.1.py      # legacy daytime variant
 │   ├── blackout.py              # canonical dark-mode service target
-│   ├── piholestats_manual.py
+│   ├── piholestats_manual.py    # legacy implementation behind modules/pihole/display.py
 │   ├── calendash-api.py
-│   ├── calendash-img.py
+│   ├── calendash-img.py         # legacy implementation behind modules/calendash/display.py
 │   ├── currency-rate.py
-│   ├── currency.py
-│   ├── photos-shuffle.py
+│   ├── currency.py              # legacy implementation behind modules/currency/display.py
+│   ├── photos-shuffle.py        # legacy implementation behind modules/photos/display.py
 │   ├── drive-sync.py
 │   └── photo-resize.py
 ├── systemd/
@@ -120,6 +129,34 @@ Drive-backed photos notes:
 - `scripts/photo-resize.py` proportionally reduces changed images to 50% before they are reused locally.
 - Normal personal/shared Google Photos albums are no longer a reliable headless source; if you still configure `GOOGLE_PHOTOS_ALBUM_ID`, treat it as an app-created-album fallback only.
 
+## Module discovery
+
+`display_rotator.py` now discovers rotator pages from `modules/`.
+
+- Each module lives in `modules/<name>/`.
+- Each rotator-visible module must expose `display.py`.
+- Helper files in the same module folder are ignored unless a module entrypoint calls them.
+- `modules.txt` in the repo root controls module order when present.
+- If `modules.txt` is absent, the rotator falls back to alphabetical discovery of `modules/*/display.py`.
+- `ROTATOR_PAGES` still works as a manual override for backward compatibility.
+
+Default rotator order file format:
+
+```text
+# one module directory name per line
+pihole
+calendash
+currency
+photos
+```
+
+Relevant discovery environment variables:
+
+- `ROTATOR_MODULES_DIR` (default: `modules`)
+- `ROTATOR_MODULE_ORDER_FILE` (default: `modules.txt`)
+- `ROTATOR_MODULE_ENTRYPOINT` (default: `display.py`)
+
+
 ## Run via systemd
 Install and enable canonical units:
 
@@ -171,16 +208,12 @@ python3 scripts/photos-shuffle.py --test
 
 ## Notes
 
-- `display_rotator.py` excludes `blackout.py`, `piholestats_v1.2.py`, `calendash-api.py`, `currency-rate.py`, `_config.py`, `drive-sync.py`, and `photo-resize.py` by default so helper scripts do not end up in the day rotator.
+- `display_rotator.py` now discovers `modules/<name>/display.py` instead of scanning `scripts/*.py`.
+- The current module entrypoints are compatibility wrappers over the existing script implementations, so the module layout is active without forcing a risky full code move in one pass.
 - `scripts/blackout.py` expects the icon asset at `images/raspberry-pi-icon.png`.
-- `calendash-img.py` is a rotator-friendly page script, not a systemd service unit by itself.
-- `currency-rate.py` is the scheduled generator; `currency.py` is the rotator-friendly page script that only displays the generated image.
-
+- `currency-rate.py` remains the scheduled generator; `modules/currency/display.py` is the rotator-visible page entrypoint.
 
 ### Framebuffer overrides in systemd
 
 Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
-
-
-
 
