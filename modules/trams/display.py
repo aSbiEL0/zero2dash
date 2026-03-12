@@ -34,7 +34,7 @@ DEFAULT_TIMEZONE = os.environ.get("TRAM_TIMEZONE", "Europe/London")
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
-FRAME_DELAY_DEFAULT = 0.08
+FRAME_DELAY_DEFAULT = 0.02
 TICKER_SPEED_DEFAULT = 350.0
 WEEKDAY_NAMES = (
     "monday",
@@ -239,7 +239,7 @@ def load_background(path: Path, width: int, height: int) -> Image.Image:
     return Image.new("RGB", (width, height), (0, 0, 0))
 
 
-def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_cache: dict[str, Any] | None, now: datetime, *, ticker_offset: int = 0) -> Image.Image:
+def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_cache: dict[str, Any] | None, now: datetime, *, ticker_offset: float = 0.0) -> Image.Image:
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
     width, height = frame.size
@@ -345,11 +345,13 @@ def main() -> int:
     cache = load_json(Path(args.cache))
     alerts_cache = load_json(Path(args.alerts_cache))
     tz = load_timezone(str((cache or {}).get("timezone", DEFAULT_TIMEZONE)))
+    animation_start = time.monotonic()
     frame_index = 0
     saved_output = False
     while not _STOP_REQUESTED:
         now = datetime.now(tz=tz)
-        ticker_offset = int(frame_index * args.frame_delay * args.ticker_speed)
+        elapsed = time.monotonic() - animation_start
+        ticker_offset = elapsed * args.ticker_speed
         frame = render_frame(background, cache, alerts_cache, now, ticker_offset=ticker_offset)
         if args.output and not saved_output:
             frame.save(args.output)
