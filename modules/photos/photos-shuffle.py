@@ -50,9 +50,8 @@ from urllib.error import HTTPError
 
 MODULE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = MODULE_DIR.parents[1]
-SHARED_SCRIPTS_DIR = REPO_ROOT / "scripts"
-if str(SHARED_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from _config import get_env, report_validation_errors
 
