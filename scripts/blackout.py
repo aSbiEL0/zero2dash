@@ -107,39 +107,13 @@ class FramebufferWriter:
         self.close()
 
 
-def _alpha_bbox(image: Image.Image) -> tuple[int, int, int, int] | None:
-    return image.getchannel("A").getbbox()
+def load_icon(icon_path: Path, width: int, height: int) -> Image.Image:
+    with Image.open(icon_path) as raw_icon:
+        icon = raw_icon.convert("RGBA")
 
+    if icon.width <= 0 or icon.height <= 0:
+        raise ValueError("Icon has invalid dimensions")
 
-def normalise_icon(icon: Image.Image) -> Image.Image:
-    rgba = icon.convert("RGBA")
-    bbox = _alpha_bbox(rgba)
-    if bbox is None:
-        raise ValueError("Icon contains no visible pixels")
-
-    trimmed = rgba.crop(bbox)
-    alpha = trimmed.getchannel("A")
-    weighted_luma = 0.0
-    weighted_alpha = 0.0
-    for red, green, blue, alpha_value in trimmed.getdata():
-        if alpha_value == 0:
-            continue
-        luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        weighted_luma += luma * alpha_value
-        weighted_alpha += alpha_value
-
-    if weighted_alpha == 0:
-        raise ValueError("Icon alpha channel is empty")
-
-    average_luma = weighted_luma / weighted_alpha
-    if average_luma < 48:
-        visible = Image.new("RGBA", trimmed.size, (255, 255, 255, 0))
-        visible.putalpha(alpha)
-        return visible
-    return trimmed
-
-
-def resize_icon(icon: Image.Image, width: int, height: int) -> Image.Image:
     target = int(min(width, height) * ICON_SIZE_RATIO)
     target = max(ICON_MIN_SIZE, min(ICON_MAX_SIZE, target))
     resized = icon.copy()
@@ -210,8 +184,7 @@ def main() -> int:
         return 1
 
     try:
-        with Image.open(icon_path) as raw_icon:
-            icon = resize_icon(normalise_icon(raw_icon), args.width, args.height)
+        icon = load_icon(icon_path, args.width, args.height)
     except Exception as exc:
         print(f"Unable to load icon {icon_path}: {exc}", file=sys.stderr)
         return 1
