@@ -8,8 +8,7 @@ Cron example (06:00 every day):
   0 6 * * * cd /home/pihole/zero2dash && /usr/bin/python3 /home/pihole/zero2dash/modules/calendash/calendash-api.py >> /var/log/calendash.log 2>&1
 
 Assets:
-- BACKGROUND_IMAGE should be a 320x240 base image that already contains your logo/header.
-- ICON_IMAGE should be a small calendar icon with transparency.
+- BACKGROUND_IMAGE should be a 320x240 base image that already contains your header artwork.
 """
 
 from __future__ import annotations
@@ -52,7 +51,6 @@ CANVAS_HEIGHT = 240
 MODULE_DIR = SCRIPT_DIR
 DEFAULT_OUTPUT_PATH = MODULE_DIR / "calendash.png"
 DEFAULT_BACKGROUND_PATH = MODULE_DIR / "calendash-bkg.png"
-DEFAULT_ICON_PATH = MODULE_DIR / "calendash-icon.png"
 DEFAULT_TOKEN_PATH = Path("token.json")
 DEFAULT_OAUTH_PORT = 8080
 DEFAULT_AUTH_MODE = "local_server"
@@ -352,7 +350,6 @@ def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, 
     rendering_required = "rendering" in require_sections
     output_raw = record("OUTPUT_PATH", default=str(DEFAULT_OUTPUT_PATH))
     background_raw = record("BACKGROUND_IMAGE", default=str(DEFAULT_BACKGROUND_PATH))
-    icon_raw = record("ICON_IMAGE", default=str(DEFAULT_ICON_PATH))
 
     oauth_port = record("OAUTH_PORT", default=DEFAULT_OAUTH_PORT, validator=lambda v: optional_env_int("OAUTH_PORT", DEFAULT_OAUTH_PORT))
     token_raw = record("GOOGLE_TOKEN_PATH", default=str(DEFAULT_TOKEN_PATH))
@@ -368,15 +365,11 @@ def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, 
 
     output_path = _fallback_legacy_calendash_path(output_raw, DEFAULT_OUTPUT_PATH)
     background_path = _fallback_legacy_calendash_path(background_raw, DEFAULT_BACKGROUND_PATH)
-    icon_path = _fallback_legacy_calendash_path(icon_raw, DEFAULT_ICON_PATH)
     token_path = expand_path(str(token_raw))
     diagnostics_path = expand_path(str(diagnostics_raw))
 
     if rendering_required and not background_path.exists():
         errors.append(f"BACKGROUND_IMAGE not found: {background_path}")
-    if rendering_required and not icon_path.exists():
-        errors.append(f"ICON_IMAGE not found: {icon_path}")
-
     return {
         "auth": {
             "client_id": client_id,
@@ -389,7 +382,6 @@ def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, 
         "rendering": {
             "output_path": output_path,
             "background_path": background_path,
-            "icon_path": icon_path,
         },
         "runtime": {
             "oauth_port": int(oauth_port),
@@ -446,17 +438,15 @@ def load_font(preferred_size: int, *, use_bold: bool = False) -> ImageFont.FreeT
     env_candidates = [p.strip() for p in os.getenv("CALENDASH_FONT_PATH", "").split(",") if p.strip()]
     if use_bold:
         default_candidates = [
-            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
         ]
     else:
         default_candidates = [
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         ]
 
     candidates = env_candidates + default_candidates
@@ -743,14 +733,10 @@ def truncate_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFon
     return text[:low].rstrip() + ellipsis
 
 
-def _center_x(width: int, object_w: int) -> int:
-    return max(0, (width - object_w) // 2)
-
 
 def render_image(
     output_path: Path,
     background_path: Path,
-    icon_path: Path,
     events: Iterable[CalendarEvent],
     message: str | None = None,
 ) -> None:
@@ -760,37 +746,24 @@ def render_image(
     bg = Image.open(background_path).convert("RGBA").resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(bg)
 
-    font_header = load_font(25)
-    font_event = load_font(18)
-    font_date = load_font(18, use_bold=True)
+    font_event = load_font(20)
+    font_date = load_font(20)
     font_message = load_font(20)
     font_more = load_font(13)
     text_fill = (245, 245, 245, 255)
     muted_fill = (190, 190, 190, 255)
 
-    icon = None
-    if icon_path.exists():
-        icon = Image.open(icon_path).convert("RGBA").resize((54, 54), Image.Resampling.LANCZOS)
-        bg.alpha_composite(icon, dest=(20, 10))
-    else:
-        logging.warning("ICON_IMAGE not found at %s; drawing without icon", icon_path)
-
-    header_text = "Calendar"
-    header_x = 20 + (58 if icon else 0)
-    header_y = 20
-    draw.text((header_x, header_y), header_text, font=font_header, fill=text_fill)
-
     if message:
         tw = int(draw.textlength(message, font=font_message))
         _, ttop, _, tbottom = draw.textbbox((0, 0), message, font=font_message)
         th = tbottom - ttop
-        x = _center_x(CANVAS_WIDTH, tw)
+        x = max(0, (CANVAS_WIDTH - tw) // 2)
         y = (CANVAS_HEIGHT // 2) - (th // 2) + 28
         draw.text((x, y), message, fill=muted_fill, font=font_message)
     else:
         entries = list(events)
         left_x = 20
-        right_x = 300
+        right_x = 295
         row_y = 92
         row_gap = 28
         max_rows = max(1, (CANVAS_HEIGHT - row_y - 12) // row_gap)
@@ -875,7 +848,6 @@ def main() -> int:
             render_image(
                 output_path=rendering_config["output_path"],
                 background_path=rendering_config["background_path"],
-                icon_path=rendering_config["icon_path"],
                 events=[],
                 message="No upcoming events",
             )
@@ -883,7 +855,6 @@ def main() -> int:
             render_image(
                 output_path=rendering_config["output_path"],
                 background_path=rendering_config["background_path"],
-                icon_path=rendering_config["icon_path"],
                 events=events,
             )
         return 0
@@ -896,7 +867,6 @@ def main() -> int:
             render_image(
                 output_path=rendering_config["output_path"],
                 background_path=rendering_config["background_path"],
-                icon_path=rendering_config["icon_path"],
                 events=[],
                 message="Failed to update calendar",
             )
@@ -908,5 +878,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 
