@@ -16,13 +16,14 @@ import sys
 import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageSequence
+from PIL import Image, ImageSequence
 
 
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 DEFAULT_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", "boot/startup.gif")
+DEFAULT_SELECTOR_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_IMAGE_PATH", "boot/selector.png")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
 DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.service")
 DEFAULT_TOUCH_SETTLE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_SETTLE_SECS", "0.35"))
@@ -30,10 +31,6 @@ DEFAULT_TOUCH_DEBOUNCE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_DEBOUNCE
 DEFAULT_GIF_SPEED = float(os.environ.get("BOOT_SELECTOR_GIF_SPEED", "0.5"))
 DEFAULT_GIF_FRAME_MS = 100
 BACKGROUND_RGB = (0, 0, 0)
-BUTTON_FILL_RGBA = (42, 44, 50, 230)
-BUTTON_TEXT_RGB = (14, 14, 14)
-BUTTON_GLOW_RGBA = (150, 170, 215, 70)
-BUTTON_OUTLINE_RGBA = (62, 64, 72, 255)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 STOP_REQUESTED = False
 
@@ -49,15 +46,6 @@ ABS_MT_TRACKING_ID = 0x39
 BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 
-FONT_CANDIDATES = (
-    "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
-    "/usr/share/fonts/TTF/DejaVuSerif.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSerif.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-)
-
 
 def request_stop(_signum: int, _frame: object) -> None:
     global STOP_REQUESTED
@@ -70,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=WIDTH_DEFAULT, help=f"Framebuffer width (default: {WIDTH_DEFAULT})")
     parser.add_argument("--height", type=int, default=HEIGHT_DEFAULT, help=f"Framebuffer height (default: {HEIGHT_DEFAULT})")
     parser.add_argument("--gif", default=DEFAULT_GIF_PATH, help=f"Startup GIF path (default: {DEFAULT_GIF_PATH})")
+    parser.add_argument("--selector-image", default=DEFAULT_SELECTOR_IMAGE_PATH, help=f"Selector image path (default: {DEFAULT_SELECTOR_IMAGE_PATH})")
     parser.add_argument("--gif-speed", type=float, default=DEFAULT_GIF_SPEED, help=f"GIF playback speed multiplier (default: {DEFAULT_GIF_SPEED})")
     parser.add_argument("--output-selector", help="Optional output path for the rendered selector screen.")
     parser.add_argument("--output-gif-first", help="Optional output path for the first rendered GIF frame.")
@@ -325,78 +314,6 @@ def detect_touch_bounds(device: str, default_width: int, default_height: int) ->
     return x_width, x_min, y_height, y_min
 
 
-def load_button_font(button_width: int, button_height: int, label: str) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    max_height = max(18, int(button_height * 0.48))
-    preferred = max_height
-    for candidate in FONT_CANDIDATES:
-        for size in range(preferred, 17, -2):
-            try:
-                font = ImageFont.truetype(candidate, size)
-            except OSError:
-                continue
-            left, top, right, bottom = font.getbbox(label)
-            text_width = right - left
-            text_height = bottom - top
-            if text_width <= button_width * 0.62 and text_height <= button_height * 0.48:
-                return font
-    return ImageFont.load_default()
-
-
-def selector_geometry(width: int, height: int) -> list[dict[str, object]]:
-    button_width = min(244, max(220, width - 76))
-    button_height = min(64, max(54, int(height * 0.24)))
-    gap = max(24, int(height * 0.12))
-    total_height = (button_height * 2) + gap
-    left = (width - button_width) // 2
-    top = max(28, (height - total_height) // 2)
-    result: list[dict[str, object]] = []
-    for index, label in enumerate(("Day", "Night")):
-        y = top + (index * (button_height + gap))
-        result.append(
-            {
-                "label": label,
-                "mode": label.lower(),
-                "bounds": (left, y, left + button_width, y + button_height),
-            }
-        )
-    return result
-
-
-def render_selector(width: int, height: int) -> tuple[Image.Image, list[dict[str, object]]]:
-    frame = Image.new("RGBA", (width, height), BACKGROUND_RGB + (255,))
-    buttons = selector_geometry(width, height)
-
-    for button in buttons:
-        left, top, right, bottom = button["bounds"]
-        button_width = right - left
-        button_height = bottom - top
-        radius = button_height // 2
-        font = load_button_font(button_width, button_height, str(button["label"]))
-
-        glow = Image.new("RGBA", (button_width + 28, button_height + 28), (0, 0, 0, 0))
-        glow_draw = ImageDraw.Draw(glow)
-        glow_draw.rounded_rectangle((14, 14, button_width + 13, button_height + 13), radius=radius, fill=BUTTON_GLOW_RGBA)
-        glow = glow.filter(ImageFilter.GaussianBlur(radius=8))
-        frame.alpha_composite(glow, (left - 14, top - 14))
-
-        button_layer = Image.new("RGBA", (button_width, button_height), (0, 0, 0, 0))
-        button_draw = ImageDraw.Draw(button_layer)
-        button_draw.rounded_rectangle((0, 0, button_width - 1, button_height - 1), radius=radius, fill=BUTTON_FILL_RGBA)
-        button_draw.rounded_rectangle((0, 0, button_width - 1, button_height - 1), radius=radius, outline=BUTTON_OUTLINE_RGBA, width=1)
-        frame.alpha_composite(button_layer, (left, top))
-
-        draw = ImageDraw.Draw(frame)
-        label = str(button["label"])
-        bbox = draw.textbbox((0, 0), label, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        text_x = left + ((button_width - text_width) // 2) - bbox[0]
-        text_y = top + ((button_height - text_height) // 2) - bbox[1] - 1
-        draw.text((text_x, text_y), label, font=font, fill=BUTTON_TEXT_RGB)
-
-    return frame.convert("RGB"), buttons
-
-
 def _fit_frame(frame: Image.Image, width: int, height: int) -> Image.Image:
     converted = frame.convert("RGBA")
     source_width, source_height = converted.size
@@ -407,6 +324,15 @@ def _fit_frame(frame: Image.Image, width: int, height: int) -> Image.Image:
     canvas = Image.new("RGBA", (width, height), BACKGROUND_RGB + (255,))
     canvas.alpha_composite(resized, ((width - scaled_width) // 2, (height - scaled_height) // 2))
     return canvas.convert("RGB")
+
+
+def load_selector_image(image_path: Path, width: int, height: int) -> Image.Image:
+    if image_path.exists():
+        with Image.open(image_path) as selector_image:
+            return _fit_frame(selector_image.copy(), width, height)
+
+    print(f"[boot-selector] Selector image not found at {image_path}; using a blank screen.", flush=True)
+    return Image.new("RGB", (width, height), BACKGROUND_RGB)
 
 
 def load_gif_frames(gif_path: Path, width: int, height: int, speed: float) -> list[tuple[Image.Image, float]]:
@@ -471,27 +397,16 @@ def _normalise_axis(raw_value: int, source_size: int, source_min: int, target_si
 
 
 def _resolve_tap_mode(
-    last_x: int,
     last_y: int,
-    buttons: list[dict[str, object]],
-    touch_width: int,
-    touch_min_x: int,
     touch_height: int,
     touch_min_y: int,
-    screen_width: int,
     screen_height: int,
-) -> str | None:
-    screen_x = _normalise_axis(last_x, touch_width, touch_min_x, screen_width)
+) -> str:
     screen_y = _normalise_axis(last_y, touch_height, touch_min_y, screen_height)
-    for button in buttons:
-        left, top, right, bottom = button["bounds"]
-        if left <= screen_x <= right and top <= screen_y <= bottom:
-            return str(button["mode"])
-    return None
+    return "day" if screen_y < (screen_height // 2) else "night"
 
 
 def wait_for_selection(
-    buttons: list[dict[str, object]],
     screen_width: int,
     screen_height: int,
     touch_settle_secs: float,
@@ -503,7 +418,8 @@ def wait_for_selection(
 
     touch_width, touch_min_x, touch_height, touch_min_y = detect_touch_bounds(device, screen_width, screen_height)
     print(
-        f"[boot-selector] Waiting for touch selection on {device} (width {touch_width}, height {touch_height})",
+        f"[boot-selector] Waiting for touch selection on {device} (width {touch_width}, height {touch_height}); "
+        "top half selects day, bottom half selects night.",
         flush=True,
     )
 
@@ -518,19 +434,8 @@ def wait_for_selection(
         if now < ready_after or (now - last_emit) < touch_debounce_secs:
             return None
         last_emit = now
-        mode = _resolve_tap_mode(
-            last_x,
-            last_y,
-            buttons,
-            touch_width,
-            touch_min_x,
-            touch_height,
-            touch_min_y,
-            screen_width,
-            screen_height,
-        )
-        if mode:
-            print(f"[boot-selector] Selected mode: {mode}", flush=True)
+        mode = _resolve_tap_mode(last_y, touch_height, touch_min_y, screen_height)
+        print(f"[boot-selector] Selected mode: {mode} (touch_y={last_y})", flush=True)
         return mode
 
     with open(device, "rb", buffering=0) as fd:
@@ -608,7 +513,7 @@ def main() -> int:
     if args.probe_touch:
         return run_touch_probe(args.width, args.height)
 
-    selector_image, buttons = render_selector(args.width, args.height)
+    selector_image = load_selector_image(Path(args.selector_image), args.width, args.height)
     save_preview(selector_image, args.output_selector)
 
     framebuffer = None
@@ -629,7 +534,7 @@ def main() -> int:
             print("Skipping touch loop because --no-framebuffer was set.", flush=True)
             return 0
 
-        mode = wait_for_selection(buttons, args.width, args.height, args.touch_settle_secs, args.touch_debounce_secs)
+        mode = wait_for_selection(args.width, args.height, args.touch_settle_secs, args.touch_debounce_secs)
         if mode == "day":
             return launch_service(args.day_service)
         if mode == "night":
