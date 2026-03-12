@@ -27,12 +27,13 @@ DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.servi
 DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.service")
 DEFAULT_TOUCH_SETTLE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_SETTLE_SECS", "0.35"))
 DEFAULT_TOUCH_DEBOUNCE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_DEBOUNCE_SECS", "0.35"))
+DEFAULT_GIF_SPEED = float(os.environ.get("BOOT_SELECTOR_GIF_SPEED", "0.5"))
 DEFAULT_GIF_FRAME_MS = 100
 BACKGROUND_RGB = (0, 0, 0)
-BUTTON_FILL_RGBA = (36, 38, 45, 232)
-BUTTON_TEXT_RGB = (8, 8, 8)
-BUTTON_GLOW_RGBA = (195, 210, 255, 100)
-BUTTON_OUTLINE_RGBA = (60, 62, 70, 255)
+BUTTON_FILL_RGBA = (42, 44, 50, 230)
+BUTTON_TEXT_RGB = (14, 14, 14)
+BUTTON_GLOW_RGBA = (150, 170, 215, 70)
+BUTTON_OUTLINE_RGBA = (62, 64, 72, 255)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 STOP_REQUESTED = False
 
@@ -49,6 +50,9 @@ BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 
 FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+    "/usr/share/fonts/TTF/DejaVuSerif.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSerif.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
@@ -66,11 +70,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=WIDTH_DEFAULT, help=f"Framebuffer width (default: {WIDTH_DEFAULT})")
     parser.add_argument("--height", type=int, default=HEIGHT_DEFAULT, help=f"Framebuffer height (default: {HEIGHT_DEFAULT})")
     parser.add_argument("--gif", default=DEFAULT_GIF_PATH, help=f"Startup GIF path (default: {DEFAULT_GIF_PATH})")
+    parser.add_argument("--gif-speed", type=float, default=DEFAULT_GIF_SPEED, help=f"GIF playback speed multiplier (default: {DEFAULT_GIF_SPEED})")
     parser.add_argument("--output-selector", help="Optional output path for the rendered selector screen.")
     parser.add_argument("--output-gif-first", help="Optional output path for the first rendered GIF frame.")
     parser.add_argument("--output-gif-last", help="Optional output path for the last rendered GIF frame.")
     parser.add_argument("--no-framebuffer", action="store_true", help="Skip framebuffer writes for local verification.")
     parser.add_argument("--skip-gif", action="store_true", help="Skip GIF playback and show the selector immediately.")
+    parser.add_argument("--probe-touch", action="store_true", help="Probe touch device selection and exit.")
     parser.add_argument(
         "--touch-settle-secs",
         type=float,
@@ -98,6 +104,9 @@ def validate_args(args: argparse.Namespace) -> int | None:
         return 1
     if args.touch_settle_secs < 0 or args.touch_debounce_secs < 0:
         print("Touch timing values cannot be negative.", file=sys.stderr)
+        return 1
+    if args.gif_speed <= 0:
+        print("GIF speed must be greater than zero.", file=sys.stderr)
         return 1
     return None
 
@@ -199,21 +208,29 @@ def _touch_candidate_details(event_path: str) -> tuple[tuple[int, int, int, int]
     return (score, int(has_touch_abs), int(has_btn_touch), -index), reason
 
 
-def select_touch_device() -> str | None:
-    forced = os.environ.get("TOUCH_DEVICE", "").strip()
-    if forced:
-        resolved = forced
-        if forced.startswith("event") and forced[5:].isdigit():
-            resolved = f"/dev/input/{forced}"
-        if Path(resolved).exists():
-            print(f"[boot-selector] Touch device selected: {resolved} (forced)", flush=True)
-            return resolved
-        print(f"[boot-selector] Touch override not found: {forced}", flush=True)
+def _resolve_forced_touch_device() -> tuple[str | None, str | None]:
+    forced = os.environ.get("TOUCH_DEVICE", "").strip() or os.environ.get("ROTATOR_TOUCH_DEVICE", "").strip()
+    if not forced:
+        return None, None
+
+    resolved = forced
+    if forced.startswith("event") and forced[5:].isdigit():
+        resolved = f"/dev/input/{forced}"
+
+    if Path(resolved).exists():
+        source = "TOUCH_DEVICE" if os.environ.get("TOUCH_DEVICE", "").strip() else "ROTATOR_TOUCH_DEVICE"
+        return resolved, f"forced by {source}={forced}"
+    return None, f"configured override '{forced}' was not found"
+
+
+def touch_probe() -> tuple[str | None, str]:
+    forced_path, forced_reason = _resolve_forced_touch_device()
+    if forced_reason and forced_path is not None:
+        return forced_path, forced_reason
 
     candidates = sorted(glob.glob("/dev/input/event*"))
     if not candidates:
-        print("[boot-selector] No /dev/input/event* devices found; touch disabled.", flush=True)
-        return None
+        return None, "no /dev/input/event* devices found"
 
     ranked: list[tuple[tuple[int, int, int, int], str, str]] = []
     for path in candidates:
@@ -223,11 +240,26 @@ def select_touch_device() -> str | None:
 
     best_rank, best_path, best_reason = ranked[0]
     if best_rank[0] <= 0:
-        print(f"[boot-selector] No suitable touch device found; touch disabled. Reason: {best_reason}", flush=True)
-        return None
+        details = "; ".join(f"{path}: {reason}" for _rank, path, reason in ranked)
+        return None, f"no candidates scored above zero ({details})"
+    return best_path, f"auto-selected highest rank ({best_reason})"
 
-    print(f"[boot-selector] Touch device selected: {best_path} ({best_reason})", flush=True)
-    return best_path
+
+def select_touch_device() -> str | None:
+    selected, reason = touch_probe()
+    if selected:
+        print(f"[boot-selector] Touch device selected: {selected} ({reason})", flush=True)
+        return selected
+
+    print(
+        (
+            "[boot-selector] Warning: no suitable touch input device found; touch controls disabled. "
+            f"Reason: {reason}. To force one, set TOUCH_DEVICE=/dev/input/eventX "
+            "(or ROTATOR_TOUCH_DEVICE for backward compatibility)."
+        ),
+        flush=True,
+    )
+    return None
 
 
 def _candidate_absinfo_paths(device: str) -> list[Path]:
@@ -266,9 +298,13 @@ def detect_touch_bounds(device: str, default_width: int, default_height: int) ->
                     if not payload:
                         continue
                     try:
-                        code = int(code_str.strip(), 16)
+                        raw_code = code_str.strip().lower()
+                        code = int(raw_code, 16)
                     except ValueError:
-                        continue
+                        try:
+                            code = int(code_str.strip(), 0)
+                        except ValueError:
+                            continue
                     parts = payload.strip().split()
                     if len(parts) < 3:
                         continue
@@ -289,23 +325,30 @@ def detect_touch_bounds(device: str, default_width: int, default_height: int) ->
     return x_width, x_min, y_height, y_min
 
 
-def load_font(width: int, height: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    size = max(32, int(min(width, height) * 0.24))
+def load_button_font(button_width: int, button_height: int, label: str) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    max_height = max(18, int(button_height * 0.48))
+    preferred = max_height
     for candidate in FONT_CANDIDATES:
-        try:
-            return ImageFont.truetype(candidate, size)
-        except OSError:
-            continue
+        for size in range(preferred, 17, -2):
+            try:
+                font = ImageFont.truetype(candidate, size)
+            except OSError:
+                continue
+            left, top, right, bottom = font.getbbox(label)
+            text_width = right - left
+            text_height = bottom - top
+            if text_width <= button_width * 0.62 and text_height <= button_height * 0.48:
+                return font
     return ImageFont.load_default()
 
 
 def selector_geometry(width: int, height: int) -> list[dict[str, object]]:
-    button_width = min(238, max(210, width - 78))
-    button_height = min(72, max(62, int(height * 0.28)))
-    gap = max(28, int(height * 0.10))
+    button_width = min(244, max(220, width - 76))
+    button_height = min(64, max(54, int(height * 0.24)))
+    gap = max(24, int(height * 0.12))
     total_height = (button_height * 2) + gap
     left = (width - button_width) // 2
-    top = max(22, (height - total_height) // 2)
+    top = max(28, (height - total_height) // 2)
     result: list[dict[str, object]] = []
     for index, label in enumerate(("Day", "Night")):
         y = top + (index * (button_height + gap))
@@ -321,21 +364,20 @@ def selector_geometry(width: int, height: int) -> list[dict[str, object]]:
 
 def render_selector(width: int, height: int) -> tuple[Image.Image, list[dict[str, object]]]:
     frame = Image.new("RGBA", (width, height), BACKGROUND_RGB + (255,))
-    font = load_font(width, height)
     buttons = selector_geometry(width, height)
-    draw = ImageDraw.Draw(frame)
 
     for button in buttons:
         left, top, right, bottom = button["bounds"]
         button_width = right - left
         button_height = bottom - top
         radius = button_height // 2
+        font = load_button_font(button_width, button_height, str(button["label"]))
 
-        glow = Image.new("RGBA", (button_width + 32, button_height + 32), (0, 0, 0, 0))
+        glow = Image.new("RGBA", (button_width + 28, button_height + 28), (0, 0, 0, 0))
         glow_draw = ImageDraw.Draw(glow)
-        glow_draw.rounded_rectangle((16, 16, button_width + 15, button_height + 15), radius=radius, fill=BUTTON_GLOW_RGBA)
-        glow = glow.filter(ImageFilter.GaussianBlur(radius=10))
-        frame.alpha_composite(glow, (left - 16, top - 16))
+        glow_draw.rounded_rectangle((14, 14, button_width + 13, button_height + 13), radius=radius, fill=BUTTON_GLOW_RGBA)
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=8))
+        frame.alpha_composite(glow, (left - 14, top - 14))
 
         button_layer = Image.new("RGBA", (button_width, button_height), (0, 0, 0, 0))
         button_draw = ImageDraw.Draw(button_layer)
@@ -343,12 +385,13 @@ def render_selector(width: int, height: int) -> tuple[Image.Image, list[dict[str
         button_draw.rounded_rectangle((0, 0, button_width - 1, button_height - 1), radius=radius, outline=BUTTON_OUTLINE_RGBA, width=1)
         frame.alpha_composite(button_layer, (left, top))
 
+        draw = ImageDraw.Draw(frame)
         label = str(button["label"])
         bbox = draw.textbbox((0, 0), label, font=font)
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
         text_x = left + ((button_width - text_width) // 2) - bbox[0]
-        text_y = top + ((button_height - text_height) // 2) - bbox[1] - 2
+        text_y = top + ((button_height - text_height) // 2) - bbox[1] - 1
         draw.text((text_x, text_y), label, font=font, fill=BUTTON_TEXT_RGB)
 
     return frame.convert("RGB"), buttons
@@ -366,12 +409,12 @@ def _fit_frame(frame: Image.Image, width: int, height: int) -> Image.Image:
     return canvas.convert("RGB")
 
 
-def load_gif_frames(gif_path: Path, width: int, height: int) -> list[tuple[Image.Image, float]]:
+def load_gif_frames(gif_path: Path, width: int, height: int, speed: float) -> list[tuple[Image.Image, float]]:
     with Image.open(gif_path) as gif:
         frames: list[tuple[Image.Image, float]] = []
         for frame in ImageSequence.Iterator(gif):
             duration_ms = max(20, int(frame.info.get("duration", DEFAULT_GIF_FRAME_MS)))
-            frames.append((_fit_frame(frame.copy(), width, height), duration_ms / 1000.0))
+            frames.append((_fit_frame(frame.copy(), width, height), (duration_ms / 1000.0) / speed))
         return frames
 
 
@@ -389,6 +432,7 @@ def playback_gif(
     gif_path: Path,
     width: int,
     height: int,
+    speed: float,
     output_first: str | None,
     output_last: str | None,
 ) -> None:
@@ -396,7 +440,7 @@ def playback_gif(
         print(f"[boot-selector] Startup GIF not found at {gif_path}; skipping animation.", flush=True)
         return
 
-    frames = load_gif_frames(gif_path, width, height)
+    frames = load_gif_frames(gif_path, width, height, speed)
     if not frames:
         print(f"[boot-selector] Startup GIF contains no frames: {gif_path}", flush=True)
         return
@@ -426,6 +470,26 @@ def _normalise_axis(raw_value: int, source_size: int, source_min: int, target_si
     return int(relative * (target_size - 1) / (source_size - 1))
 
 
+def _resolve_tap_mode(
+    last_x: int,
+    last_y: int,
+    buttons: list[dict[str, object]],
+    touch_width: int,
+    touch_min_x: int,
+    touch_height: int,
+    touch_min_y: int,
+    screen_width: int,
+    screen_height: int,
+) -> str | None:
+    screen_x = _normalise_axis(last_x, touch_width, touch_min_x, screen_width)
+    screen_y = _normalise_axis(last_y, touch_height, touch_min_y, screen_height)
+    for button in buttons:
+        left, top, right, bottom = button["bounds"]
+        if left <= screen_x <= right and top <= screen_y <= bottom:
+            return str(button["mode"])
+    return None
+
+
 def wait_for_selection(
     buttons: list[dict[str, object]],
     screen_width: int,
@@ -449,6 +513,26 @@ def wait_for_selection(
     last_y = touch_min_y + (touch_height // 2)
     touch_down = False
 
+    def commit_tap(now: float) -> str | None:
+        nonlocal last_emit
+        if now < ready_after or (now - last_emit) < touch_debounce_secs:
+            return None
+        last_emit = now
+        mode = _resolve_tap_mode(
+            last_x,
+            last_y,
+            buttons,
+            touch_width,
+            touch_min_x,
+            touch_height,
+            touch_min_y,
+            screen_width,
+            screen_height,
+        )
+        if mode:
+            print(f"[boot-selector] Selected mode: {mode}", flush=True)
+        return mode
+
     with open(device, "rb", buffering=0) as fd:
         while not STOP_REQUESTED:
             readable, _, _ = select.select([fd], [], [], 0.2)
@@ -469,26 +553,37 @@ def wait_for_selection(
                     touch_down = True
                 elif ev_value == 0 and touch_down:
                     touch_down = False
-                    now = time.monotonic()
-                    if now < ready_after or (now - last_emit) < touch_debounce_secs:
-                        continue
-                    last_emit = now
-                    screen_x = _normalise_axis(last_x, touch_width, touch_min_x, screen_width)
-                    screen_y = _normalise_axis(last_y, touch_height, touch_min_y, screen_height)
-                    for button in buttons:
-                        left, top, right, bottom = button["bounds"]
-                        if left <= screen_x <= right and top <= screen_y <= bottom:
-                            mode = str(button["mode"])
-                            print(f"[boot-selector] Selected mode: {mode}", flush=True)
-                            return mode
+                    mode = commit_tap(time.monotonic())
+                    if mode:
+                        return mode
             elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
                 if ev_value == -1 and touch_down:
                     touch_down = False
+                    mode = commit_tap(time.monotonic())
+                    if mode:
+                        return mode
                 elif ev_value >= 0:
                     touch_down = True
             elif ev_type == EV_SYN:
                 continue
     return None
+
+
+def run_touch_probe(width: int, height: int) -> int:
+    device, reason = touch_probe()
+    if not device:
+        print("[boot-selector] Touch probe found no usable device.", flush=True)
+        print(f"[boot-selector] Probe reason: {reason}", flush=True)
+        return 1
+
+    touch_width, touch_min_x, touch_height, touch_min_y = detect_touch_bounds(device, width, height)
+    print(f"[boot-selector] Touch probe selected {device}", flush=True)
+    print(f"[boot-selector] Probe reason: {reason}", flush=True)
+    print(
+        f"[boot-selector] Probe calibration: width={touch_width} min_x={touch_min_x} height={touch_height} min_y={touch_min_y}",
+        flush=True,
+    )
+    return 0
 
 
 def launch_service(service_name: str) -> int:
@@ -510,6 +605,9 @@ def main() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
+    if args.probe_touch:
+        return run_touch_probe(args.width, args.height)
+
     selector_image, buttons = render_selector(args.width, args.height)
     save_preview(selector_image, args.output_selector)
 
@@ -523,7 +621,7 @@ def main() -> int:
 
     try:
         if not args.skip_gif:
-            playback_gif(framebuffer, Path(args.gif), args.width, args.height, args.output_gif_first, args.output_gif_last)
+            playback_gif(framebuffer, Path(args.gif), args.width, args.height, args.gif_speed, args.output_gif_first, args.output_gif_last)
         if framebuffer is not None:
             framebuffer.write_image(selector_image)
 
