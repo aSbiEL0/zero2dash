@@ -105,6 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames", type=int, default=0, help="Number of frames to render before exiting; 0 means run until terminated.")
     parser.add_argument("--frame-delay", type=float, default=FRAME_DELAY_DEFAULT, help="Seconds between animation frames.")
     parser.add_argument("--ticker-speed", type=float, default=TICKER_SPEED_DEFAULT, help="Ticker speed in pixels per second.")
+    parser.add_argument("--frame-log", action="store_true", help="Log achieved frame rate once per second.")
     parser.add_argument("--self-test", action="store_true", help="Run inline smoke tests and exit.")
     return parser.parse_args()
 
@@ -348,6 +349,8 @@ def main() -> int:
     animation_start = time.monotonic()
     frame_index = 0
     saved_output = False
+    stats_window_start = animation_start
+    stats_frame_count = 0
     while not _STOP_REQUESTED:
         now = datetime.now(tz=tz)
         elapsed = time.monotonic() - animation_start
@@ -364,6 +367,15 @@ def main() -> int:
                 return 1
             write_to_framebuffer(frame, args.fbdev, args.width, args.height)
         frame_index += 1
+        stats_frame_count += 1
+        if args.frame_log:
+            stats_elapsed = time.monotonic() - stats_window_start
+            if stats_elapsed >= 1.0:
+                fps = stats_frame_count / stats_elapsed
+                avg_frame_ms = (stats_elapsed / stats_frame_count) * 1000 if stats_frame_count else 0.0
+                print(f"[frame-log] fps={fps:.1f} avg_frame_ms={avg_frame_ms:.1f} ticker_speed={args.ticker_speed:.1f}")
+                stats_window_start = time.monotonic()
+                stats_frame_count = 0
         if args.frames > 0 and frame_index >= args.frames:
             break
         time.sleep(args.frame_delay)
