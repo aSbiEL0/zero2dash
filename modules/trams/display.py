@@ -8,7 +8,6 @@ import json
 import mmap
 import os
 import signal
-import struct
 import sys
 import time
 from dataclasses import dataclass
@@ -68,28 +67,45 @@ def load_timezone(name: str):
 
 
 def rgb888_to_rgb565(image: Image.Image) -> bytes:
-    r, g, b = image.split()
-    r = r.point(lambda value: value >> 3)
-    g = g.point(lambda value: value >> 2)
-    b = b.point(lambda value: value >> 3)
-    rgb565 = bytearray()
-    rp, gp, bp = r.tobytes(), g.tobytes(), b.tobytes()
-    for idx in range(len(rp)):
-        value = ((rp[idx] & 0x1F) << 11) | ((gp[idx] & 0x3F) << 5) | (bp[idx] & 0x1F)
-        rgb565 += struct.pack("<H", value)
-    return bytes(rgb565)
+    rgb = image.convert("RGB").tobytes()
+    payload = bytearray((len(rgb) // 3) * 2)
+    out_idx = 0
+    for idx in range(0, len(rgb), 3):
+        value = ((rgb[idx] & 0xF8) << 8) | ((rgb[idx + 1] & 0xFC) << 3) | (rgb[idx + 2] >> 3)
+        payload[out_idx] = value & 0xFF
+        payload[out_idx + 1] = (value >> 8) & 0xFF
+        out_idx += 2
+    return bytes(payload)
 
 
-def write_to_framebuffer(image: Image.Image, fbdev: str, width: int, height: int) -> None:
-    payload = rgb888_to_rgb565(image)
-    expected = width * height * 2
-    if len(payload) != expected:
-        raise RuntimeError(f"Framebuffer payload size mismatch: expected {expected} bytes, got {len(payload)} bytes")
-    with open(fbdev, "r+b", buffering=0) as framebuffer:
-        mm = mmap.mmap(framebuffer.fileno(), expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
-        mm.seek(0)
-        mm.write(payload)
-        mm.close()
+class FramebufferWriter:
+    def __init__(self, fbdev: str, width: int, height: int) -> None:
+        self.fbdev = fbdev
+        self.expected = width * height * 2
+        self._handle: Any | None = None
+        self._mapping: mmap.mmap | None = None
+
+    def open(self) -> None:
+        handle = open(self.fbdev, "r+b", buffering=0)
+        self._handle = handle
+        self._mapping = mmap.mmap(handle.fileno(), self.expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
+
+    def write_frame(self, image: Image.Image) -> None:
+        if self._mapping is None:
+            raise RuntimeError("Framebuffer is not open")
+        payload = rgb888_to_rgb565(image)
+        if len(payload) != self.expected:
+            raise RuntimeError(f"Framebuffer payload size mismatch: expected {self.expected} bytes, got {len(payload)} bytes")
+        self._mapping.seek(0)
+        self._mapping.write(payload)
+
+    def close(self) -> None:
+        if self._mapping is not None:
+            self._mapping.close()
+            self._mapping = None
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -346,39 +362,47 @@ def main() -> int:
     cache = load_json(Path(args.cache))
     alerts_cache = load_json(Path(args.alerts_cache))
     tz = load_timezone(str((cache or {}).get("timezone", DEFAULT_TIMEZONE)))
+    framebuffer: FramebufferWriter | None = None
+    if not args.no_framebuffer:
+        fb_path = Path(args.fbdev)
+        if not fb_path.exists():
+            print(f"Framebuffer {args.fbdev} not found.", file=sys.stderr)
+            return 1
+        framebuffer = FramebufferWriter(args.fbdev, args.width, args.height)
+        framebuffer.open()
     animation_start = time.monotonic()
     frame_index = 0
     saved_output = False
     stats_window_start = animation_start
     stats_frame_count = 0
-    while not _STOP_REQUESTED:
-        now = datetime.now(tz=tz)
-        elapsed = time.monotonic() - animation_start
-        ticker_offset = elapsed * args.ticker_speed
-        frame = render_frame(background, cache, alerts_cache, now, ticker_offset=ticker_offset)
-        if args.output and not saved_output:
-            frame.save(args.output)
-            print(f"Saved preview image to {args.output}")
-            saved_output = True
-        if not args.no_framebuffer:
-            fb_path = Path(args.fbdev)
-            if not fb_path.exists():
-                print(f"Framebuffer {args.fbdev} not found.", file=sys.stderr)
-                return 1
-            write_to_framebuffer(frame, args.fbdev, args.width, args.height)
-        frame_index += 1
-        stats_frame_count += 1
-        if args.frame_log:
-            stats_elapsed = time.monotonic() - stats_window_start
-            if stats_elapsed >= 1.0:
-                fps = stats_frame_count / stats_elapsed
-                avg_frame_ms = (stats_elapsed / stats_frame_count) * 1000 if stats_frame_count else 0.0
-                print(f"[frame-log] fps={fps:.1f} avg_frame_ms={avg_frame_ms:.1f} ticker_speed={args.ticker_speed:.1f}")
-                stats_window_start = time.monotonic()
-                stats_frame_count = 0
-        if args.frames > 0 and frame_index >= args.frames:
-            break
-        time.sleep(args.frame_delay)
+    try:
+        while not _STOP_REQUESTED:
+            now = datetime.now(tz=tz)
+            elapsed = time.monotonic() - animation_start
+            ticker_offset = elapsed * args.ticker_speed
+            frame = render_frame(background, cache, alerts_cache, now, ticker_offset=ticker_offset)
+            if args.output and not saved_output:
+                frame.save(args.output)
+                print(f"Saved preview image to {args.output}")
+                saved_output = True
+            if framebuffer is not None:
+                framebuffer.write_frame(frame)
+            frame_index += 1
+            stats_frame_count += 1
+            if args.frame_log:
+                stats_elapsed = time.monotonic() - stats_window_start
+                if stats_elapsed >= 1.0:
+                    fps = stats_frame_count / stats_elapsed
+                    avg_frame_ms = (stats_elapsed / stats_frame_count) * 1000 if stats_frame_count else 0.0
+                    print(f"[frame-log] fps={fps:.1f} avg_frame_ms={avg_frame_ms:.1f} ticker_speed={args.ticker_speed:.1f}")
+                    stats_window_start = time.monotonic()
+                    stats_frame_count = 0
+            if args.frames > 0 and frame_index >= args.frames:
+                break
+            time.sleep(args.frame_delay)
+    finally:
+        if framebuffer is not None:
+            framebuffer.close()
     if args.no_framebuffer:
         print("Skipping framebuffer write (--no-framebuffer set)")
     else:
