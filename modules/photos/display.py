@@ -6,7 +6,7 @@ from __future__ import annotations
 import runpy
 from pathlib import Path
 
-LEGACY_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "photos-shuffle.py"
+LEGACY_SCRIPT = Path(__file__).resolve().parent / "photos-shuffle.py"
 
 
 def main() -> int:

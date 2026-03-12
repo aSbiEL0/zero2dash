@@ -6,7 +6,7 @@ from __future__ import annotations
 import runpy
 from pathlib import Path
 
-LEGACY_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "piholestats_manual.py"
+LEGACY_SCRIPT = Path(__file__).resolve().parent / "piholestats_manual.py"
 
 
 def main() -> int:

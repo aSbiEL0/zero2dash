@@ -1,20 +1,20 @@
 # Raspberry Pi update guide (zero2dash)
 
-This guide walks you through safely updating a Pi that already runs `zero2dash`, then checking whether your `.env` file needs changes.
+This guide updates an existing Pi deployment and validates the current module-based layout.
 
-## 1) SSH to the Pi and create a rollback backup
+## 1) Connect and take a rollback backup
 
 ```bash
 ssh pi@<pi-ip>
-cd <project-root>
+cd /home/pihole/zero2dash
 sudo systemctl stop display.service night.service currency-update.service day.timer night.timer currency-update.timer
 mkdir -p backups
 tar -czf backups/zero2dash-$(date +%F-%H%M).tgz .
 ```
 
-## 2) Update the code in your project directory
+## 2) Update the project files
 
-If your deployment is a git checkout:
+If the Pi uses a git checkout:
 
 ```bash
 git fetch --all --prune
@@ -22,16 +22,23 @@ git status
 git pull --ff-only
 ```
 
-If your deployment is copied files instead of git, sync fresh files from your dev machine into the same project directory.
+If the Pi uses copied files, sync the updated project tree into the same directory.
 
-## 3) Ensure required runtime packages are present
+## 3) Refresh Python dependencies
+
+```bash
+cd /home/pihole/zero2dash
+python3 -m pip install -r requirements.txt
+```
+
+If needed:
 
 ```bash
 sudo apt update
-sudo apt install -y python3-pip python3-pil
+sudo apt install -y python3-pip python3-pil libjpeg-dev zlib1g-dev
 ```
 
-## 4) Refresh systemd units from the repo
+## 4) Refresh systemd units
 
 ```bash
 sudo cp systemd/*.service /etc/systemd/system/
@@ -39,11 +46,11 @@ sudo cp systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
-## 5) Check whether `.env` needs amending
+## 5) Check `.env`
 
-Your active config should be the `.env` file in the project root because both canonical services load that file.
+The active runtime config file is `/home/pihole/zero2dash/.env`.
 
-### 5a) Confirm the file exists and is secured
+Ensure it exists and is secured:
 
 ```bash
 test -f .env && echo ".env exists"
@@ -57,7 +64,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-### 5b) Diff your current `.env` against the latest `.env.example`
+Compare the current file against `.env.example`:
 
 ```bash
 comm -23 \
@@ -65,49 +72,35 @@ comm -23 \
   <(grep -E '^[A-Z0-9_]+=' .env | cut -d= -f1 | sort -u)
 ```
 
-If this prints keys, they are new keys present in `.env.example` but missing from your `.env`; add them.
+## 6) Validate module configuration
 
-### 5c) Minimum values to verify for a healthy deploy
-
-At minimum, check these are set correctly for your environment:
-
-- `PIHOLE_HOST`
-- `PIHOLE_PASSWORD`
-- `PIHOLE_API_TOKEN` (optional fallback)
-- `REFRESH_SECS`
-- `ACTIVE_HOURS`
-- `FB_DEVICE` (optional; defaults to `/dev/fb1`)
-- `FB_WIDTH` and `FB_HEIGHT` (optional; defaults are `320` and `240` where used)
+```bash
+python3 scripts/calendash-api.py --check-config
+python3 modules/photos/photos-shuffle.py --check-config
+python3 modules/currency/currency-rate.py --check-config
+python3 modules/pihole/piholestats_manual.py --check-config
+```
 
 If you use Google-backed pages, also verify:
 
-- Calendar: `GOOGLE_CALENDAR_CLIENT_ID` + `GOOGLE_CALENDAR_CLIENT_SECRET` (or shared Google creds), `GOOGLE_CALENDAR_ID`, `TIMEZONE`
-- Photos: `GOOGLE_PHOTOS_ALBUM_ID` and either `GOOGLE_PHOTOS_CLIENT_SECRETS_PATH` or `GOOGLE_PHOTOS_CLIENT_ID` + `GOOGLE_PHOTOS_CLIENT_SECRET`
+- Calendar: `GOOGLE_CALENDAR_ID`, `TIMEZONE`, and OAuth client credentials
+- Photos: `LOCAL_PHOTOS_DIR` or Google Photos credentials plus `GOOGLE_PHOTOS_ALBUM_ID`
 
-### 5d) Validate Google Photos auth wiring (optional but recommended)
-
-```bash
-python3 scripts/photos-shuffle.py --check-config
-```
-
-This shows which credential source is being used and whether config is complete.
-
-## 6) Re-enable and start services
+## 7) Re-enable services and timers
 
 ```bash
 sudo systemctl enable --now display.service
 sudo systemctl enable --now day.timer night.timer currency-update.timer
 ```
 
-If you want to immediately test night mode too:
+Optional immediate checks:
 
 ```bash
 sudo systemctl start night.service
+sudo systemctl restart currency-update.service
 ```
 
-The night service now runs `scripts/blackout.py`, which expects `images/raspberry-pi-icon.png` to be present in the project tree.
-
-## 7) Post-update verification
+## 8) Post-update verification
 
 ```bash
 systemctl status display.service --no-pager
@@ -119,21 +112,21 @@ journalctl -u night.service -n 50 --no-pager
 journalctl -u currency-update.service -n 50 --no-pager
 ```
 
-## 8) Quick rollback (if needed)
+## 9) Functional spot checks
+
+```bash
+python3 modules/photos/photos-shuffle.py --test
+python3 modules/currency/currency.py --self-test
+python3 modules/pihole/piholestats_manual.py --output-image /tmp/pihole-test.png
+python3 modules/calendash/display.py --output /tmp/calendash-display.png --no-framebuffer
+```
+
+## 10) Roll back if required
 
 ```bash
 sudo systemctl stop display.service night.service currency-update.service
-rm -rf <project-root>/*
-tar -xzf backups/<backup-file>.tgz -C <project-root>
+rm -rf /home/pihole/zero2dash/*
+tar -xzf backups/<backup-file>.tgz -C /home/pihole/zero2dash
 sudo systemctl daemon-reload
 sudo systemctl start display.service
 ```
-
-## Notes about the IDE `.env` path in your context
-
-Your IDE referenced a Windows path (`C:/Users/Default.DESKTOP-MR88P09/.env`). For runtime, the file that matters is the `.env` in your project root because that is what the systemd units load.
-
-
-
-
-

@@ -6,7 +6,7 @@ from __future__ import annotations
 import runpy
 from pathlib import Path
 
-LEGACY_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "calendash-img.py"
+LEGACY_SCRIPT = Path(__file__).resolve().parent / "display_impl.py"
 
 
 def main() -> int:
