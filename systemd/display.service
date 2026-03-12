@@ -2,6 +2,8 @@
 Description=Pi-hole TFT Day Display Rotator
 After=network-online.target
 Wants=network-online.target
+Conflicts=night.service
+Before=night.service
 
 [Service]
 Type=simple
@@ -20,4 +22,3 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-

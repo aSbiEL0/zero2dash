@@ -3,9 +3,8 @@ Description=Start NIGHT GUI at 22:00
 
 [Timer]
 OnCalendar=*-*-* 22:00:00
-Persistent=true
 AccuracySec=1min
-Unit=pihole-display-dark.service
+Unit=night.service
 
 [Install]
 WantedBy=timers.target

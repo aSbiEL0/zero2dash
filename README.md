@@ -13,17 +13,17 @@ Use the following names as the **source of truth** for systemd-managed runtime m
 | Service name | Script target | Mode |
 | --- | --- | --- |
 | `display.service` | `display_rotator.py` | **Day rotator** (multi-page cycle, touch navigation) |
-| `pihole-display-dark.service` | `scripts/blackout.py` | **Night dark mode** (blackout animation) |
+| `night.service` | `scripts/blackout.py` | **Night dark mode** (blackout animation) |
 | `currency-update.service` | `scripts/currency-rate.py` | **06:00 currency image refresh** |
 ### Compatibility table (service → script → mode)
 
 | Service | Script path | Mode / status |
 | --- | --- | --- |
 | `display.service` | `display_rotator.py` | Canonical day mode |
-| `pihole-display-dark.service` | `scripts/blackout.py` | Canonical night mode |
+| `night.service` | `scripts/blackout.py` | Canonical night mode |
 | `currency-update.service` | `scripts/currency-rate.py` | Daily GBP/PLN image refresh |
 | `day-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `display.service` |
-| `dark-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `pihole-display-dark.service` |
+| `dark-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `night.service` |
 ## Repository layout
 
 ```text
@@ -45,7 +45,7 @@ zero2dash/
 │   └── photo-resize.py
 ├── systemd/
 │   ├── display.service
-│   ├── pihole-display-dark.service
+│   ├── night.service
 │   ├── currency-update.service
 │   ├── currency-update.timer
 │   ├── day.timer
@@ -135,7 +135,7 @@ Useful checks:
 
 ```sh
 journalctl -u display.service -n 50 --no-pager
-journalctl -u pihole-display-dark.service -n 50 --no-pager
+journalctl -u night.service -n 50 --no-pager
 journalctl -u currency-update.service -n 50 --no-pager
 ```
 

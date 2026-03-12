@@ -7,7 +7,7 @@ This guide walks you through safely updating a Pi that already runs `zero2dash`,
 ```bash
 ssh pi@<pi-ip>
 cd <project-root>
-sudo systemctl stop display.service pihole-display-dark.service currency-update.service day.timer night.timer currency-update.timer
+sudo systemctl stop display.service night.service currency-update.service day.timer night.timer currency-update.timer
 mkdir -p backups
 tar -czf backups/zero2dash-$(date +%F-%H%M).tgz .
 ```
@@ -102,7 +102,7 @@ sudo systemctl enable --now day.timer night.timer currency-update.timer
 If you want to immediately test night mode too:
 
 ```bash
-sudo systemctl start pihole-display-dark.service
+sudo systemctl start night.service
 ```
 
 The night service now runs `scripts/blackout.py`, which expects `images/raspberry-pi-icon.png` to be present in the project tree.
@@ -111,18 +111,18 @@ The night service now runs `scripts/blackout.py`, which expects `images/raspberr
 
 ```bash
 systemctl status display.service --no-pager
-systemctl status pihole-display-dark.service --no-pager
+systemctl status night.service --no-pager
 systemctl status currency-update.service --no-pager
 systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.timer'
 journalctl -u display.service -n 50 --no-pager
-journalctl -u pihole-display-dark.service -n 50 --no-pager
+journalctl -u night.service -n 50 --no-pager
 journalctl -u currency-update.service -n 50 --no-pager
 ```
 
 ## 8) Quick rollback (if needed)
 
 ```bash
-sudo systemctl stop display.service pihole-display-dark.service currency-update.service
+sudo systemctl stop display.service night.service currency-update.service
 rm -rf <project-root>/*
 tar -xzf backups/<backup-file>.tgz -C <project-root>
 sudo systemctl daemon-reload

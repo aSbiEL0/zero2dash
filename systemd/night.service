@@ -2,6 +2,8 @@
 Description=TFT Night Blackout Display
 After=network-online.target
 Wants=network-online.target
+Conflicts=display.service
+Before=display.service
 
 [Service]
 Type=simple
@@ -17,9 +19,3 @@ Restart=always
 RestartSec=2
 StandardOutput=journal
 StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-
-
-
