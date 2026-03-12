@@ -5,10 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/zero2dash
+WorkingDirectory=/home/pihole/zero2dash
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/opt/zero2dash/.env
-ExecStart=/usr/bin/python3 -u /opt/zero2dash/scripts/currency-rate.py
+EnvironmentFile=-/home/pihole/zero2dash/.env
+ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/scripts/currency-rate.py
 
 [Install]
 WantedBy=multi-user.target
+
+

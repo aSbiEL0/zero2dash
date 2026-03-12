@@ -6,23 +6,23 @@ This guide walks you through safely updating a Pi that already runs `zero2dash`,
 
 ```bash
 ssh pi@<pi-ip>
+cd <project-root>
 sudo systemctl stop display.service pihole-display-dark.service currency-update.service day.timer night.timer currency-update.timer
-sudo mkdir -p /opt/backups
-sudo tar -czf /opt/backups/zero2dash-$(date +%F-%H%M).tgz /opt/zero2dash
+mkdir -p backups
+tar -czf backups/zero2dash-$(date +%F-%H%M).tgz .
 ```
 
-## 2) Update the code in `/opt/zero2dash`
+## 2) Update the code in your project directory
 
 If your deployment is a git checkout:
 
 ```bash
-cd /opt/zero2dash
 git fetch --all --prune
 git status
 git pull --ff-only
 ```
 
-If your deployment is copied files instead of git, copy fresh files from your dev machine into `/opt/zero2dash`.
+If your deployment is copied files instead of git, sync fresh files from your dev machine into the same project directory.
 
 ## 3) Ensure required runtime packages are present
 
@@ -34,33 +34,32 @@ sudo apt install -y python3-pip python3-pil
 ## 4) Refresh systemd units from the repo
 
 ```bash
-sudo cp /opt/zero2dash/systemd/*.service /etc/systemd/system/
-sudo cp /opt/zero2dash/systemd/*.timer /etc/systemd/system/
+sudo cp systemd/*.service /etc/systemd/system/
+sudo cp systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
 ## 5) Check whether `.env` needs amending
 
-Your active config should be `/opt/zero2dash/.env` because both canonical services load this file.
+Your active config should be the `.env` file in the project root because both canonical services load that file.
 
 ### 5a) Confirm the file exists and is secured
 
 ```bash
-sudo test -f /opt/zero2dash/.env && echo ".env exists"
-sudo chmod 600 /opt/zero2dash/.env
+test -f .env && echo ".env exists"
+chmod 600 .env
 ```
 
 If missing:
 
 ```bash
-sudo cp /opt/zero2dash/.env.example /opt/zero2dash/.env
-sudo chmod 600 /opt/zero2dash/.env
+cp .env.example .env
+chmod 600 .env
 ```
 
 ### 5b) Diff your current `.env` against the latest `.env.example`
 
 ```bash
-cd /opt/zero2dash
 comm -23 \
   <(grep -E '^[A-Z0-9_]+=' .env.example | cut -d= -f1 | sort -u) \
   <(grep -E '^[A-Z0-9_]+=' .env | cut -d= -f1 | sort -u)
@@ -88,7 +87,6 @@ If you use Google-backed pages, also verify:
 ### 5d) Validate Google Photos auth wiring (optional but recommended)
 
 ```bash
-cd /opt/zero2dash
 python3 scripts/photos-shuffle.py --check-config
 ```
 
@@ -107,7 +105,7 @@ If you want to immediately test night mode too:
 sudo systemctl start pihole-display-dark.service
 ```
 
-The night service now runs `/opt/zero2dash/scripts/blackout.py`, which expects `/opt/zero2dash/images/raspberry-pi-icon.png` to be present in the deployed tree.
+The night service now runs `scripts/blackout.py`, which expects `images/raspberry-pi-icon.png` to be present in the project tree.
 
 ## 7) Post-update verification
 
@@ -125,15 +123,16 @@ journalctl -u currency-update.service -n 50 --no-pager
 
 ```bash
 sudo systemctl stop display.service pihole-display-dark.service currency-update.service
-sudo rm -rf /opt/zero2dash
-sudo tar -xzf /opt/backups/<backup-file>.tgz -C /
+rm -rf <project-root>/*
+tar -xzf backups/<backup-file>.tgz -C <project-root>
 sudo systemctl daemon-reload
 sudo systemctl start display.service
 ```
 
 ## Notes about the IDE `.env` path in your context
 
-Your IDE referenced a Windows path (`C:/Users/Default.DESKTOP-MR88P09/.env`). For the Pi runtime, the file that matters is `/opt/zero2dash/.env` because that is what the systemd units load.
+Your IDE referenced a Windows path (`C:/Users/Default.DESKTOP-MR88P09/.env`). For runtime, the file that matters is the `.env` in your project root because that is what the systemd units load.
+
 
 
 

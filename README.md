@@ -19,9 +19,9 @@ Use the following names as the **source of truth** for systemd-managed runtime m
 
 | Service | Script path | Mode / status |
 | --- | --- | --- |
-| `display.service` | `/opt/zero2dash/display_rotator.py` | Canonical day mode |
-| `pihole-display-dark.service` | `/opt/zero2dash/scripts/blackout.py` | Canonical night mode |
-| `currency-update.service` | `/opt/zero2dash/scripts/currency-rate.py` | Daily GBP/PLN image refresh |
+| `display.service` | `display_rotator.py` | Canonical day mode |
+| `pihole-display-dark.service` | `scripts/blackout.py` | Canonical night mode |
+| `currency-update.service` | `scripts/currency-rate.py` | Daily GBP/PLN image refresh |
 | `day-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `display.service` |
 | `dark-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `pihole-display-dark.service` |
 ## Repository layout
@@ -82,9 +82,7 @@ sudo apt install -y python3-pip python3-pil
 ```
 
 ```sh
-sudo mkdir -p /opt/zero2dash
-sudo cp -r . /opt/zero2dash/
-sudo chmod +x /opt/zero2dash/scripts/pihole-display-pre.sh
+sudo chmod +x scripts/pihole-display-pre.sh
 ```
 
 ## Configuration
@@ -92,8 +90,8 @@ sudo chmod +x /opt/zero2dash/scripts/pihole-display-pre.sh
 Create and secure an env file:
 
 ```sh
-cp /opt/zero2dash/.env.example /opt/zero2dash/.env
-chmod 600 /opt/zero2dash/.env
+cp .env.example .env
+chmod 600 .env
 ```
 
 Set at minimum for Pi-hole:
@@ -113,7 +111,7 @@ Google OAuth notes:
 - Use Desktop OAuth clients for Calendar and Photos.
 - Loopback OAuth only: complete sign-in on the same machine as the script, or tunnel the callback port from a headless Pi with `ssh -L 8080:localhost:8080 pihole@pihole`.
 - If the Google consent screen is in testing, add your account as a test user.
-- `calendash-api.py` defaults `GOOGLE_TOKEN_PATH` to `token.json` relative to `/opt/zero2dash` under systemd; `photos-shuffle.py` must keep using a separate `GOOGLE_TOKEN_PATH_PHOTOS`.
+- `calendash-api.py` defaults `GOOGLE_TOKEN_PATH` to `token.json` relative to the project root under systemd; `photos-shuffle.py` must keep using a separate `GOOGLE_TOKEN_PATH_PHOTOS`.
 
 Drive-backed photos notes:
 
@@ -126,8 +124,8 @@ Drive-backed photos notes:
 Install and enable canonical units:
 
 ```sh
-sudo cp /opt/zero2dash/systemd/*.service /etc/systemd/system/
-sudo cp /opt/zero2dash/systemd/*.timer /etc/systemd/system/
+sudo cp systemd/*.service /etc/systemd/system/
+sudo cp systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now display.service
 sudo systemctl enable --now day.timer night.timer currency-update.timer
@@ -174,14 +172,15 @@ python3 scripts/photos-shuffle.py --test
 ## Notes
 
 - `display_rotator.py` excludes `blackout.py`, `piholestats_v1.2.py`, `calendash-api.py`, `currency-rate.py`, `_config.py`, `drive-sync.py`, and `photo-resize.py` by default so helper scripts do not end up in the day rotator.
-- `scripts/blackout.py` expects the deployed icon asset at `/opt/zero2dash/images/raspberry-pi-icon.png`.
+- `scripts/blackout.py` expects the icon asset at `images/raspberry-pi-icon.png`.
 - `calendash-img.py` is a rotator-friendly page script, not a systemd service unit by itself.
 - `currency-rate.py` is the scheduled generator; `currency.py` is the rotator-friendly page script that only displays the generated image.
 
 
 ### Framebuffer overrides in systemd
 
-Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `/opt/zero2dash/.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
+Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
+
 
 
 

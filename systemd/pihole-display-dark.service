@@ -5,13 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/zero2dash
+WorkingDirectory=/home/pihole/zero2dash
 Environment=PYTHONUNBUFFERED=1
 Environment=FB_DEVICE=/dev/fb1
-EnvironmentFile=-/opt/zero2dash/.env
+EnvironmentFile=-/home/pihole/zero2dash/.env
 
-ExecStartPre=/opt/zero2dash/scripts/pihole-display-pre.sh
-ExecStart=/usr/bin/python3 -u /opt/zero2dash/scripts/blackout.py
+ExecStartPre=/home/pihole/zero2dash/scripts/pihole-display-pre.sh
+ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/scripts/blackout.py
 
 Restart=always
 RestartSec=2
@@ -20,5 +20,6 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
+
 
 

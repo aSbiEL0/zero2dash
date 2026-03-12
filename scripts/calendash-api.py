@@ -5,7 +5,7 @@ Dependencies:
   pip install google-api-python-client google-auth-oauthlib python-dotenv pillow pytz
 
 Cron example (06:00 every day):
-  0 6 * * * cd /opt/zero2dash && /usr/bin/python3 /opt/zero2dash/scripts/calendash-api.py >> /var/log/calendash.log 2>&1
+  0 6 * * * cd /home/pihole/zero2dash && /usr/bin/python3 /home/pihole/zero2dash/scripts/calendash-api.py >> /var/log/calendash.log 2>&1
 
 Assets:
 - BACKGROUND_IMAGE should be a 320x240 base image that already contains your logo/header.
@@ -891,3 +891,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
