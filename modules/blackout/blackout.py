@@ -11,6 +11,7 @@ import queue
 import re
 import select
 import signal
+import subprocess
 import struct
 import sys
 import threading
@@ -30,9 +31,13 @@ ICON_MAX_SIZE = 72
 STEP_X = 1
 STEP_Y = 1
 TIME_OVERLAY_SECS = float(os.environ.get("BLACKOUT_TIME_OVERLAY_SECS", "3.0"))
+HOLD_TO_SELECTOR_SECS = float(os.environ.get("BLACKOUT_HOLD_TO_SELECTOR_SECS", "3.0"))
 TIME_TEXT_RGB = (64, 64, 64)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 _STOP_REQUESTED = False
+BASE_DIR = Path(__file__).resolve().parents[2]
+BOOT_SELECTOR_SCRIPT = BASE_DIR / "boot" / "boot_selector.py"
+BOOT_SELECTOR_SERVICE = os.environ.get("BLACKOUT_BOOT_SELECTOR_SERVICE", "boot-selector.service").strip() or "boot-selector.service"
 
 # linux/input-event-codes.h
 EV_SYN = 0x00
@@ -149,13 +154,18 @@ def select_touch_device() -> str | None:
     print(f"[blackout] Touch device selected: {best_path} ({best_reason})", flush=True)
     return best_path
 
-
-def touch_worker(tap_q: "queue.Queue[float]", stop_evt: threading.Event) -> None:
+def touch_worker(event_q: "queue.Queue[str]", stop_evt: threading.Event) -> None:
     device = select_touch_device()
     if not device:
         return
 
     touch_down = False
+    touch_started_at = 0.0
+
+    def emit_touch_event() -> None:
+        duration = time.monotonic() - touch_started_at
+        event_q.put("hold" if duration >= HOLD_TO_SELECTOR_SECS else "tap")
+
     try:
         with open(device, "rb", buffering=0) as fd:
             while not stop_evt.is_set():
@@ -171,19 +181,53 @@ def touch_worker(tap_q: "queue.Queue[float]", stop_evt: threading.Event) -> None
                 if ev_type == EV_KEY and ev_code == BTN_TOUCH:
                     if ev_value == 1:
                         touch_down = True
+                        touch_started_at = time.monotonic()
                     elif ev_value == 0 and touch_down:
                         touch_down = False
-                        tap_q.put(time.monotonic())
+                        emit_touch_event()
                 elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
                     if ev_value == -1 and touch_down:
                         touch_down = False
-                        tap_q.put(time.monotonic())
+                        emit_touch_event()
                     elif ev_value >= 0:
                         touch_down = True
+                        touch_started_at = time.monotonic()
                 elif ev_type in (EV_ABS, EV_SYN):
                     continue
     except Exception as exc:
         print(f"[blackout] Touch worker stopped ({device}): {exc}", flush=True)
+
+
+def activate_boot_selector() -> int:
+    global _STOP_REQUESTED
+
+    running_under_systemd = bool(os.environ.get("INVOCATION_ID", "").strip())
+    if running_under_systemd:
+        result = subprocess.run(["systemctl", "start", BOOT_SELECTOR_SERVICE], check=False, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"[blackout] Long press detected; started {BOOT_SELECTOR_SERVICE}.", flush=True)
+            _STOP_REQUESTED = True
+            return 0
+
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        print(f"[blackout] Failed to start {BOOT_SELECTOR_SERVICE}: {stderr}", file=sys.stderr, flush=True)
+        return result.returncode
+
+    if not BOOT_SELECTOR_SCRIPT.exists():
+        print(f"[blackout] Boot selector script not found: {BOOT_SELECTOR_SCRIPT}", file=sys.stderr, flush=True)
+        return 1
+
+    manual_env = os.environ.copy()
+    manual_env.pop("INVOCATION_ID", None)
+    subprocess.Popen(
+        [sys.executable, "-u", str(BOOT_SELECTOR_SCRIPT)],
+        cwd=str(BASE_DIR),
+        env=manual_env,
+        start_new_session=True,
+    )
+    print(f"[blackout] Long press detected; launched {BOOT_SELECTOR_SCRIPT} manually.", flush=True)
+    _STOP_REQUESTED = True
+    return 0
 
 
 def rgb888_to_rgb565(image: Image.Image) -> bytes:
@@ -402,7 +446,7 @@ def main() -> int:
     time_font = load_time_font(args.width, args.height)
     time_visible_until = 0.0
     previous_show_time = False
-    tap_q: queue.Queue[float] = queue.Queue()
+    touch_event_q: queue.Queue[str] = queue.Queue()
     touch_stop_evt = threading.Event()
 
     if not args.no_framebuffer:
@@ -410,7 +454,7 @@ def main() -> int:
         if not fb_path.exists():
             print(f"Framebuffer {args.fbdev} not found.", file=sys.stderr)
             return 1
-        threading.Thread(target=touch_worker, args=(tap_q, touch_stop_evt), daemon=True).start()
+        threading.Thread(target=touch_worker, args=(touch_event_q, touch_stop_evt), daemon=True).start()
 
     preview_written = False
 
@@ -445,7 +489,12 @@ def main() -> int:
                 started = time.monotonic()
                 while True:
                     try:
-                        tap_q.get_nowait()
+                        touch_event = touch_event_q.get_nowait()
+                        if touch_event == "hold":
+                            launch_status = activate_boot_selector()
+                            if launch_status != 0:
+                                return launch_status
+                            return 0
                         time_visible_until = time.monotonic() + TIME_OVERLAY_SECS
                     except queue.Empty:
                         break
