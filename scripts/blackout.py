@@ -29,7 +29,7 @@ ICON_MIN_SIZE = 28
 ICON_MAX_SIZE = 72
 STEP_X = 1
 STEP_Y = 1
-TIME_OVERLAY_SECS = float(os.environ.get("BLACKOUT_TIME_OVERLAY_SECS", "4.0"))
+TIME_OVERLAY_SECS = float(os.environ.get("BLACKOUT_TIME_OVERLAY_SECS", "3.0"))
 TIME_TEXT_RGB = (64, 64, 64)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 _STOP_REQUESTED = False
@@ -265,10 +265,20 @@ def load_icon(icon_path: Path, width: int, height: int) -> Image.Image:
 
 
 def load_time_font(width: int, height: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    size = max(28, int(min(width, height) * 0.24))
+    target_height = max(28, int(height * 0.6))
     for candidate in FONT_CANDIDATES:
         try:
-            return ImageFont.truetype(candidate, size=size)
+            font = ImageFont.truetype(candidate, size=target_height)
+            sample_bbox = font.getbbox("00:00")
+            sample_width = sample_bbox[2] - sample_bbox[0]
+            sample_height = sample_bbox[3] - sample_bbox[1]
+            width_scale = width * 0.92
+            height_scale = height * 0.72
+            if sample_width <= 0 or sample_height <= 0:
+                return font
+            scale = min(width_scale / sample_width, height_scale / sample_height)
+            fitted_size = max(28, int(target_height * scale))
+            return ImageFont.truetype(candidate, size=fitted_size)
         except OSError:
             continue
     return ImageFont.load_default()
@@ -293,9 +303,10 @@ def render_frame(
     time_font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None,
 ) -> Image.Image:
     frame = Image.new("RGB", (width, height), (0, 0, 0))
-    frame.paste(icon, (x, y), icon)
     if show_time and time_font is not None:
         draw_time_overlay(frame, width, height, time_font)
+    else:
+        frame.paste(icon, (x, y), icon)
     return frame
 
 
@@ -464,3 +475,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
