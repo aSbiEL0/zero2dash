@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import mmap
 import os
@@ -29,10 +30,16 @@ DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.ser
 DEFAULT_TOUCH_SETTLE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_SETTLE_SECS", "0.35"))
 DEFAULT_TOUCH_DEBOUNCE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_DEBOUNCE_SECS", "0.35"))
 DEFAULT_GIF_SPEED = float(os.environ.get("BOOT_SELECTOR_GIF_SPEED", "0.5"))
+DEFAULT_TOUCH_INVERT_Y = os.environ.get("BOOT_SELECTOR_TOUCH_INVERT_Y", "1").strip().lower() not in {"0", "false", "no", "off"}
 DEFAULT_GIF_FRAME_MS = 100
 BACKGROUND_RGB = (0, 0, 0)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 STOP_REQUESTED = False
+BASE_DIR = Path(__file__).resolve().parent.parent
+DIRECT_MODE_COMMANDS = {
+    "display.service": [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")],
+    "night.service": [sys.executable, "-u", str(BASE_DIR / "modules" / "blackout" / "blackout.py")],
+}
 
 # linux/input-event-codes.h
 EV_SYN = 0x00
@@ -45,11 +52,31 @@ ABS_MT_POSITION_Y = 0x36
 ABS_MT_TRACKING_ID = 0x39
 BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
+INPUT_ABSINFO_STRUCT = struct.Struct("iiiiii")
+
+# linux/input.h EVIOCGABS(abs)
+IOC_NRBITS = 8
+IOC_TYPEBITS = 8
+IOC_SIZEBITS = 14
+IOC_DIRBITS = 2
+IOC_NRSHIFT = 0
+IOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS
+IOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS
+IOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS
+IOC_READ = 2
 
 
 def request_stop(_signum: int, _frame: object) -> None:
     global STOP_REQUESTED
     STOP_REQUESTED = True
+
+
+def _ioc(direction: int, ioc_type: int, number: int, size: int) -> int:
+    return (direction << IOC_DIRSHIFT) | (ioc_type << IOC_TYPESHIFT) | (number << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)
+
+
+def eviocgabs(axis: int) -> int:
+    return _ioc(IOC_READ, ord("E"), 0x40 + axis, INPUT_ABSINFO_STRUCT.size)
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,6 +87,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gif", default=DEFAULT_GIF_PATH, help=f"Startup GIF path (default: {DEFAULT_GIF_PATH})")
     parser.add_argument("--selector-image", default=DEFAULT_SELECTOR_IMAGE_PATH, help=f"Selector image path (default: {DEFAULT_SELECTOR_IMAGE_PATH})")
     parser.add_argument("--gif-speed", type=float, default=DEFAULT_GIF_SPEED, help=f"GIF playback speed multiplier (default: {DEFAULT_GIF_SPEED})")
+    parser.add_argument("--invert-y", action="store_true", default=DEFAULT_TOUCH_INVERT_Y, help="Invert the touch Y axis when deciding top/bottom selection.")
+    parser.add_argument("--no-invert-y", action="store_false", dest="invert_y", help="Disable Y-axis inversion for top/bottom selection.")
     parser.add_argument("--output-selector", help="Optional output path for the rendered selector screen.")
     parser.add_argument("--output-gif-first", help="Optional output path for the first rendered GIF frame.")
     parser.add_argument("--output-gif-last", help="Optional output path for the last rendered GIF frame.")
@@ -273,7 +302,30 @@ def _candidate_absinfo_paths(device: str) -> list[Path]:
     return unique
 
 
+def _query_absinfo(device: str, axis: int) -> tuple[int, int] | None:
+    request = eviocgabs(axis)
+    payload = bytearray(INPUT_ABSINFO_STRUCT.size)
+    try:
+        with open(device, "rb", buffering=0) as handle:
+            fcntl.ioctl(handle.fileno(), request, payload, True)
+    except Exception:
+        return None
+
+    _value, minimum, maximum, _fuzz, _flat, _resolution = INPUT_ABSINFO_STRUCT.unpack(bytes(payload))
+    if maximum <= minimum:
+        return None
+    return minimum, maximum
+
+
 def detect_touch_bounds(device: str, default_width: int, default_height: int) -> tuple[int, int, int, int]:
+    x_bounds = _query_absinfo(device, ABS_X) or _query_absinfo(device, ABS_MT_POSITION_X)
+    y_bounds = _query_absinfo(device, ABS_Y) or _query_absinfo(device, ABS_MT_POSITION_Y)
+
+    if x_bounds is not None and y_bounds is not None:
+        x_min, x_max = x_bounds
+        y_min, y_max = y_bounds
+        return (x_max - x_min + 1), x_min, (y_max - y_min + 1), y_min
+
     x_min = 0
     y_min = 0
     x_width = default_width
@@ -396,13 +448,10 @@ def _normalise_axis(raw_value: int, source_size: int, source_min: int, target_si
     return int(relative * (target_size - 1) / (source_size - 1))
 
 
-def _resolve_tap_mode(
-    last_y: int,
-    touch_height: int,
-    touch_min_y: int,
-    screen_height: int,
-) -> str:
+def _resolve_tap_mode(last_y: int, touch_height: int, touch_min_y: int, screen_height: int, invert_y: bool) -> str:
     screen_y = _normalise_axis(last_y, touch_height, touch_min_y, screen_height)
+    if invert_y:
+        screen_y = (screen_height - 1) - screen_y
     return "day" if screen_y < (screen_height // 2) else "night"
 
 
@@ -411,6 +460,7 @@ def wait_for_selection(
     screen_height: int,
     touch_settle_secs: float,
     touch_debounce_secs: float,
+    invert_y: bool,
 ) -> str | None:
     device = select_touch_device()
     if not device:
@@ -419,7 +469,7 @@ def wait_for_selection(
     touch_width, touch_min_x, touch_height, touch_min_y = detect_touch_bounds(device, screen_width, screen_height)
     print(
         f"[boot-selector] Waiting for touch selection on {device} (width {touch_width}, height {touch_height}); "
-        "top half selects day, bottom half selects night.",
+        f"top half selects day, bottom half selects night, invert_y={'yes' if invert_y else 'no'}.",
         flush=True,
     )
 
@@ -434,8 +484,8 @@ def wait_for_selection(
         if now < ready_after or (now - last_emit) < touch_debounce_secs:
             return None
         last_emit = now
-        mode = _resolve_tap_mode(last_y, touch_height, touch_min_y, screen_height)
-        print(f"[boot-selector] Selected mode: {mode} (touch_y={last_y})", flush=True)
+        mode = _resolve_tap_mode(last_y, touch_height, touch_min_y, screen_height, invert_y)
+        print(f"[boot-selector] Selected mode: {mode} (touch_x={last_x}, touch_y={last_y})", flush=True)
         return mode
 
     with open(device, "rb", buffering=0) as fd:
@@ -491,13 +541,29 @@ def run_touch_probe(width: int, height: int) -> int:
     return 0
 
 
+def _launch_direct_mode(service_name: str) -> int:
+    command = DIRECT_MODE_COMMANDS.get(service_name)
+    if not command:
+        print(f"[boot-selector] No direct-launch fallback is defined for {service_name}.", file=sys.stderr, flush=True)
+        return 1
+
+    print(f"[boot-selector] Falling back to direct launch for {service_name}: {command}", flush=True)
+    os.execv(command[0], command)
+    return 1
+
+
 def launch_service(service_name: str) -> int:
     result = subprocess.run(["systemctl", "start", service_name], check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
-        print(f"[boot-selector] Failed to start {service_name}: {stderr}", file=sys.stderr, flush=True)
-    else:
+    if result.returncode == 0:
         print(f"[boot-selector] Started {service_name}", flush=True)
+        return 0
+
+    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+    print(f"[boot-selector] Failed to start {service_name}: {stderr}", file=sys.stderr, flush=True)
+
+    auth_markers = ("Authentication is required", "polkit", "Access denied", "Interactive authentication required")
+    if any(marker.lower() in stderr.lower() for marker in auth_markers):
+        return _launch_direct_mode(service_name)
     return result.returncode
 
 
@@ -534,7 +600,7 @@ def main() -> int:
             print("Skipping touch loop because --no-framebuffer was set.", flush=True)
             return 0
 
-        mode = wait_for_selection(args.width, args.height, args.touch_settle_secs, args.touch_debounce_secs)
+        mode = wait_for_selection(args.width, args.height, args.touch_settle_secs, args.touch_debounce_secs, args.invert_y)
         if mode == "day":
             return launch_service(args.day_service)
         if mode == "night":
