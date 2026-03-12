@@ -17,14 +17,13 @@ from PIL import Image
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
-FPS_DEFAULT = 40.0
+FPS_DEFAULT = 30.0
 ICON_DEFAULT = Path(__file__).resolve().parent.parent / "images" / "raspberry-pi-icon.png"
 ICON_SIZE_RATIO = 0.18
 ICON_MIN_SIZE = 28
 ICON_MAX_SIZE = 72
-VELOCITY_X = 60.0
-VELOCITY_Y = 60.0
-MAX_FRAME_DELTA_SECS = 0.1
+STEP_X = 2
+STEP_Y = 2
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 _STOP_REQUESTED = False
 
@@ -122,37 +121,36 @@ def load_icon(icon_path: Path, width: int, height: int) -> Image.Image:
     return resized
 
 
-def render_frame(width: int, height: int, icon: Image.Image, x: float, y: float) -> Image.Image:
+def render_frame(width: int, height: int, icon: Image.Image, x: int, y: int) -> Image.Image:
     frame = Image.new("RGB", (width, height), (0, 0, 0))
-    frame.paste(icon, (int(round(x)), int(round(y))), icon)
+    frame.paste(icon, (x, y), icon)
     return frame
 
 
 def advance_position(
-    x: float,
-    y: float,
-    vx: float,
-    vy: float,
-    elapsed_secs: float,
+    x: int,
+    y: int,
+    vx: int,
+    vy: int,
     width: int,
     height: int,
     icon_width: int,
     icon_height: int,
-) -> tuple[float, float, float, float]:
-    next_x = x + (vx * elapsed_secs)
-    next_y = y + (vy * elapsed_secs)
-    max_x = float(max(0, width - icon_width))
-    max_y = float(max(0, height - icon_height))
+) -> tuple[int, int, int, int]:
+    next_x = x + vx
+    next_y = y + vy
+    max_x = max(0, width - icon_width)
+    max_y = max(0, height - icon_height)
 
-    if next_x <= 0.0:
-        next_x = 0.0
+    if next_x <= 0:
+        next_x = 0
         vx = abs(vx)
     elif next_x >= max_x:
         next_x = max_x
         vx = -abs(vx)
 
-    if next_y <= 0.0:
-        next_y = 0.0
+    if next_y <= 0:
+        next_y = 0
         vy = abs(vy)
     elif next_y >= max_y:
         next_y = max_y
@@ -192,10 +190,10 @@ def main() -> int:
         return 1
 
     icon_width, icon_height = icon.size
-    x = 0.0
-    y = 0.0
-    vx = VELOCITY_X
-    vy = VELOCITY_Y
+    x = 0
+    y = 0
+    vx = STEP_X
+    vy = STEP_Y
     frame_interval = 1.0 / args.fps
 
     if not args.no_framebuffer:
@@ -205,30 +203,17 @@ def main() -> int:
             return 1
 
     preview_written = False
-    last_tick = time.monotonic()
 
     if args.no_framebuffer:
         while not _STOP_REQUESTED:
             started = time.monotonic()
-            elapsed = min(started - last_tick, MAX_FRAME_DELTA_SECS)
-            last_tick = started
             frame = render_frame(args.width, args.height, icon, x, y)
             if args.output and not preview_written:
                 frame.save(args.output)
                 print(f"Saved preview image to {args.output}")
                 return 0
 
-            x, y, vx, vy = advance_position(
-                x,
-                y,
-                vx,
-                vy,
-                elapsed,
-                args.width,
-                args.height,
-                icon_width,
-                icon_height,
-            )
+            x, y, vx, vy = advance_position(x, y, vx, vy, args.width, args.height, icon_width, icon_height)
             remaining = frame_interval - (time.monotonic() - started)
             if remaining > 0:
                 time.sleep(remaining)
@@ -238,8 +223,6 @@ def main() -> int:
         with FramebufferWriter(args.fbdev, args.width, args.height) as framebuffer:
             while not _STOP_REQUESTED:
                 started = time.monotonic()
-                elapsed = min(started - last_tick, MAX_FRAME_DELTA_SECS)
-                last_tick = started
                 frame = render_frame(args.width, args.height, icon, x, y)
                 framebuffer.write(frame)
 
@@ -248,17 +231,7 @@ def main() -> int:
                     print(f"Saved preview image to {args.output}")
                     preview_written = True
 
-                x, y, vx, vy = advance_position(
-                    x,
-                    y,
-                    vx,
-                    vy,
-                    elapsed,
-                    args.width,
-                    args.height,
-                    icon_width,
-                    icon_height,
-                )
+                x, y, vx, vy = advance_position(x, y, vx, vy, args.width, args.height, icon_width, icon_height)
                 remaining = frame_interval - (time.monotonic() - started)
                 if remaining > 0:
                     time.sleep(remaining)
