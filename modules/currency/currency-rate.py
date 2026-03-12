@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import socket
+import sys
 import tempfile
 import threading
 import urllib.error
@@ -18,12 +19,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+MODULE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = MODULE_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from _config import get_env, report_validation_errors
 
-DEFAULT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUTPUT_PATH = DEFAULT_ROOT / "images" / "current-currency.png"
-DEFAULT_BACKGROUND_PATH = DEFAULT_ROOT / "images" / "currency-bkg.png"
-DEFAULT_STATE_PATH = DEFAULT_ROOT / "cache" / "currency_state.json"
+DEFAULT_OUTPUT_PATH = MODULE_DIR / "current-currency.png"
+DEFAULT_BACKGROUND_PATH = MODULE_DIR / "currency-bkg.png"
+DEFAULT_STATE_PATH = REPO_ROOT / "cache" / "currency_state.json"
 DEFAULT_API_BASE = "https://api.nbp.pl/api"
 DEFAULT_SOURCE_LABEL = "source: api.nbp.pl"
 DEFAULT_TIMEOUT_SECS = 10.0
@@ -440,7 +445,7 @@ def run_once(*, force_refresh: bool = False) -> int:
     from dotenv import load_dotenv
 
     configure_logging()
-    load_dotenv(DEFAULT_ROOT / ".env")
+    load_dotenv(REPO_ROOT / ".env")
     config, errors = validate_config()
     if errors:
         report_validation_errors("currency-rate.py", errors)
@@ -560,7 +565,7 @@ def main() -> int:
 
     from dotenv import load_dotenv
 
-    load_dotenv(DEFAULT_ROOT / ".env")
+    load_dotenv(REPO_ROOT / ".env")
     config, errors = validate_config()
     if errors:
         report_validation_errors("currency-rate.py", errors)
@@ -574,3 +579,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+

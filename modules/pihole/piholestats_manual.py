@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 # Pi-hole TFT Dashboard -> direct framebuffer RGB565 (no X, no SDL)
 # v6 auth handled elsewhere; this file only renders and calls API
-# Manual Pi-hole stats display; canonical night service uses piholestats_v1.2.py
+# Manual Pi-hole stats display
 
 import sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl, errno
 from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
@@ -12,10 +18,7 @@ from _config import get_env, report_validation_errors
 
 DEFAULT_ROOT = Path('~/zero2dash').expanduser()
 SCRIPT_NAME = "piholestats_manual.py"
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-BACKGROUND_IMAGE_PATH = REPO_ROOT / "images" / "pihole-bkg.png"
-
+BACKGROUND_IMAGE_PATH = SCRIPT_DIR / "pihole-bkg.png"
 # -------- CONFIG --------
 FBDEV = "/dev/fb1"
 W, H = 320, 240
@@ -670,5 +673,7 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         pass
+
+
 
 

@@ -3,4 +3,4 @@ version = 1
 name = "zero2dash"
 
 [setup]
-script = "pip install -r requirements.txt"
+script = "python3 pip install -r requirements.txt"

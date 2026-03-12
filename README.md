@@ -1,127 +1,239 @@
 # zero2dash
 
-Lightweight framebuffer dashboards for a 320×240 SPI TFT on Raspberry Pi.
+Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 
-- No X11/Wayland
-- No SDL
-- Direct rendering to `/dev/fb1` (RGB565)
+- Direct rendering to `/dev/fb1`
+- No X11, Wayland, SDL, or browser runtime
+- Page-specific code and assets live under `modules/`
 
-## Canonical service names and script targets
+## Runtime overview
 
-Use the following names as the **source of truth** for systemd-managed runtime modes.
-
-| Service name | Script target | Mode |
+| Unit | Purpose | Entrypoint |
 | --- | --- | --- |
-| `display.service` | `display_rotator.py` | **Day rotator** (multi-page cycle, touch navigation) |
-| `night.service` | `scripts/blackout.py` | **Night dark mode** (blackout animation) |
-| `currency-update.service` | `scripts/currency-rate.py` | **06:00 currency image refresh** |
-### Compatibility table (service → script → mode)
+| `display.service` | Daytime page rotator | `display_rotator.py` |
+| `night.service` | Night blackout screen | `modules/blackout/blackout.py` |
+| `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
 
-| Service | Script path | Mode / status |
-| --- | --- | --- |
-| `display.service` | `display_rotator.py` | Canonical day mode |
-| `night.service` | `scripts/blackout.py` | Canonical night mode |
-| `currency-update.service` | `scripts/currency-rate.py` | Daily GBP/PLN image refresh |
-| `day-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `display.service` |
-| `dark-mode.service` | *(legacy alias; not shipped in this repo)* | Legacy naming; replace with `night.service` |
-## Repository layout
+## Repository structure
 
 ```text
 zero2dash/
+├── _config.py
 ├── display_rotator.py
-├── scripts/
-│   ├── _config.py
-│   ├── pihole_api.py
-│   ├── pihole-display-pre.sh
-│   ├── piholestats_v1.1.py      # legacy daytime variant
-│   ├── blackout.py              # canonical dark-mode service target
-│   ├── piholestats_manual.py
-│   ├── calendash-api.py
-│   ├── calendash-img.py
-│   ├── currency-rate.py
-│   ├── currency.py
-│   ├── photos-shuffle.py
-│   ├── drive-sync.py
-│   └── photo-resize.py
+├── modules.txt
+├── pihole-display-pre.sh
+├── modules/
+│   ├── blackout/
+│   │   ├── blackout.py
+│   │   └── raspberry-pi-icon.png
+│   ├── calendash/
+│   │   ├── calendash-api.py
+│   │   ├── calendash-bkg.png
+│   │   ├── calendash-icon.png
+│   │   ├── calendash.png
+│   │   ├── display.py
+│   │   └── display_impl.py
+│   ├── currency/
+│   │   ├── currency-bkg.png
+│   │   ├── currency-rate.py
+│   │   ├── currency.py
+│   │   └── display.py
+│   ├── photos/
+│   │   ├── drive-sync.py
+│   │   ├── photo-resize.py
+│   │   ├── photos-shuffle.py
+│   │   └── display.py
+│   └── pihole/
+│       ├── pihole-bkg.png
+│       ├── pihole_api.py
+│       ├── piholestats_manual.py
+│       └── display.py
 ├── systemd/
-│   ├── display.service
-│   ├── night.service
 │   ├── currency-update.service
 │   ├── currency-update.timer
 │   ├── day.timer
+│   ├── display.service
+│   ├── night.service
 │   └── night.timer
+├── cache/
+├── docs/
+├── photos/
+├── requirements.txt
 └── README.md
 ```
 
-## Stale / legacy references removed
+## Module ownership
 
-- `scripts/piholestats_v1.0.py` and `scripts/test.py` are not part of this repository and should not be used in deployment docs.
-- `day-mode.service` and `dark-mode.service` are treated as **legacy names** only.
+- `modules/blackout/` owns the night blackout renderer and its icon asset.
+- `modules/pihole/` owns the Pi-hole renderer, Pi-hole API helpers, and Pi-hole page background.
+- `modules/calendash/` owns the calendar display script, calendar generator, and calendar assets/output PNG.
+- `modules/currency/` owns the currency display script, scheduled refresh script, and currency assets/output PNG.
+- `modules/photos/` owns the photo display script plus Drive sync and resize helpers for the photos workflow.
+- Root-level files are shared runtime helpers used across modules and services.
 
 ## Requirements
 
-- Raspberry Pi OS (SPI enabled)
-- Python 3
-- Pillow (`python3-pil`)
+- Raspberry Pi OS with SPI display support enabled
+- Python 3.11+ recommended
+- `python3-pip`
 - systemd
-- Pi-hole API connectivity
+- Working framebuffer device, normally `/dev/fb1`
 
-## Installation
+Install Python dependencies:
+
+```sh
+python3 -m pip install -r requirements.txt
+```
+
+If Pillow build dependencies are missing on the Pi:
+
+```sh
+sudo apt update
+sudo apt install -y python3-pip python3-pil libjpeg-dev zlib1g-dev
+```
+
+## Display driver install
+
+Example for the common GoodTFT 2.4" SPI stack:
 
 ```sh
 sudo rm -rf LCD-show
 git clone https://github.com/goodtft/LCD-show.git
 cd LCD-show
 sudo ./LCD24-show
-# reboot to activate /dev/fb1
+# reboot after the installer finishes
 ```
+
+Confirm the framebuffer exists after reboot:
 
 ```sh
-sudo apt update
-sudo apt install -y python3-pip python3-pil
+ls -l /dev/fb1
 ```
+
+## Project install
 
 ```sh
-sudo chmod +x scripts/pihole-display-pre.sh
+git clone <your-repo-url> /home/pihole/zero2dash
+cd /home/pihole/zero2dash
+python3 -m pip install -r requirements.txt
+chmod +x pihole-display-pre.sh
 ```
 
-## Configuration
-
-Create and secure an env file:
+Create the runtime config file:
 
 ```sh
 cp .env.example .env
 chmod 600 .env
 ```
 
-Set at minimum for Pi-hole:
+## Configuration
+
+### Core display settings
+
+Common environment variables:
+
+- `FB_DEVICE` default: `/dev/fb1`
+- `FB_WIDTH` default: `320`
+- `FB_HEIGHT` default: `240`
+- `ACTIVE_HOURS` for day/night timer control
+
+### Pi-hole page
+
+Required:
 
 - `PIHOLE_HOST`
-- `PIHOLE_SCHEME` if `PIHOLE_HOST` is remote and does not already include `http://` or `https://`
-- `PIHOLE_PASSWORD` for v6 session auth, or `PIHOLE_API_TOKEN` for legacy token auth
-- `PIHOLE_VERIFY_TLS=false` for self-signed HTTPS, or `PIHOLE_CA_BUNDLE=/path/to/ca.pem` to verify a private CA
+- `PIHOLE_PASSWORD` for v6 session auth, or `PIHOLE_API_TOKEN` for token auth
+
+Optional:
+
+- `PIHOLE_SCHEME`
+- `PIHOLE_VERIFY_TLS`
+- `PIHOLE_CA_BUNDLE`
 - `PIHOLE_TIMEOUT`
 - `REFRESH_SECS`
-- `ACTIVE_HOURS` (inclusive `start,end` hour window in 24h format; cross-midnight values like `22,7` are supported)
-- `FB_DEVICE` (optional override; defaults to `/dev/fb1`)
-- `FB_WIDTH` / `FB_HEIGHT` (optional override for static renderer geometry; defaults `320x240`)
+- `OUTPUT_IMAGE` for PNG output during testing
 
-Google OAuth notes:
+### Calendash
 
-- Use Desktop OAuth clients for Calendar and Photos.
-- Loopback OAuth only: complete sign-in on the same machine as the script, or tunnel the callback port from a headless Pi with `ssh -L 8080:localhost:8080 pihole@pihole`.
-- If the Google consent screen is in testing, add your account as a test user.
-- `calendash-api.py` defaults `GOOGLE_TOKEN_PATH` to `token.json` relative to the project root under systemd; `photos-shuffle.py` must keep using a separate `GOOGLE_TOKEN_PATH_PHOTOS`.
+Required for Google Calendar rendering:
 
-Drive-backed photos notes:
+- `GOOGLE_CALENDAR_ID`
+- `TIMEZONE`
+- `GOOGLE_CALENDAR_CLIENT_ID` and `GOOGLE_CALENDAR_CLIENT_SECRET`
+  or `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
 
-- `scripts/photos-shuffle.py` now treats `LOCAL_PHOTOS_DIR` as the primary source.
-- Use `scripts/drive-sync.py` to populate that directory from a shared Google Drive folder.
-- `scripts/photo-resize.py` proportionally reduces changed images to 50% before they are reused locally.
-- Normal personal/shared Google Photos albums are no longer a reliable headless source; if you still configure `GOOGLE_PHOTOS_ALBUM_ID`, treat it as an app-created-album fallback only.
+Optional:
 
-## Run via systemd
-Install and enable canonical units:
+- `GOOGLE_TOKEN_PATH`
+- `BACKGROUND_IMAGE`
+- `ICON_IMAGE`
+- `OUTPUT_PATH`
+- `OAUTH_PORT`
+- `GOOGLE_AUTH_MODE`
+
+Default generated output:
+
+- `modules/calendash/calendash.png`
+
+### Photos
+
+Preferred source:
+
+- `LOCAL_PHOTOS_DIR`
+
+Optional Google Photos settings:
+
+- `GOOGLE_PHOTOS_ALBUM_ID`
+- `GOOGLE_PHOTOS_CLIENT_SECRETS_PATH`
+- `GOOGLE_PHOTOS_CLIENT_ID`
+- `GOOGLE_PHOTOS_CLIENT_SECRET`
+- `GOOGLE_TOKEN_PATH_PHOTOS`
+- `CACHE_DIR`
+- `FALLBACK_IMAGE`
+- `LOGO_PATH`
+
+Google Photos notes:
+
+- Use a Desktop OAuth client.
+- If the Google app is still in testing, add the account as a test user.
+- Loopback OAuth must complete on the same machine, or through SSH port forwarding.
+- Personal/shared albums are unreliable for unattended use; `LOCAL_PHOTOS_DIR` is the practical primary source.
+
+### Currency
+
+Optional currency settings:
+
+- `CURRENCY_OUTPUT_PATH`
+- `CURRENCY_BACKGROUND_IMAGE`
+- `CURRENCY_STATE_PATH`
+- `CURRENCY_NBP_API_BASE`
+- `CURRENCY_API_TIMEOUT`
+
+Default generated output:
+
+- `modules/currency/current-currency.png`
+
+## Module order
+
+The day rotator discovers pages from `modules/`.
+
+Default order is controlled by `modules.txt`:
+
+```text
+pihole
+calendash
+currency
+photos
+```
+
+Optional environment overrides:
+
+- `ROTATOR_MODULES_DIR`
+- `ROTATOR_MODULE_ORDER_FILE`
+- `ROTATOR_MODULE_ENTRYPOINT`
+- `ROTATOR_PAGES`
+
+## Systemd install
 
 ```sh
 sudo cp systemd/*.service /etc/systemd/system/
@@ -131,7 +243,26 @@ sudo systemctl enable --now display.service
 sudo systemctl enable --now day.timer night.timer currency-update.timer
 ```
 
-Useful checks:
+## Operating the system
+
+### Start or restart services
+
+```sh
+sudo systemctl restart display.service
+sudo systemctl restart night.service
+sudo systemctl restart currency-update.service
+```
+
+### Check status
+
+```sh
+systemctl status display.service --no-pager
+systemctl status night.service --no-pager
+systemctl status currency-update.service --no-pager
+systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.timer'
+```
+
+### View logs
 
 ```sh
 journalctl -u display.service -n 50 --no-pager
@@ -139,48 +270,43 @@ journalctl -u night.service -n 50 --no-pager
 journalctl -u currency-update.service -n 50 --no-pager
 ```
 
+## Validation commands
 
-## Google Photos shuffle credential precedence
-
-`scripts/photos-shuffle.py` resolves OAuth credentials in this order:
-
-1. `GOOGLE_PHOTOS_CLIENT_SECRETS_PATH` file path from env/`.env` (default: `~/zero2dash/client_secret.json`)
-2. `GOOGLE_PHOTOS_CLIENT_ID` + `GOOGLE_PHOTOS_CLIENT_SECRET` from env/`.env`
-3. `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` from env/`.env` (legacy fallback)
-
-Use `python3 scripts/photos-shuffle.py --check-config` to validate the configuration and print the credential source that will be used.
-
-## Drive-backed photo sync
-
-Use a shared Google Drive folder when you want remote photo management without depending on the now-hobbled Google Photos album API.
-
-Required configuration:
-
-- `LOCAL_PHOTOS_DIR`
-- `GOOGLE_DRIVE_FOLDER_ID`
-- `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON` (`~/.config/zero2dash/drive-service-account.json` is the recommended Pi path)
-
-Recommended workflow:
+Configuration checks:
 
 ```sh
-python3 scripts/drive-sync.py
-python3 scripts/photos-shuffle.py --test
+python3 modules/calendash/calendash-api.py --check-config
+python3 modules/photos/photos-shuffle.py --check-config
+python3 modules/photos/drive-sync.py --check-config
+python3 modules/photos/photo-resize.py --check-config
+python3 modules/currency/currency-rate.py --check-config
+python3 modules/pihole/piholestats_manual.py --check-config
 ```
 
-`drive-sync.py` downloads images from the shared Drive folder into `LOCAL_PHOTOS_DIR` and then runs `photo-resize.py`, which shrinks new or changed images to 50% of their original width and height before reuse.
+Useful dry-run or local-output checks:
+
+```sh
+python3 modules/photos/photos-shuffle.py --test
+python3 modules/currency/currency.py --self-test
+python3 modules/currency/currency-rate.py --self-test
+python3 modules/pihole/piholestats_manual.py --output-image /tmp/pihole-test.png
+python3 modules/calendash/display.py --output /tmp/calendash-display.png --no-framebuffer
+```
+
+## Photos workflow with Drive sync
+
+If you manage photos through a shared Google Drive folder:
+
+```sh
+python3 modules/photos/drive-sync.py
+python3 modules/photos/photo-resize.py
+python3 modules/photos/photos-shuffle.py --test
+```
 
 ## Notes
 
-- `display_rotator.py` excludes `blackout.py`, `piholestats_v1.2.py`, `calendash-api.py`, `currency-rate.py`, `_config.py`, `drive-sync.py`, and `photo-resize.py` by default so helper scripts do not end up in the day rotator.
-- `scripts/blackout.py` expects the icon asset at `images/raspberry-pi-icon.png`.
-- `calendash-img.py` is a rotator-friendly page script, not a systemd service unit by itself.
-- `currency-rate.py` is the scheduled generator; `currency.py` is the rotator-friendly page script that only displays the generated image.
-
-
-### Framebuffer overrides in systemd
-
-Both canonical service units now set `FB_DEVICE=/dev/fb1` by default and load `.env` afterward, so setting `FB_DEVICE` in `.env` overrides the unit default without editing unit files.
-
-
+- `modules/blackout/blackout.py` uses `modules/blackout/raspberry-pi-icon.png`.
+- `pihole-display-pre.sh` is used by both day and night services.
+- The module directories are the source of truth for page-specific scripts and page-specific assets.
 
 

@@ -7,3 +7,4 @@ photos/*
 cache/drive_sync_state.json
 cache/photo_resize_state.json
 
+.env.save

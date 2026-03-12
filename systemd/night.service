@@ -12,10 +12,12 @@ Environment=PYTHONUNBUFFERED=1
 Environment=FB_DEVICE=/dev/fb1
 EnvironmentFile=-/home/pihole/zero2dash/.env
 
-ExecStartPre=/home/pihole/zero2dash/scripts/pihole-display-pre.sh
-ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/scripts/blackout.py
+ExecStartPre=/home/pihole/zero2dash/pihole-display-pre.sh
+ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/modules/blackout/blackout.py
 
 Restart=always
 RestartSec=2
 StandardOutput=journal
 StandardError=journal
+
+

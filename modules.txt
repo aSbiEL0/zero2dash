@@ -1,0 +1,4 @@
+pihole
+calendash
+currency
+photos

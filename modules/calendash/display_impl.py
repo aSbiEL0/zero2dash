@@ -14,11 +14,12 @@ from pathlib import Path
 
 from PIL import Image
 
+MODULE_DIR = Path(__file__).resolve().parent
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 TOUCH_DEVICE_DEFAULT = os.environ.get("TOUCH_DEVICE", "/dev/input/event0")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
-DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "calendash.png"
+DEFAULT_IMAGE = MODULE_DIR / "calendash.png"
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 EV_KEY = 0x01
 BTN_TOUCH = 0x14A
@@ -154,4 +155,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

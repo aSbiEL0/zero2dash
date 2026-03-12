@@ -13,8 +13,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-DEFAULT_IMAGE = Path(__file__).resolve().parent.parent / "images" / "current-currency.png"
-DEFAULT_REFRESH_SCRIPT = Path(__file__).resolve().parent / "currency-rate.py"
+MODULE_DIR = Path(__file__).resolve().parent
+DEFAULT_IMAGE = MODULE_DIR / "current-currency.png"
+DEFAULT_REFRESH_SCRIPT = MODULE_DIR / "currency-rate.py"
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
@@ -162,3 +163,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+

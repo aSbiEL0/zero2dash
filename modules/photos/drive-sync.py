@@ -20,14 +20,18 @@ from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
+MODULE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = MODULE_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from _config import get_env, report_validation_errors
 
 DEFAULT_ROOT = Path("~/zero2dash").expanduser()
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 DEFAULT_STATE_PATH = DEFAULT_ROOT / "cache" / "drive_sync_state.json"
-DEFAULT_RESIZE_SCRIPT = DEFAULT_ROOT / "scripts" / "photo-resize.py"
+DEFAULT_RESIZE_SCRIPT = MODULE_DIR / "photo-resize.py"
 ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
-
 
 @dataclass
 class Config:
@@ -287,4 +291,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

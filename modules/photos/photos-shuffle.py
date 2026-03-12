@@ -32,7 +32,7 @@ OAuth setup:
 Fallback:
 - Preferred source is LOCAL_PHOTOS_DIR (default: ~/zero2dash/photos). If it is empty, the
   script can still try Google Photos when configured, then CACHE_DIR, then FALLBACK_IMAGE.
-- Ensure local fallback image exists at ~/zero2dash/images/photos-fallback.png
+- Ensure local fallback image exists at ~/zero2dash/modules/photos/photos-fallback.png
   (or override with FALLBACK_IMAGE).
 """
 
@@ -42,10 +42,16 @@ import argparse
 import json
 import os
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
+
+MODULE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = MODULE_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from _config import get_env, report_validation_errors
 
@@ -61,7 +67,7 @@ def resolve_root() -> Path:
     override = os.environ.get("ZERO2DASH_ROOT", "").strip()
     if override:
         return Path(override).expanduser()
-    return Path(__file__).resolve().parents[1]
+    return REPO_ROOT
 
 
 DEFAULT_ROOT = resolve_root()
@@ -69,7 +75,6 @@ TEST_OUTPUT = Path("/tmp/photos-shuffle-test.png")
 LOGO_WIDTH_RATIO = 0.14
 LOGO_PADDING_RATIO = 0.03
 BRIGHTNESS_FACTOR = 0.75
-
 
 @dataclass
 class Config:
@@ -189,8 +194,8 @@ def validate_config() -> tuple[Config | None, list[str]]:
     width = record("WIDTH", default=320, validator=lambda v: _as_int("WIDTH", v))
     height = record("HEIGHT", default=240, validator=lambda v: _as_int("HEIGHT", v))
     cache_raw = record("CACHE_DIR", default=str(DEFAULT_ROOT / "cache" / "google_photos"))
-    fallback_raw = record("FALLBACK_IMAGE", default="/home/pihole/zero2dash/images/photos-fallback.png")
-    logo_raw = record("LOGO_PATH", default="/images/goo-photos-icon.png")
+    fallback_raw = record("FALLBACK_IMAGE", default=str(MODULE_DIR / "photos-fallback.png"))
+    logo_raw = record("LOGO_PATH", default=str(MODULE_DIR / "google-photos-icon.png"))
     oauth_port = record("OAUTH_PORT", default=8080, validator=lambda v: _as_int("OAUTH_PORT", v))
     oauth_open_browser = record("OAUTH_OPEN_BROWSER", default=False, validator=_as_bool)
 
@@ -783,3 +788,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
