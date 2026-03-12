@@ -20,7 +20,7 @@ from typing import Any
 
 from _config import get_env, report_validation_errors
 
-DEFAULT_ROOT = Path("~/zero2dash").expanduser()
+DEFAULT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_PATH = DEFAULT_ROOT / "images" / "current-currency.png"
 DEFAULT_BACKGROUND_PATH = DEFAULT_ROOT / "images" / "currency-bkg.png"
 DEFAULT_STATE_PATH = DEFAULT_ROOT / "cache" / "currency_state.json"
