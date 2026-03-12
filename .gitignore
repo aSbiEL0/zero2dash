@@ -2,9 +2,16 @@ __pycache__/
 *.pyc
 .env
 .env.local
+.codex/*
+!.codex/.gitignore
+!.codex/.gitkeep
+debug/*
+!debug/.gitignore
+!debug/.gitkeep
 photos/*
 !photos/.gitkeep
 cache/drive_sync_state.json
 cache/photo_resize_state.json
+cache/currency_state.json
 
 .env.save
