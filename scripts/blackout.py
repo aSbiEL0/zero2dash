@@ -17,13 +17,13 @@ from PIL import Image
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
-FPS_DEFAULT = 30.0
+FPS_DEFAULT = 50.0
 ICON_DEFAULT = Path(__file__).resolve().parent.parent / "images" / "raspberry-pi-icon.png"
 ICON_SIZE_RATIO = 0.18
 ICON_MIN_SIZE = 28
 ICON_MAX_SIZE = 72
-STEP_X = 2
-STEP_Y = 2
+STEP_X = 1
+STEP_Y = 1
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 _STOP_REQUESTED = False
 
