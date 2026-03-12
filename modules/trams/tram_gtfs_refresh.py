@@ -18,7 +18,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -178,14 +178,14 @@ def validate_config() -> tuple[Config | None, list[str]]:
     ), []
 
 
-def _load_csv_from_zip(feed_bytes: bytes, member_name: str) -> list[dict[str, str]]:
-    with zipfile.ZipFile(io.BytesIO(feed_bytes)) as archive:
-        with archive.open(member_name) as handle:
-            wrapper = io.TextIOWrapper(handle, encoding="utf-8-sig", newline="")
-            try:
-                return [dict(row) for row in csv.DictReader(wrapper)]
-            finally:
-                wrapper.detach()
+def _iter_csv_rows(archive: zipfile.ZipFile, member_name: str) -> Iterator[dict[str, str]]:
+    with archive.open(member_name) as handle:
+        wrapper = io.TextIOWrapper(handle, encoding="utf-8-sig", newline="")
+        try:
+            for row in csv.DictReader(wrapper):
+                yield dict(row)
+        finally:
+            wrapper.detach()
 
 
 def _parse_gtfs_date(value: str) -> str:
@@ -232,42 +232,58 @@ def _normalise_stop_name(value: str) -> str:
     return " ".join(lowered.split())
 
 
-def resolve_target_stop(
-    stops_rows: list[dict[str, str]],
-    stop_times_rows: list[dict[str, str]],
-    trip_lookup: dict[str, dict[str, str]],
-    config: Config,
-) -> tuple[dict[str, str], list[dict[str, Any]]]:
+def _load_candidate_stops(archive: zipfile.ZipFile, config: Config) -> list[dict[str, str]]:
     if config.stop_id:
-        target = next((row for row in stops_rows if row.get("stop_id", "").strip() == config.stop_id), None)
-        if target is None:
-            raise ValueError(f"stop_id {config.stop_id} not found in GTFS feed")
-        evidence = [{
-            "stop_id": target.get("stop_id", "").strip(),
-            "stop_code": target.get("stop_code", "").strip(),
-            "stop_name": target.get("stop_name", "").strip(),
-            "matching_departures": sum(
-                1
-                for row in stop_times_rows
-                if row.get("stop_id", "").strip() == config.stop_id and row.get("trip_id", "").strip() in trip_lookup
-            ),
-        }]
-        return target, evidence
+        for row in _iter_csv_rows(archive, "stops.txt"):
+            if row.get("stop_id", "").strip() == config.stop_id:
+                return [row]
+        raise ValueError(f"stop_id {config.stop_id} not found in GTFS feed")
 
     target_name = _normalise_stop_name(config.stop_name)
     candidate_stops = [
-        row for row in stops_rows
+        row
+        for row in _iter_csv_rows(archive, "stops.txt")
         if target_name and target_name in _normalise_stop_name(row.get("stop_name", "").strip())
     ]
     if not candidate_stops:
         raise ValueError(f"no stop records matched stop name {config.stop_name!r}")
+    return candidate_stops
 
-    matches_by_stop: dict[str, int] = {row.get("stop_id", "").strip(): 0 for row in candidate_stops}
-    for row in stop_times_rows:
+
+def _collect_stop_evidence_and_departures(
+    archive: zipfile.ZipFile,
+    candidate_stops: list[dict[str, str]],
+    trip_lookup: dict[str, dict[str, str]],
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    candidate_stop_ids = {row.get("stop_id", "").strip() for row in candidate_stops if row.get("stop_id", "").strip()}
+    if not candidate_stop_ids:
+        raise ValueError("candidate stop set was empty")
+
+    matches_by_stop: dict[str, int] = {stop_id: 0 for stop_id in candidate_stop_ids}
+    departures_by_stop: dict[str, list[dict[str, Any]]] = {stop_id: [] for stop_id in candidate_stop_ids}
+    for row in _iter_csv_rows(archive, "stop_times.txt"):
         stop_id = row.get("stop_id", "").strip()
+        if stop_id not in matches_by_stop:
+            continue
         trip_id = row.get("trip_id", "").strip()
-        if stop_id in matches_by_stop and trip_id in trip_lookup:
-            matches_by_stop[stop_id] += 1
+        trip = trip_lookup.get(trip_id)
+        if trip is None:
+            continue
+
+        matches_by_stop[stop_id] += 1
+        departure_time = row.get("departure_time", "").strip() or row.get("arrival_time", "").strip()
+        if not departure_time:
+            continue
+        departures_by_stop[stop_id].append(
+            {
+                "trip_id": trip_id,
+                "service_id": trip["service_id"],
+                "headsign": trip["headsign"],
+                "route_id": trip["route_id"],
+                "departure_time": departure_time,
+                "departure_secs": _parse_departure_seconds(departure_time),
+            }
+        )
 
     evidence = [
         {
@@ -279,9 +295,18 @@ def resolve_target_stop(
         for row in candidate_stops
     ]
     evidence.sort(key=lambda item: (-int(item["matching_departures"]), item["stop_code"], item["stop_id"]))
+    return evidence, departures_by_stop
 
+
+def _resolve_target_stop(
+    candidate_stops: list[dict[str, str]],
+    evidence: list[dict[str, Any]],
+    config: Config,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
     best = evidence[0]
     if int(best["matching_departures"]) <= 0:
+        if config.stop_id:
+            raise ValueError(f"stop_id {config.stop_id} had no matching departures for the target headsigns")
         raise ValueError(f"no candidate stop for {config.stop_name!r} had matching departures for the target headsigns")
     target = next(row for row in candidate_stops if row.get("stop_id", "").strip() == best["stop_id"])
     return target, evidence
@@ -296,104 +321,78 @@ def build_cache_payload(
 ) -> dict[str, Any]:
     generated = generated_at or datetime.now(tz=load_timezone(config.timezone_name))
 
-    stops_rows = _load_csv_from_zip(feed_bytes, "stops.txt")
-    routes_rows = _load_csv_from_zip(feed_bytes, "routes.txt")
-    trips_rows = _load_csv_from_zip(feed_bytes, "trips.txt")
-    stop_times_rows = _load_csv_from_zip(feed_bytes, "stop_times.txt")
-    calendar_rows = _load_csv_from_zip(feed_bytes, "calendar.txt")
-    calendar_dates_rows = _load_csv_from_zip(feed_bytes, "calendar_dates.txt")
-
-    metrolink_routes = {
-        row.get("route_id", "").strip()
-        for row in routes_rows
-        if row.get("agency_id", "").strip() == METROLINK_AGENCY_ID
-    }
-    if not metrolink_routes:
-        raise ValueError("Metrolink agency routes were not found in GTFS feed")
-
-    target_headsigns = set(config.target_headsigns)
-    trip_lookup: dict[str, dict[str, str]] = {}
-    service_ids: set[str] = set()
-    for row in trips_rows:
-        trip_id = row.get("trip_id", "").strip()
-        service_id = row.get("service_id", "").strip()
-        route_id = row.get("route_id", "").strip()
-        headsign = row.get("trip_headsign", "").strip()
-        if not trip_id or not service_id or not headsign:
-            continue
-        if route_id not in metrolink_routes or headsign not in target_headsigns:
-            continue
-        trip_lookup[trip_id] = {
-            "service_id": service_id,
-            "headsign": headsign,
-            "route_id": route_id,
+    with zipfile.ZipFile(io.BytesIO(feed_bytes)) as archive:
+        metrolink_routes = {
+            row.get("route_id", "").strip()
+            for row in _iter_csv_rows(archive, "routes.txt")
+            if row.get("agency_id", "").strip() == METROLINK_AGENCY_ID
         }
-        service_ids.add(service_id)
+        if not metrolink_routes:
+            raise ValueError("Metrolink agency routes were not found in GTFS feed")
 
-    if not trip_lookup:
-        raise ValueError("no target Metrolink trips matched the configured headsigns")
-
-    target_stop, stop_evidence = resolve_target_stop(stops_rows, stop_times_rows, trip_lookup, config)
-    target_stop_id = target_stop.get("stop_id", "").strip()
-    if not target_stop_id:
-        raise ValueError("resolved stop record did not contain stop_id")
-
-    departures: list[dict[str, Any]] = []
-    for row in stop_times_rows:
-        if row.get("stop_id", "").strip() != target_stop_id:
-            continue
-        trip_id = row.get("trip_id", "").strip()
-        trip = trip_lookup.get(trip_id)
-        if trip is None:
-            continue
-        departure_time = row.get("departure_time", "").strip() or row.get("arrival_time", "").strip()
-        if not departure_time:
-            continue
-        departure_secs = _parse_departure_seconds(departure_time)
-        departures.append(
-            {
-                "trip_id": trip_id,
-                "service_id": trip["service_id"],
-                "headsign": trip["headsign"],
-                "route_id": trip["route_id"],
-                "departure_time": departure_time,
-                "departure_secs": departure_secs,
+        target_headsigns = set(config.target_headsigns)
+        trip_lookup: dict[str, dict[str, str]] = {}
+        service_ids: set[str] = set()
+        for row in _iter_csv_rows(archive, "trips.txt"):
+            trip_id = row.get("trip_id", "").strip()
+            service_id = row.get("service_id", "").strip()
+            route_id = row.get("route_id", "").strip()
+            headsign = row.get("trip_headsign", "").strip()
+            if not trip_id or not service_id or not headsign:
+                continue
+            if route_id not in metrolink_routes or headsign not in target_headsigns:
+                continue
+            trip_lookup[trip_id] = {
+                "service_id": service_id,
+                "headsign": headsign,
+                "route_id": route_id,
             }
-        )
+            service_ids.add(service_id)
 
-    if not departures:
-        raise ValueError("no stop_times matched the resolved stop and target headsigns")
+        if not trip_lookup:
+            raise ValueError("no target Metrolink trips matched the configured headsigns")
 
-    service_calendar: dict[str, dict[str, Any]] = {}
-    for row in calendar_rows:
-        service_id = row.get("service_id", "").strip()
-        if service_id not in service_ids:
-            continue
-        service_calendar[service_id] = {
-            "start_date": _parse_gtfs_date(row.get("start_date", "").strip()),
-            "end_date": _parse_gtfs_date(row.get("end_date", "").strip()),
-            "weekdays": {
-                weekday: row.get(weekday, "0").strip() == "1"
-                for weekday in WEEKDAY_KEYS
-            },
-            "added_dates": [],
-            "removed_dates": [],
-        }
-    missing_calendar = sorted(service_ids - set(service_calendar))
-    if missing_calendar:
-        raise ValueError(f"calendar.txt missing service_ids used by target trips: {', '.join(missing_calendar[:5])}")
+        candidate_stops = _load_candidate_stops(archive, config)
+        stop_evidence, departures_by_stop = _collect_stop_evidence_and_departures(archive, candidate_stops, trip_lookup)
+        target_stop, stop_evidence = _resolve_target_stop(candidate_stops, stop_evidence, config)
+        target_stop_id = target_stop.get("stop_id", "").strip()
+        if not target_stop_id:
+            raise ValueError("resolved stop record did not contain stop_id")
 
-    for row in calendar_dates_rows:
-        service_id = row.get("service_id", "").strip()
-        calendar_entry = service_calendar.get(service_id)
-        if calendar_entry is None:
-            continue
-        exception_date = _parse_gtfs_date(row.get("date", "").strip())
-        exception_type = row.get("exception_type", "").strip()
-        if exception_type == "1":
-            calendar_entry["added_dates"].append(exception_date)
-        elif exception_type == "2":
-            calendar_entry["removed_dates"].append(exception_date)
+        departures = departures_by_stop.get(target_stop_id, [])
+        if not departures:
+            raise ValueError("no stop_times matched the resolved stop and target headsigns")
+
+        service_calendar: dict[str, dict[str, Any]] = {}
+        for row in _iter_csv_rows(archive, "calendar.txt"):
+            service_id = row.get("service_id", "").strip()
+            if service_id not in service_ids:
+                continue
+            service_calendar[service_id] = {
+                "start_date": _parse_gtfs_date(row.get("start_date", "").strip()),
+                "end_date": _parse_gtfs_date(row.get("end_date", "").strip()),
+                "weekdays": {
+                    weekday: row.get(weekday, "0").strip() == "1"
+                    for weekday in WEEKDAY_KEYS
+                },
+                "added_dates": [],
+                "removed_dates": [],
+            }
+        missing_calendar = sorted(service_ids - set(service_calendar))
+        if missing_calendar:
+            raise ValueError(f"calendar.txt missing service_ids used by target trips: {', '.join(missing_calendar[:5])}")
+
+        for row in _iter_csv_rows(archive, "calendar_dates.txt"):
+            service_id = row.get("service_id", "").strip()
+            calendar_entry = service_calendar.get(service_id)
+            if calendar_entry is None:
+                continue
+            exception_date = _parse_gtfs_date(row.get("date", "").strip())
+            exception_type = row.get("exception_type", "").strip()
+            if exception_type == "1":
+                calendar_entry["added_dates"].append(exception_date)
+            elif exception_type == "2":
+                calendar_entry["removed_dates"].append(exception_date)
 
     for calendar_entry in service_calendar.values():
         calendar_entry["added_dates"].sort()
@@ -423,14 +422,13 @@ def build_cache_payload(
     }
 
 
-
-
 def load_repo_env() -> None:
     try:
         from dotenv import load_dotenv
     except ImportError:
         return
     load_dotenv(REPO_ROOT / ".env")
+
 
 def save_cache(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -537,4 +535,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
