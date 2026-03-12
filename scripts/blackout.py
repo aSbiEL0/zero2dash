@@ -290,7 +290,9 @@ def draw_time_overlay(frame: Image.Image, width: int, height: int, font: ImageFo
     bbox = draw.textbbox((0, 0), time_text, font=font)
     text_width = bbox[2] - bbox[0]
     text_height = bbox[3] - bbox[1]
-    draw.text(((width - text_width) // 2, (height - text_height) // 2), time_text, font=font, fill=TIME_TEXT_RGB)
+    text_x = (width - text_width) // 2 - bbox[0]
+    text_y = (height - text_height) // 2 - bbox[1]
+    draw.text((text_x, text_y), time_text, font=font, fill=TIME_TEXT_RGB)
 
 
 def render_frame(
@@ -475,4 +477,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
