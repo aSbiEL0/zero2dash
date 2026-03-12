@@ -445,7 +445,7 @@ def run_once(*, force_refresh: bool = False) -> int:
     from dotenv import load_dotenv
 
     configure_logging()
-    load_dotenv(DEFAULT_ROOT / ".env")
+    load_dotenv(REPO_ROOT / ".env")
     config, errors = validate_config()
     if errors:
         report_validation_errors("currency-rate.py", errors)
@@ -565,7 +565,7 @@ def main() -> int:
 
     from dotenv import load_dotenv
 
-    load_dotenv(DEFAULT_ROOT / ".env")
+    load_dotenv(REPO_ROOT / ".env")
     config, errors = validate_config()
     if errors:
         report_validation_errors("currency-rate.py", errors)
