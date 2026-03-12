@@ -12,6 +12,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -186,6 +187,7 @@ def compute_upcoming_departures(cache: dict[str, Any], now: datetime, limit: int
     return results[:limit]
 
 
+@lru_cache(maxsize=32)
 def _font(size: int, *, bold: bool = False, italic: bool = False):
     env_name = "TRAM_FONT_PATH_BOLD" if bold else "TRAM_FONT_PATH_ITALIC" if italic else "TRAM_FONT_PATH"
     env_candidates = [entry.strip() for entry in os.getenv(env_name, "").split(",") if entry.strip()]
@@ -215,12 +217,17 @@ def _font(size: int, *, bold: bool = False, italic: bool = False):
     return ImageFont.load_default()
 
 
-def _fit_font(draw: ImageDraw.ImageDraw, text: str, *, width_limit: int, initial_size: int, min_size: int, bold: bool = False, italic: bool = False):
+def _text_width(text: str, font: ImageFont.ImageFont | ImageFont.FreeTypeFont) -> int:
+    bbox = font.getbbox(text)
+    return bbox[2] - bbox[0]
+
+
+@lru_cache(maxsize=128)
+def _fit_font(text: str, *, width_limit: int, initial_size: int, min_size: int, bold: bool = False, italic: bool = False):
     size = initial_size
     while size >= min_size:
         font = _font(size, bold=bold, italic=italic)
-        bbox = draw.textbbox((0, 0), text, font=font)
-        if (bbox[2] - bbox[0]) <= width_limit:
+        if _text_width(text, font) <= width_limit:
             return font
         size -= 1
     return _font(min_size, bold=bold, italic=italic)
@@ -263,11 +270,11 @@ def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_c
     white = (245, 245, 245)
     amber = (244, 198, 0)
     departures = compute_upcoming_departures(cache or {}, now, limit=4) if _cache_status(cache) == "ok" else []
-    body_font = _fit_font(draw, "Rochdale Town Centre", width_limit=210, initial_size=18, min_size=12)
-    mins_font = _fit_font(draw, "27min", width_limit=72, initial_size=18, min_size=12)
-    message_font = _fit_font(draw, "Timetable unavailable", width_limit=280, initial_size=18, min_size=13)
+    body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=18, min_size=12)
+    mins_font = _fit_font("27min", width_limit=72, initial_size=18, min_size=12)
+    message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=18, min_size=13)
     ticker_text = ticker_text_from_alerts(alerts_cache)
-    ticker_font = _fit_font(draw, ticker_text, width_limit=max(160, width - 30), initial_size=22, min_size=18, italic=True)
+    ticker_font = _fit_font(ticker_text, width_limit=max(160, width - 30), initial_size=22, min_size=18, italic=True)
     top = 92
     row_height = 24
     status = _cache_status(cache)
@@ -280,11 +287,9 @@ def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_c
             y = top + (index * row_height)
             draw.text((22, y), departure.headsign, font=body_font, fill=white)
             minute_text = "Due" if departure.minutes <= 0 else f"{departure.minutes}min"
-            bbox = draw.textbbox((0, 0), minute_text, font=mins_font)
-            draw.text((width - 22 - (bbox[2] - bbox[0]), y), minute_text, font=mins_font, fill=white)
+            draw.text((width - 22 - _text_width(minute_text, mins_font), y), minute_text, font=mins_font, fill=white)
     baseline_y = height - 34
-    text_bbox = draw.textbbox((0, 0), ticker_text, font=ticker_font)
-    text_width = text_bbox[2] - text_bbox[0]
+    text_width = _text_width(ticker_text, ticker_font)
     ticker_fill = amber if ticker_text == "Alerts unavailable" else white
     if text_width > width - 44:
         loop_width = text_width + 48
