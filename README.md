@@ -13,6 +13,8 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 | `boot-selector.service` | Boot GIF and day/night selector | `boot/boot_selector.py` |`r`n| `display.service` | Daytime page rotator | `display_rotator.py` |
 | `night.service` | Night blackout screen | `modules/blackout/blackout.py` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
+| `tram.service` | Refresh cached Firswood tram timetable | `modules/trams/tram_gtfs_refresh.py` |
+| `tram-alerts.service` | Refresh cached Bee Network tram alerts | `modules/trams/tram_alerts_refresh.py` |
 
 ## Repository structure
 
@@ -213,6 +215,31 @@ Default generated output:
 
 - `modules/currency/current-currency.png`
 
+
+### Trams
+
+Optional tram settings:
+
+- `TRAM_GTFS_URL`
+- `TRAM_GTFS_CACHE_PATH`
+- `TRAM_GTFS_TIMEOUT`
+- `TRAM_STOP_NAME`
+- `TRAM_STOP_ID`
+- `TRAM_DIRECTION_LABEL`
+- `TRAM_TIMEZONE`
+- `TRAM_TARGET_HEADSIGNS`
+- `TRAM_ALERTS_URL`
+- `TRAM_ALERTS_CACHE_PATH`
+- `TRAM_ALERTS_TIMEOUT`
+- `TRAM_FONT_PATH`
+- `TRAM_FONT_PATH_BOLD`
+- `TRAM_FONT_PATH_ITALIC`
+
+Default tram cache files:
+
+- `modules/trams/tram_timetable.json`
+- `modules/trams/tram_alerts.json`
+
 ## Module order
 
 The day rotator discovers pages from `modules/`.
@@ -224,6 +251,7 @@ pihole
 calendash
 currency
 photos
+trams
 ```
 
 Optional environment overrides:
@@ -240,7 +268,7 @@ sudo cp systemd/*.service /etc/systemd/system/
 sudo cp systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now boot-selector.service
-sudo systemctl enable --now day.timer night.timer currency-update.timer
+sudo systemctl enable --now day.timer night.timer currency-update.timer tram.timer tram-alerts.timer
 ```
 
 ## Operating the system
@@ -251,6 +279,8 @@ sudo systemctl enable --now day.timer night.timer currency-update.timer
 sudo systemctl restart display.service
 sudo systemctl restart night.service
 sudo systemctl restart currency-update.service
+sudo systemctl restart tram.service
+sudo systemctl restart tram-alerts.service
 ```
 
 ### Check status
@@ -259,7 +289,9 @@ sudo systemctl restart currency-update.service
 systemctl status display.service --no-pager
 systemctl status night.service --no-pager
 systemctl status currency-update.service --no-pager
-systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.timer'
+systemctl status tram.service --no-pager
+systemctl status tram-alerts.service --no-pager
+systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.timer|tram.timer|tram-alerts.timer'
 ```
 
 ### View logs
@@ -268,6 +300,8 @@ systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.tim
 journalctl -u display.service -n 50 --no-pager
 journalctl -u night.service -n 50 --no-pager
 journalctl -u currency-update.service -n 50 --no-pager
+journalctl -u tram.service -n 50 --no-pager
+journalctl -u tram-alerts.service -n 50 --no-pager
 ```
 
 ## Validation commands
@@ -281,6 +315,8 @@ python3 modules/photos/drive-sync.py --check-config
 python3 modules/photos/photo-resize.py --check-config
 python3 modules/currency/currency-rate.py --check-config
 python3 modules/pihole/piholestats_manual.py --check-config
+python3 modules/trams/tram_gtfs_refresh.py --check-config
+python3 modules/trams/tram_alerts_refresh.py --check-config
 ```
 
 Useful dry-run or local-output checks:
@@ -291,6 +327,9 @@ python3 modules/currency/currency.py --self-test
 python3 modules/currency/currency-rate.py --self-test
 python3 modules/pihole/piholestats_manual.py --output-image /tmp/pihole-test.png
 python3 modules/calendash/display.py --output /tmp/calendash-display.png --no-framebuffer
+python3 modules/trams/tram_gtfs_refresh.py --self-test
+python3 modules/trams/tram_alerts_refresh.py --self-test
+python3 modules/trams/display.py --output /tmp/trams-display.png --no-framebuffer --frames 1
 ```
 
 ## Photos workflow with Drive sync

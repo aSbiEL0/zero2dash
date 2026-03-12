@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh Bee Network tram alerts cache periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+Persistent=true
+AccuracySec=2min
+Unit=tram-alerts.service
+
+[Install]
+WantedBy=timers.target

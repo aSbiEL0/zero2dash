@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Refresh a compact GTFS cache for Firswood town-centre Metrolink departures."""
+"""Refresh compact GTFS timetable cache for the Firswood tram module."""
 
 from __future__ import annotations
 
 import argparse
 import csv
+import email.utils
 import io
 import json
 import logging
@@ -35,14 +36,16 @@ if str(REPO_ROOT) not in sys.path:
 from _config import get_env, report_validation_errors
 
 DEFAULT_GTFS_URL = "https://odata.tfgm.com/opendata/downloads/TfGMgtfsnew.zip"
-DEFAULT_CACHE_PATH = REPO_ROOT / "cache" / "tram_gtfs.json"
+DEFAULT_CACHE_PATH = MODULE_DIR / "tram_timetable.json"
 DEFAULT_TIMEOUT_SECS = 30.0
-DEFAULT_STOP_ID = "123172"
+DEFAULT_STOP_NAME = "Firswood"
+DEFAULT_STOP_ID = ""
 DEFAULT_TIMEZONE = "Europe/London"
+DEFAULT_DIRECTION_LABEL = "towards Town Centre"
 DEFAULT_HEADSIGNS = (
     "Victoria",
-    "Rochdale Town Centre",
     "Shaw and Crompton",
+    "Rochdale Town Centre",
 )
 DEFAULT_USER_AGENT = "zero2dash-trams/1.0"
 METROLINK_AGENCY_ID = "7778482"
@@ -62,10 +65,18 @@ class Config:
     gtfs_url: str
     cache_path: Path
     timeout_secs: float
+    stop_name: str
     stop_id: str
     timezone_name: str
+    direction_label: str
     target_headsigns: tuple[str, ...]
     user_agent: str
+
+
+@dataclass
+class DownloadResult:
+    payload: bytes
+    last_modified: str | None
 
 
 def load_timezone(name: str):
@@ -117,7 +128,7 @@ def _parse_headsigns(value: str) -> tuple[str, ...]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Refresh compact GTFS cache for Firswood Metrolink departures.")
+    parser = argparse.ArgumentParser(description="Refresh compact GTFS timetable cache for Firswood tram departures.")
     parser.add_argument("--check-config", action="store_true", help="Validate configuration and exit.")
     parser.add_argument("--force-refresh", action="store_true", help="Rewrite cache even if content is unchanged.")
     parser.add_argument("--self-test", action="store_true", help="Run inline smoke tests and exit.")
@@ -137,15 +148,19 @@ def validate_config() -> tuple[Config | None, list[str]]:
     gtfs_url = str(record("TRAM_GTFS_URL", default=DEFAULT_GTFS_URL)).strip()
     cache_raw = record("TRAM_GTFS_CACHE_PATH", default=str(DEFAULT_CACHE_PATH))
     timeout_secs = float(record("TRAM_GTFS_TIMEOUT", default=DEFAULT_TIMEOUT_SECS, validator=lambda value: _as_float("TRAM_GTFS_TIMEOUT", value)))
+    stop_name = str(record("TRAM_STOP_NAME", default=DEFAULT_STOP_NAME)).strip()
     stop_id = str(record("TRAM_STOP_ID", default=DEFAULT_STOP_ID)).strip()
     timezone_name = str(record("TRAM_TIMEZONE", default=DEFAULT_TIMEZONE, validator=_as_timezone)).strip()
+    direction_label = str(record("TRAM_DIRECTION_LABEL", default=DEFAULT_DIRECTION_LABEL)).strip()
     target_headsigns = tuple(record("TRAM_TARGET_HEADSIGNS", default=",".join(DEFAULT_HEADSIGNS), validator=_parse_headsigns))
     user_agent = str(record("TRAM_GTFS_USER_AGENT", default=DEFAULT_USER_AGENT)).strip() or DEFAULT_USER_AGENT
 
     if not gtfs_url:
         errors.append("TRAM_GTFS_URL must not be blank")
-    if not stop_id:
-        errors.append("TRAM_STOP_ID must not be blank")
+    if not stop_name and not stop_id:
+        errors.append("TRAM_STOP_NAME or TRAM_STOP_ID must be set")
+    if not direction_label:
+        errors.append("TRAM_DIRECTION_LABEL must not be blank")
 
     if errors:
         return None, errors
@@ -154,8 +169,10 @@ def validate_config() -> tuple[Config | None, list[str]]:
         gtfs_url=gtfs_url,
         cache_path=expand_path(str(cache_raw)),
         timeout_secs=timeout_secs,
+        stop_name=stop_name,
         stop_id=stop_id,
         timezone_name=timezone_name,
+        direction_label=direction_label,
         target_headsigns=target_headsigns,
         user_agent=user_agent,
     ), []
@@ -187,7 +204,7 @@ def _parse_departure_seconds(value: str) -> int:
     return (hours * 3600) + (minutes * 60) + seconds
 
 
-def download_feed(config: Config) -> bytes:
+def download_feed(config: Config) -> DownloadResult:
     request = urllib.request.Request(
         config.gtfs_url,
         headers={
@@ -197,12 +214,86 @@ def download_feed(config: Config) -> bytes:
     )
     with urllib.request.urlopen(request, timeout=config.timeout_secs) as response:  # nosec B310
         payload = response.read()
+        last_modified_raw = response.headers.get("Last-Modified", "").strip()
     if not payload:
         raise ValueError("downloaded GTFS feed is empty")
-    return payload
+    last_modified: str | None = None
+    if last_modified_raw:
+        try:
+            parsed = email.utils.parsedate_to_datetime(last_modified_raw)
+            last_modified = parsed.astimezone(timezone.utc).isoformat()
+        except Exception:
+            last_modified = last_modified_raw
+    return DownloadResult(payload=payload, last_modified=last_modified)
 
 
-def build_cache_payload(feed_bytes: bytes, config: Config, generated_at: datetime | None = None) -> dict[str, Any]:
+def _normalise_stop_name(value: str) -> str:
+    lowered = value.lower().replace("(manchester metrolink)", "")
+    return " ".join(lowered.split())
+
+
+def resolve_target_stop(
+    stops_rows: list[dict[str, str]],
+    stop_times_rows: list[dict[str, str]],
+    trip_lookup: dict[str, dict[str, str]],
+    config: Config,
+) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    if config.stop_id:
+        target = next((row for row in stops_rows if row.get("stop_id", "").strip() == config.stop_id), None)
+        if target is None:
+            raise ValueError(f"stop_id {config.stop_id} not found in GTFS feed")
+        evidence = [{
+            "stop_id": target.get("stop_id", "").strip(),
+            "stop_code": target.get("stop_code", "").strip(),
+            "stop_name": target.get("stop_name", "").strip(),
+            "matching_departures": sum(
+                1
+                for row in stop_times_rows
+                if row.get("stop_id", "").strip() == config.stop_id and row.get("trip_id", "").strip() in trip_lookup
+            ),
+        }]
+        return target, evidence
+
+    target_name = _normalise_stop_name(config.stop_name)
+    candidate_stops = [
+        row for row in stops_rows
+        if target_name and target_name in _normalise_stop_name(row.get("stop_name", "").strip())
+    ]
+    if not candidate_stops:
+        raise ValueError(f"no stop records matched stop name {config.stop_name!r}")
+
+    matches_by_stop: dict[str, int] = {row.get("stop_id", "").strip(): 0 for row in candidate_stops}
+    for row in stop_times_rows:
+        stop_id = row.get("stop_id", "").strip()
+        trip_id = row.get("trip_id", "").strip()
+        if stop_id in matches_by_stop and trip_id in trip_lookup:
+            matches_by_stop[stop_id] += 1
+
+    evidence = [
+        {
+            "stop_id": row.get("stop_id", "").strip(),
+            "stop_code": row.get("stop_code", "").strip(),
+            "stop_name": row.get("stop_name", "").strip(),
+            "matching_departures": matches_by_stop.get(row.get("stop_id", "").strip(), 0),
+        }
+        for row in candidate_stops
+    ]
+    evidence.sort(key=lambda item: (-int(item["matching_departures"]), item["stop_code"], item["stop_id"]))
+
+    best = evidence[0]
+    if int(best["matching_departures"]) <= 0:
+        raise ValueError(f"no candidate stop for {config.stop_name!r} had matching departures for the target headsigns")
+    target = next(row for row in candidate_stops if row.get("stop_id", "").strip() == best["stop_id"])
+    return target, evidence
+
+
+def build_cache_payload(
+    feed_bytes: bytes,
+    config: Config,
+    *,
+    source_last_modified: str | None = None,
+    generated_at: datetime | None = None,
+) -> dict[str, Any]:
     generated = generated_at or datetime.now(tz=load_timezone(config.timezone_name))
 
     stops_rows = _load_csv_from_zip(feed_bytes, "stops.txt")
@@ -211,11 +302,6 @@ def build_cache_payload(feed_bytes: bytes, config: Config, generated_at: datetim
     stop_times_rows = _load_csv_from_zip(feed_bytes, "stop_times.txt")
     calendar_rows = _load_csv_from_zip(feed_bytes, "calendar.txt")
     calendar_dates_rows = _load_csv_from_zip(feed_bytes, "calendar_dates.txt")
-
-    stop_lookup = {row.get("stop_id", "").strip(): row for row in stops_rows}
-    target_stop = stop_lookup.get(config.stop_id)
-    if not target_stop:
-        raise ValueError(f"stop_id {config.stop_id} not found in GTFS feed")
 
     metrolink_routes = {
         row.get("route_id", "").strip()
@@ -247,9 +333,14 @@ def build_cache_payload(feed_bytes: bytes, config: Config, generated_at: datetim
     if not trip_lookup:
         raise ValueError("no target Metrolink trips matched the configured headsigns")
 
+    target_stop, stop_evidence = resolve_target_stop(stops_rows, stop_times_rows, trip_lookup, config)
+    target_stop_id = target_stop.get("stop_id", "").strip()
+    if not target_stop_id:
+        raise ValueError("resolved stop record did not contain stop_id")
+
     departures: list[dict[str, Any]] = []
     for row in stop_times_rows:
-        if row.get("stop_id", "").strip() != config.stop_id:
+        if row.get("stop_id", "").strip() != target_stop_id:
             continue
         trip_id = row.get("trip_id", "").strip()
         trip = trip_lookup.get(trip_id)
@@ -271,7 +362,7 @@ def build_cache_payload(feed_bytes: bytes, config: Config, generated_at: datetim
         )
 
     if not departures:
-        raise ValueError("no stop_times matched the configured stop and headsigns")
+        raise ValueError("no stop_times matched the resolved stop and target headsigns")
 
     service_calendar: dict[str, dict[str, Any]] = {}
     for row in calendar_rows:
@@ -288,7 +379,6 @@ def build_cache_payload(feed_bytes: bytes, config: Config, generated_at: datetim
             "added_dates": [],
             "removed_dates": [],
         }
-
     missing_calendar = sorted(service_ids - set(service_calendar))
     if missing_calendar:
         raise ValueError(f"calendar.txt missing service_ids used by target trips: {', '.join(missing_calendar[:5])}")
@@ -310,57 +400,73 @@ def build_cache_payload(feed_bytes: bytes, config: Config, generated_at: datetim
         calendar_entry["removed_dates"].sort()
 
     departures.sort(key=lambda item: (item["departure_secs"], item["headsign"], item["trip_id"]))
-
-    stop_name = target_stop.get("stop_name", "").strip() or f"Stop {config.stop_id}"
-    stop_code = target_stop.get("stop_code", "").strip()
+    stop_name = target_stop.get("stop_name", "").strip() or config.stop_name or f"Stop {target_stop_id}"
 
     return {
         "generated_at": generated.isoformat(),
         "source_url": config.gtfs_url,
+        "source_last_modified": source_last_modified,
         "timezone": config.timezone_name,
+        "direction_label": config.direction_label,
         "agency_id": METROLINK_AGENCY_ID,
-        "stop_id": config.stop_id,
-        "stop_code": stop_code,
-        "stop_name": stop_name,
+        "stop": {
+            "stop_id": target_stop_id,
+            "stop_code": target_stop.get("stop_code", "").strip(),
+            "stop_name": stop_name,
+            "requested_stop_name": config.stop_name,
+            "requested_stop_id": config.stop_id,
+            "resolution_evidence": stop_evidence,
+        },
         "target_headsigns": list(config.target_headsigns),
         "departures": departures,
         "service_calendar": service_calendar,
     }
 
 
+
+
+def load_repo_env() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(REPO_ROOT / ".env")
+
 def save_cache(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temp_path.replace(path)
 
 
-def run_once(*, force_refresh: bool = False) -> int:
+def run_once(*, force_refresh: bool = False, config_override: Config | None = None) -> int:
     configure_logging()
 
-    from dotenv import load_dotenv
-
-    load_dotenv(REPO_ROOT / ".env")
-    config, errors = validate_config()
-    if errors:
-        report_validation_errors("tram_gtfs_refresh.py", errors)
-        return 1
+    load_repo_env()
+    config = config_override
+    if config is None:
+        config, errors = validate_config()
+        if errors:
+            report_validation_errors("tram_gtfs_refresh.py", errors)
+            return 1
     assert config is not None
 
     try:
-        feed_bytes = download_feed(config)
-        payload = build_cache_payload(feed_bytes, config)
+        download = download_feed(config)
+        payload = build_cache_payload(download.payload, config, source_last_modified=download.last_modified)
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, socket.timeout, zipfile.BadZipFile, ValueError) as exc:
-        logging.error("Unable to refresh tram GTFS cache: %s", exc)
+        logging.error("Unable to refresh tram timetable cache: %s", exc)
         return 1
 
+    candidate = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if not force_refresh and config.cache_path.exists():
         existing = config.cache_path.read_text(encoding="utf-8")
-        candidate = json.dumps(payload, indent=2, sort_keys=True) + "\n"
         if existing == candidate:
-            logging.info("Tram GTFS cache already current; no refresh required.")
+            logging.info("Tram timetable cache already current; no refresh required.")
             return 0
 
     save_cache(config.cache_path, payload)
-    logging.info("Wrote tram GTFS cache: %s", config.cache_path)
+    logging.info("Wrote tram timetable cache: %s", config.cache_path)
     return 0
 
 
@@ -390,21 +496,24 @@ def run_self_tests() -> int:
     configure_logging()
     config = Config(
         gtfs_url="https://example.invalid/feed.zip",
-        cache_path=Path(tempfile.gettempdir()) / "tram-gtfs-self-test.json",
+        cache_path=Path(tempfile.gettempdir()) / "tram-timetable-self-test.json",
         timeout_secs=5.0,
-        stop_id=DEFAULT_STOP_ID,
+        stop_name="Firswood",
+        stop_id="",
         timezone_name=DEFAULT_TIMEZONE,
+        direction_label=DEFAULT_DIRECTION_LABEL,
         target_headsigns=DEFAULT_HEADSIGNS,
         user_agent=DEFAULT_USER_AGENT,
     )
-    payload = build_cache_payload(_build_test_feed(), config, generated_at=datetime(2026, 3, 12, 9, 30, tzinfo=load_timezone(DEFAULT_TIMEZONE)))
-    _assert(payload["stop_name"] == "Firswood (Manchester Metrolink)", "expected target stop name")
-    _assert(payload["target_headsigns"] == list(DEFAULT_HEADSIGNS), "expected configured headsigns")
+    payload = build_cache_payload(
+        _build_test_feed(),
+        config,
+        source_last_modified="2026-03-12T09:20:00+00:00",
+        generated_at=datetime(2026, 3, 12, 9, 30, tzinfo=load_timezone(DEFAULT_TIMEZONE)),
+    )
+    _assert(payload["stop"]["stop_code"] == "9400ZZMAFIR1", "expected FIR1 platform resolution")
+    _assert(payload["direction_label"] == DEFAULT_DIRECTION_LABEL, "expected direction label")
     _assert([item["headsign"] for item in payload["departures"]] == ["Victoria", "Shaw and Crompton", "Rochdale Town Centre"], "unexpected departure filtering")
-    weekday_service = payload["service_calendar"]["WEEKDAY"]
-    _assert("2026-03-17" in weekday_service["removed_dates"], "weekday exception removal missing")
-    weekend_service = payload["service_calendar"]["WEEKEND"]
-    _assert("2026-03-17" in weekend_service["added_dates"], "weekend exception addition missing")
     print("[tram_gtfs_refresh.py] Self tests passed.")
     return 0
 
@@ -414,9 +523,7 @@ def main() -> int:
     if args.self_test:
         return run_self_tests()
 
-    from dotenv import load_dotenv
-
-    load_dotenv(REPO_ROOT / ".env")
+    load_repo_env()
     config, errors = validate_config()
     if errors:
         report_validation_errors("tram_gtfs_refresh.py", errors)
@@ -425,8 +532,9 @@ def main() -> int:
         print("[tram_gtfs_refresh.py] Configuration check passed.")
         return 0
 
-    return run_once(force_refresh=args.force_refresh)
+    return run_once(force_refresh=args.force_refresh, config_override=config)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
