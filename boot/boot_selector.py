@@ -553,6 +553,11 @@ def _launch_direct_mode(service_name: str) -> int:
 
 
 def launch_service(service_name: str) -> int:
+    running_under_systemd = bool(os.environ.get("INVOCATION_ID", "").strip())
+    if not running_under_systemd:
+        print(f"[boot-selector] Manual run detected; bypassing systemctl for {service_name}.", flush=True)
+        return _launch_direct_mode(service_name)
+
     result = subprocess.run(["systemctl", "start", service_name], check=False, capture_output=True, text=True)
     if result.returncode == 0:
         print(f"[boot-selector] Started {service_name}", flush=True)
