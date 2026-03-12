@@ -82,6 +82,8 @@ def rgb888_to_rgb565(image: Image.Image) -> bytes:
 class FramebufferWriter:
     def __init__(self, fbdev: str, width: int, height: int) -> None:
         self.fbdev = fbdev
+        self.width = width
+        self.height = height
         self.expected = width * height * 2
         self._handle: Any | None = None
         self._mapping: mmap.mmap | None = None
@@ -99,6 +101,18 @@ class FramebufferWriter:
             raise RuntimeError(f"Framebuffer payload size mismatch: expected {self.expected} bytes, got {len(payload)} bytes")
         self._mapping.seek(0)
         self._mapping.write(payload)
+
+    def write_region(self, image: Image.Image, left: int, top: int) -> None:
+        if self._mapping is None:
+            raise RuntimeError("Framebuffer is not open")
+        payload = rgb888_to_rgb565(image)
+        row_bytes = image.width * 2
+        for row in range(image.height):
+            start = row * row_bytes
+            end = start + row_bytes
+            offset = (((top + row) * self.width) + left) * 2
+            self._mapping.seek(offset)
+            self._mapping.write(payload[start:end])
 
     def close(self) -> None:
         if self._mapping is not None:
@@ -263,18 +277,15 @@ def load_background(path: Path, width: int, height: int) -> Image.Image:
     return Image.new("RGB", (width, height), (0, 0, 0))
 
 
-def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_cache: dict[str, Any] | None, now: datetime, *, ticker_offset: float = 0.0) -> Image.Image:
+def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, now: datetime) -> Image.Image:
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
-    width, height = frame.size
+    width, _height = frame.size
     white = (245, 245, 245)
-    amber = (244, 198, 0)
     departures = compute_upcoming_departures(cache or {}, now, limit=4) if _cache_status(cache) == "ok" else []
     body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=18, min_size=12)
     mins_font = _fit_font("27min", width_limit=72, initial_size=18, min_size=12)
     message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=18, min_size=13)
-    ticker_text = ticker_text_from_alerts(alerts_cache)
-    ticker_font = _fit_font(ticker_text, width_limit=max(160, width - 30), initial_size=22, min_size=18, italic=True)
     top = 92
     row_height = 24
     status = _cache_status(cache)
@@ -288,7 +299,23 @@ def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_c
             draw.text((22, y), departure.headsign, font=body_font, fill=white)
             minute_text = "Due" if departure.minutes <= 0 else f"{departure.minutes}min"
             draw.text((width - 22 - _text_width(minute_text, mins_font), y), minute_text, font=mins_font, fill=white)
-    baseline_y = height - 34
+    return frame
+
+
+def ticker_region_top(height: int) -> int:
+    return max(0, height - 52)
+
+
+def render_ticker_strip(base_frame: Image.Image, alerts_cache: dict[str, Any] | None, *, ticker_offset: float = 0.0) -> tuple[Image.Image, int]:
+    width, height = base_frame.size
+    strip_top = ticker_region_top(height)
+    strip = base_frame.crop((0, strip_top, width, height))
+    draw = ImageDraw.Draw(strip)
+    white = (245, 245, 245)
+    amber = (244, 198, 0)
+    ticker_text = ticker_text_from_alerts(alerts_cache)
+    ticker_font = _fit_font(ticker_text, width_limit=max(160, width - 30), initial_size=22, min_size=18, italic=True)
+    baseline_y = (height - 34) - strip_top
     text_width = _text_width(ticker_text, ticker_font)
     ticker_fill = amber if ticker_text == "Alerts unavailable" else white
     if text_width > width - 44:
@@ -299,6 +326,13 @@ def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_c
             x += loop_width
     else:
         draw.text((22, baseline_y), ticker_text, font=ticker_font, fill=ticker_fill)
+    return strip, strip_top
+
+
+def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_cache: dict[str, Any] | None, now: datetime, *, ticker_offset: float = 0.0) -> Image.Image:
+    frame = render_static_frame(background, cache, now)
+    strip, strip_top = render_ticker_strip(frame, alerts_cache, ticker_offset=ticker_offset)
+    frame.paste(strip, (0, strip_top))
     return frame
 
 
@@ -375,6 +409,10 @@ def main() -> int:
             return 1
         framebuffer = FramebufferWriter(args.fbdev, args.width, args.height)
         framebuffer.open()
+    startup_now = datetime.now(tz=tz)
+    static_frame = render_static_frame(background, cache, startup_now)
+    if framebuffer is not None:
+        framebuffer.write_frame(static_frame)
     animation_start = time.monotonic()
     frame_index = 0
     saved_output = False
@@ -385,18 +423,19 @@ def main() -> int:
     try:
         while not _STOP_REQUESTED:
             frame_started = time.monotonic()
-            now = datetime.now(tz=tz)
             elapsed = frame_started - animation_start
             ticker_offset = elapsed * args.ticker_speed
-            frame = render_frame(background, cache, alerts_cache, now, ticker_offset=ticker_offset)
+            ticker_strip, ticker_top = render_ticker_strip(static_frame, alerts_cache, ticker_offset=ticker_offset)
             stats_render_ms += (time.monotonic() - frame_started) * 1000
             if args.output and not saved_output:
+                frame = static_frame.copy()
+                frame.paste(ticker_strip, (0, ticker_top))
                 frame.save(args.output)
                 print(f"Saved preview image to {args.output}")
                 saved_output = True
             if framebuffer is not None:
                 framebuffer_started = time.monotonic()
-                framebuffer.write_frame(frame)
+                framebuffer.write_region(ticker_strip, 0, ticker_top)
                 stats_framebuffer_ms += (time.monotonic() - framebuffer_started) * 1000
             frame_index += 1
             stats_frame_count += 1
