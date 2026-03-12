@@ -1,5 +1,5 @@
 [Unit]
-Description=Pi-hole TFT Stats Display DARK
+Description=TFT Night Blackout Display
 After=network-online.target
 Wants=network-online.target
 
@@ -11,7 +11,7 @@ Environment=FB_DEVICE=/dev/fb1
 EnvironmentFile=-/opt/zero2dash/.env
 
 ExecStartPre=/opt/zero2dash/scripts/pihole-display-pre.sh
-ExecStart=/usr/bin/python3 -u /opt/zero2dash/scripts/piholestats_v1.2.py
+ExecStart=/usr/bin/python3 -u /opt/zero2dash/scripts/blackout.py
 
 Restart=always
 RestartSec=2
@@ -20,3 +20,5 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
+
+

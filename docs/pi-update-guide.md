@@ -107,6 +107,8 @@ If you want to immediately test night mode too:
 sudo systemctl start pihole-display-dark.service
 ```
 
+The night service now runs `/opt/zero2dash/scripts/blackout.py`, which expects `/opt/zero2dash/images/raspberry-pi-icon.png` to be present in the deployed tree.
+
 ## 7) Post-update verification
 
 ```bash
@@ -132,5 +134,7 @@ sudo systemctl start display.service
 ## Notes about the IDE `.env` path in your context
 
 Your IDE referenced a Windows path (`C:/Users/Default.DESKTOP-MR88P09/.env`). For the Pi runtime, the file that matters is `/opt/zero2dash/.env` because that is what the systemd units load.
+
+
 
 
