@@ -374,19 +374,25 @@ def main() -> int:
     frame_index = 0
     saved_output = False
     stats_window_start = animation_start
+    stats_render_ms = 0.0
+    stats_framebuffer_ms = 0.0
     stats_frame_count = 0
     try:
         while not _STOP_REQUESTED:
+            frame_started = time.monotonic()
             now = datetime.now(tz=tz)
-            elapsed = time.monotonic() - animation_start
+            elapsed = frame_started - animation_start
             ticker_offset = elapsed * args.ticker_speed
             frame = render_frame(background, cache, alerts_cache, now, ticker_offset=ticker_offset)
+            stats_render_ms += (time.monotonic() - frame_started) * 1000
             if args.output and not saved_output:
                 frame.save(args.output)
                 print(f"Saved preview image to {args.output}")
                 saved_output = True
             if framebuffer is not None:
+                framebuffer_started = time.monotonic()
                 framebuffer.write_frame(frame)
+                stats_framebuffer_ms += (time.monotonic() - framebuffer_started) * 1000
             frame_index += 1
             stats_frame_count += 1
             if args.frame_log:
@@ -394,9 +400,13 @@ def main() -> int:
                 if stats_elapsed >= 1.0:
                     fps = stats_frame_count / stats_elapsed
                     avg_frame_ms = (stats_elapsed / stats_frame_count) * 1000 if stats_frame_count else 0.0
-                    print(f"[frame-log] fps={fps:.1f} avg_frame_ms={avg_frame_ms:.1f} ticker_speed={args.ticker_speed:.1f}")
+                    avg_render_ms = stats_render_ms / stats_frame_count if stats_frame_count else 0.0
+                    avg_framebuffer_ms = stats_framebuffer_ms / stats_frame_count if stats_frame_count else 0.0
+                    print(f"[frame-log] fps={fps:.1f} avg_frame_ms={avg_frame_ms:.1f} render_ms={avg_render_ms:.1f} framebuffer_ms={avg_framebuffer_ms:.1f} ticker_speed={args.ticker_speed:.1f}")
                     stats_window_start = time.monotonic()
                     stats_frame_count = 0
+                    stats_render_ms = 0.0
+                    stats_framebuffer_ms = 0.0
             if args.frames > 0 and frame_index >= args.frames:
                 break
             time.sleep(args.frame_delay)
