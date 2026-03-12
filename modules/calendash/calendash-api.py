@@ -61,6 +61,30 @@ RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 NON_RETRYABLE_HTTP_STATUSES = {400, 401, 403, 404}
 ALLOWED_AUTH_MODES = {"local_server", "console", "device_code"}
 
+
+def _fallback_legacy_calendash_path(raw_value: Any, default_path: Path) -> Path:
+    resolved_path = expand_path(str(raw_value))
+    if resolved_path.exists():
+        return resolved_path
+
+    # Older env files pointed calendash assets at ~/zero2dash/images/.
+    # Prefer the module-local asset when that legacy path no longer exists.
+    legacy_images_dir = (REPO_ROOT / "images").resolve()
+    try:
+        is_legacy_calendash_asset = resolved_path.parent == legacy_images_dir and resolved_path.name.startswith("calendash-")
+    except Exception:
+        is_legacy_calendash_asset = False
+
+    if is_legacy_calendash_asset and default_path.exists():
+        logging.info(
+            "Legacy calendash asset path %s not found; falling back to %s",
+            resolved_path,
+            default_path,
+        )
+        return default_path
+
+    return resolved_path
+
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
     if isinstance(raw_scopes, str):
         return {scope for scope in raw_scopes.replace(",", " ").split() if scope}
@@ -342,9 +366,9 @@ def validate_config(*, require_sections: set[str]) -> tuple[dict[str, dict[str, 
         )
         auth_mode = DEFAULT_AUTH_MODE
 
-    output_path = expand_path(str(output_raw))
-    background_path = expand_path(str(background_raw))
-    icon_path = expand_path(str(icon_raw))
+    output_path = _fallback_legacy_calendash_path(output_raw, DEFAULT_OUTPUT_PATH)
+    background_path = _fallback_legacy_calendash_path(background_raw, DEFAULT_BACKGROUND_PATH)
+    icon_path = _fallback_legacy_calendash_path(icon_raw, DEFAULT_ICON_PATH)
     token_path = expand_path(str(token_raw))
     diagnostics_path = expand_path(str(diagnostics_raw))
 
