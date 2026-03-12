@@ -10,7 +10,7 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 
 | Unit | Purpose | Entrypoint |
 | --- | --- | --- |
-| `display.service` | Daytime page rotator | `display_rotator.py` |
+| `boot-selector.service` | Boot GIF and day/night selector | `boot/boot_selector.py` |`r`n| `display.service` | Daytime page rotator | `display_rotator.py` |
 | `night.service` | Night blackout screen | `modules/blackout/blackout.py` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
 
@@ -239,7 +239,7 @@ Optional environment overrides:
 sudo cp systemd/*.service /etc/systemd/system/
 sudo cp systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now display.service
+sudo systemctl enable --now boot-selector.service
 sudo systemctl enable --now day.timer night.timer currency-update.timer
 ```
 
@@ -306,7 +306,8 @@ python3 modules/photos/photos-shuffle.py --test
 ## Notes
 
 - `modules/blackout/blackout.py` uses `modules/blackout/raspberry-pi-icon.png`.
-- `pihole-display-pre.sh` is used by both day and night services.
+- `pihole-display-pre.sh` is used by boot, day, and night services.`r`n- Put the boot animation GIF at `boot/startup.gif`, or override it with `BOOT_SELECTOR_GIF_PATH`.
 - The module directories are the source of truth for page-specific scripts and page-specific assets.
+
 
 

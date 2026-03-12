@@ -22,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageSequence
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
-DEFAULT_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", "assets/startup.gif")
+DEFAULT_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", "boot/startup.gif")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
 DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.service")
 DEFAULT_TOUCH_SETTLE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_SETTLE_SECS", "0.35"))
@@ -41,7 +41,9 @@ EV_SYN = 0x00
 EV_KEY = 0x01
 EV_ABS = 0x03
 ABS_X = 0x00
+ABS_Y = 0x01
 ABS_MT_POSITION_X = 0x35
+ABS_MT_POSITION_Y = 0x36
 ABS_MT_TRACKING_ID = 0x39
 BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
@@ -170,8 +172,10 @@ def _touch_candidate_details(event_path: str) -> tuple[tuple[int, int, int, int]
     key_mask = _capability_mask(event_path, "key")
 
     has_abs_x = bool(abs_mask & (1 << ABS_X))
+    has_abs_y = bool(abs_mask & (1 << ABS_Y))
     has_abs_mt_x = bool(abs_mask & (1 << ABS_MT_POSITION_X))
-    has_touch_abs = has_abs_x or has_abs_mt_x
+    has_abs_mt_y = bool(abs_mask & (1 << ABS_MT_POSITION_Y))
+    has_touch_abs = (has_abs_x and has_abs_y) or (has_abs_mt_x and has_abs_mt_y)
     has_btn_touch = bool(key_mask & (1 << BTN_TOUCH))
 
     name_bonus = 0
@@ -188,7 +192,8 @@ def _touch_candidate_details(event_path: str) -> tuple[tuple[int, int, int, int]
     reason = (
         f"score={score}; name='{name or 'unknown'}'; "
         f"touch_abs={'yes' if has_touch_abs else 'no'} "
-        f"(ABS_X={'yes' if has_abs_x else 'no'}, ABS_MT_POSITION_X={'yes' if has_abs_mt_x else 'no'}); "
+        f"(ABS_X={'yes' if has_abs_x else 'no'}, ABS_Y={'yes' if has_abs_y else 'no'}, "
+        f"ABS_MT_POSITION_X={'yes' if has_abs_mt_x else 'no'}, ABS_MT_POSITION_Y={'yes' if has_abs_mt_y else 'no'}); "
         f"BTN_TOUCH={'yes' if has_btn_touch else 'no'}"
     )
     return (score, int(has_touch_abs), int(has_btn_touch), -index), reason
@@ -247,7 +252,12 @@ def _candidate_absinfo_paths(device: str) -> list[Path]:
     return unique
 
 
-def detect_touch_width(device: str, default_width: int) -> tuple[int, int]:
+def detect_touch_bounds(device: str, default_width: int, default_height: int) -> tuple[int, int, int, int]:
+    x_min = 0
+    y_min = 0
+    x_width = default_width
+    y_height = default_height
+
     for absinfo_path in _candidate_absinfo_paths(device):
         try:
             with open(absinfo_path, encoding="utf-8") as absinfo:
@@ -259,18 +269,24 @@ def detect_touch_width(device: str, default_width: int) -> tuple[int, int]:
                         code = int(code_str.strip(), 16)
                     except ValueError:
                         continue
-                    if code not in (ABS_X, ABS_MT_POSITION_X):
-                        continue
                     parts = payload.strip().split()
                     if len(parts) < 3:
                         continue
                     min_val = int(parts[1])
                     max_val = int(parts[2])
-                    if max_val > min_val:
-                        return max(100, (max_val - min_val + 1)), min_val
+                    if max_val <= min_val:
+                        continue
+                    size = max_val - min_val + 1
+                    if code in (ABS_X, ABS_MT_POSITION_X):
+                        x_min = min_val
+                        x_width = max(100, size)
+                    elif code in (ABS_Y, ABS_MT_POSITION_Y):
+                        y_min = min_val
+                        y_height = max(100, size)
         except Exception:
             continue
-    return default_width, 0
+
+    return x_width, x_min, y_height, y_min
 
 
 def load_font(width: int, height: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -398,21 +414,22 @@ def playback_gif(
         time.sleep(duration)
 
 
-def _normalise_x(raw_x: int, touch_width: int, touch_min: int, screen_width: int) -> int:
-    relative_x = raw_x - touch_min
-    if relative_x < 0:
-        relative_x = 0
-    elif relative_x >= touch_width:
-        relative_x = touch_width - 1
+def _normalise_axis(raw_value: int, source_size: int, source_min: int, target_size: int) -> int:
+    relative = raw_value - source_min
+    if relative < 0:
+        relative = 0
+    elif relative >= source_size:
+        relative = source_size - 1
 
-    if touch_width <= 1:
+    if source_size <= 1:
         return 0
-    return int(relative_x * (screen_width - 1) / (touch_width - 1))
+    return int(relative * (target_size - 1) / (source_size - 1))
 
 
 def wait_for_selection(
     buttons: list[dict[str, object]],
     screen_width: int,
+    screen_height: int,
     touch_settle_secs: float,
     touch_debounce_secs: float,
 ) -> str | None:
@@ -420,12 +437,16 @@ def wait_for_selection(
     if not device:
         return None
 
-    touch_width, touch_min = detect_touch_width(device, screen_width)
-    print(f"[boot-selector] Waiting for touch selection on {device} (width {touch_width})", flush=True)
+    touch_width, touch_min_x, touch_height, touch_min_y = detect_touch_bounds(device, screen_width, screen_height)
+    print(
+        f"[boot-selector] Waiting for touch selection on {device} (width {touch_width}, height {touch_height})",
+        flush=True,
+    )
 
     ready_after = time.monotonic() + max(0.0, touch_settle_secs)
     last_emit = 0.0
-    last_x = touch_min + (touch_width // 2)
+    last_x = touch_min_x + (touch_width // 2)
+    last_y = touch_min_y + (touch_height // 2)
     touch_down = False
 
     with open(device, "rb", buffering=0) as fd:
@@ -441,6 +462,8 @@ def wait_for_selection(
             _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
             if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
                 last_x = ev_value
+            elif ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
+                last_y = ev_value
             elif ev_type == EV_KEY and ev_code == BTN_TOUCH:
                 if ev_value == 1:
                     touch_down = True
@@ -450,10 +473,11 @@ def wait_for_selection(
                     if now < ready_after or (now - last_emit) < touch_debounce_secs:
                         continue
                     last_emit = now
-                    screen_x = _normalise_x(last_x, touch_width, touch_min, screen_width)
+                    screen_x = _normalise_axis(last_x, touch_width, touch_min_x, screen_width)
+                    screen_y = _normalise_axis(last_y, touch_height, touch_min_y, screen_height)
                     for button in buttons:
                         left, top, right, bottom = button["bounds"]
-                        if left <= screen_x <= right:
+                        if left <= screen_x <= right and top <= screen_y <= bottom:
                             mode = str(button["mode"])
                             print(f"[boot-selector] Selected mode: {mode}", flush=True)
                             return mode
@@ -507,7 +531,7 @@ def main() -> int:
             print("Skipping touch loop because --no-framebuffer was set.", flush=True)
             return 0
 
-        mode = wait_for_selection(buttons, args.width, args.touch_settle_secs, args.touch_debounce_secs)
+        mode = wait_for_selection(buttons, args.width, args.height, args.touch_settle_secs, args.touch_debounce_secs)
         if mode == "day":
             return launch_service(args.day_service)
         if mode == "night":

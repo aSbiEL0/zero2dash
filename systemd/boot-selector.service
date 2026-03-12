@@ -1,0 +1,24 @@
+[Unit]
+Description=TFT Boot Selector
+After=network-online.target
+Wants=network-online.target
+Conflicts=display.service night.service
+Before=display.service night.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pihole/zero2dash
+Environment=PYTHONUNBUFFERED=1
+Environment=FB_DEVICE=/dev/fb1
+EnvironmentFile=-/home/pihole/zero2dash/.env
+
+ExecStartPre=/home/pihole/zero2dash/pihole-display-pre.sh
+ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/boot/boot_selector.py
+
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
