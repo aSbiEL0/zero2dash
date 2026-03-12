@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,13 +13,17 @@ from typing import Any
 from dotenv import load_dotenv
 from PIL import Image, ImageOps
 
+MODULE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = MODULE_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from _config import get_env, report_validation_errors
 
 DEFAULT_ROOT = Path("~/zero2dash").expanduser()
 DEFAULT_STATE_PATH = DEFAULT_ROOT / "cache" / "photo_resize_state.json"
 ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 RESIZE_SCALE = 0.5
-
 
 @dataclass
 class Config:
@@ -137,3 +142,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

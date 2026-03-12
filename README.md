@@ -4,24 +4,29 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 
 - Direct rendering to `/dev/fb1`
 - No X11, Wayland, SDL, or browser runtime
-- Modular page layout under `modules/`
+- Page-specific code and assets live under `modules/`
 
 ## Runtime overview
 
 | Unit | Purpose | Entrypoint |
 | --- | --- | --- |
 | `display.service` | Daytime page rotator | `display_rotator.py` |
-| `night.service` | Night blackout screen | `scripts/blackout.py` |
+| `night.service` | Night blackout screen | `blackout.py` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
 
 ## Repository structure
 
 ```text
 zero2dash/
+├── _config.py
+├── blackout.py
 ├── display_rotator.py
 ├── modules.txt
+├── pihole-display-pre.sh
+├── raspberry-pi-icon.png
 ├── modules/
 │   ├── calendash/
+│   │   ├── calendash-api.py
 │   │   ├── calendash-bkg.png
 │   │   ├── calendash-icon.png
 │   │   ├── calendash.png
@@ -33,20 +38,15 @@ zero2dash/
 │   │   ├── currency.py
 │   │   └── display.py
 │   ├── photos/
+│   │   ├── drive-sync.py
+│   │   ├── photo-resize.py
 │   │   ├── photos-shuffle.py
 │   │   └── display.py
 │   └── pihole/
 │       ├── pihole-bkg.png
+│       ├── pihole_api.py
 │       ├── piholestats_manual.py
 │       └── display.py
-├── scripts/
-│   ├── _config.py
-│   ├── blackout.py
-│   ├── calendash-api.py
-│   ├── drive-sync.py
-│   ├── photo-resize.py
-│   ├── pihole-display-pre.sh
-│   └── pihole_api.py
 ├── systemd/
 │   ├── currency-update.service
 │   ├── currency-update.timer
@@ -54,21 +54,20 @@ zero2dash/
 │   ├── display.service
 │   ├── night.service
 │   └── night.timer
-├── images/
-│   └── raspberry-pi-icon.png
+├── cache/
+├── docs/
 ├── photos/
 ├── requirements.txt
 └── README.md
 ```
 
-## Module behaviour
+## Module ownership
 
-- `modules/pihole/` renders the Pi-hole page and owns the Pi-hole background asset.
-- `modules/calendash/` displays the generated calendar image and owns the calendar assets/output PNG.
-- `scripts/calendash-api.py` fetches Google Calendar data and writes the PNG into `modules/calendash/calendash.png`.
-- `modules/currency/` owns both the display script and the scheduled GBP/PLN renderer output.
-- `modules/photos/` owns the photo page renderer.
-- `scripts/drive-sync.py` and `scripts/photo-resize.py` are shared support utilities for the photos workflow.
+- `modules/pihole/` owns the Pi-hole renderer, Pi-hole API helpers, and Pi-hole page background.
+- `modules/calendash/` owns the calendar display script, calendar generator, and calendar assets/output PNG.
+- `modules/currency/` owns the currency display script, scheduled refresh script, and currency assets/output PNG.
+- `modules/photos/` owns the photo display script plus Drive sync and resize helpers for the photos workflow.
+- Root-level files are shared runtime helpers used across modules and services.
 
 ## Requirements
 
@@ -78,7 +77,7 @@ zero2dash/
 - systemd
 - Working framebuffer device, normally `/dev/fb1`
 
-Install Python packages:
+Install Python dependencies:
 
 ```sh
 python3 -m pip install -r requirements.txt
@@ -103,7 +102,7 @@ sudo ./LCD24-show
 # reboot after the installer finishes
 ```
 
-After reboot, confirm the framebuffer exists:
+Confirm the framebuffer exists after reboot:
 
 ```sh
 ls -l /dev/fb1
@@ -115,7 +114,7 @@ ls -l /dev/fb1
 git clone <your-repo-url> /home/pihole/zero2dash
 cd /home/pihole/zero2dash
 python3 -m pip install -r requirements.txt
-chmod +x scripts/pihole-display-pre.sh
+chmod +x pihole-display-pre.sh
 ```
 
 Create the runtime config file:
@@ -138,19 +137,19 @@ Common environment variables:
 
 ### Pi-hole page
 
-Required for a working Pi-hole page:
+Required:
 
 - `PIHOLE_HOST`
 - `PIHOLE_PASSWORD` for v6 session auth, or `PIHOLE_API_TOKEN` for token auth
 
-Optional but commonly used:
+Optional:
 
 - `PIHOLE_SCHEME`
 - `PIHOLE_VERIFY_TLS`
 - `PIHOLE_CA_BUNDLE`
 - `PIHOLE_TIMEOUT`
 - `REFRESH_SECS`
-- `OUTPUT_IMAGE` if you want a PNG written instead of framebuffer output during testing
+- `OUTPUT_IMAGE` for PNG output during testing
 
 ### Calendash
 
@@ -274,8 +273,10 @@ journalctl -u currency-update.service -n 50 --no-pager
 Configuration checks:
 
 ```sh
-python3 scripts/calendash-api.py --check-config
+python3 modules/calendash/calendash-api.py --check-config
 python3 modules/photos/photos-shuffle.py --check-config
+python3 modules/photos/drive-sync.py --check-config
+python3 modules/photos/photo-resize.py --check-config
 python3 modules/currency/currency-rate.py --check-config
 python3 modules/pihole/piholestats_manual.py --check-config
 ```
@@ -295,13 +296,13 @@ python3 modules/calendash/display.py --output /tmp/calendash-display.png --no-fr
 If you manage photos through a shared Google Drive folder:
 
 ```sh
-python3 scripts/drive-sync.py
-python3 scripts/photo-resize.py
+python3 modules/photos/drive-sync.py
+python3 modules/photos/photo-resize.py
 python3 modules/photos/photos-shuffle.py --test
 ```
 
 ## Notes
 
-- `scripts/blackout.py` uses `images/raspberry-pi-icon.png`.
-- `scripts/pihole-display-pre.sh` is used by both day and night services.
+- `blackout.py` uses `raspberry-pi-icon.png` from the project root.
+- `pihole-display-pre.sh` is used by both day and night services.
 - The module directories are the source of truth for page-specific scripts and page-specific assets.

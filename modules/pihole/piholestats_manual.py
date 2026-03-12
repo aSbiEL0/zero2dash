@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Pi-hole TFT Dashboard -> direct framebuffer RGB565 (no X, no SDL)
 # v6 auth handled elsewhere; this file only renders and calls API
-# Manual Pi-hole stats display; canonical night service uses piholestats_v1.2.py
+# Manual Pi-hole stats display
 
 import sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl, errno
 from pathlib import Path
@@ -674,6 +674,7 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except KeyboardInterrupt:
         pass
+
 
 
 

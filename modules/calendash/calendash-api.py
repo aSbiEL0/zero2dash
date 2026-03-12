@@ -5,7 +5,7 @@ Dependencies:
   pip install google-api-python-client google-auth-oauthlib python-dotenv pillow pytz
 
 Cron example (06:00 every day):
-  0 6 * * * cd /home/pihole/zero2dash && /usr/bin/python3 /home/pihole/zero2dash/scripts/calendash-api.py >> /var/log/calendash.log 2>&1
+  0 6 * * * cd /home/pihole/zero2dash && /usr/bin/python3 /home/pihole/zero2dash/modules/calendash/calendash-api.py >> /var/log/calendash.log 2>&1
 
 Assets:
 - BACKGROUND_IMAGE should be a 320x240 base image that already contains your logo/header.
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 import json
 import argparse
@@ -38,14 +39,17 @@ from googleapiclient.errors import HttpError
 from PIL import Image, ImageDraw, ImageFont
 from requests import exceptions as requests_exceptions
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from _config import get_env, report_validation_errors
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-MODULE_DIR = REPO_ROOT / "modules" / "calendash"
+MODULE_DIR = SCRIPT_DIR
 DEFAULT_OUTPUT_PATH = MODULE_DIR / "calendash.png"
 DEFAULT_BACKGROUND_PATH = MODULE_DIR / "calendash-bkg.png"
 DEFAULT_ICON_PATH = MODULE_DIR / "calendash-icon.png"
@@ -56,7 +60,6 @@ TOKEN_METADATA_SUFFIX = ".meta.json"
 RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 NON_RETRYABLE_HTTP_STATUSES = {400, 401, 403, 404}
 ALLOWED_AUTH_MODES = {"local_server", "console", "device_code"}
-
 
 def _normalize_scopes(raw_scopes: Any) -> set[str]:
     if isinstance(raw_scopes, str):
@@ -881,4 +884,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

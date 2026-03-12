@@ -75,8 +75,10 @@ comm -23 \
 ## 6) Validate module configuration
 
 ```bash
-python3 scripts/calendash-api.py --check-config
+python3 modules/calendash/calendash-api.py --check-config
 python3 modules/photos/photos-shuffle.py --check-config
+python3 modules/photos/drive-sync.py --check-config
+python3 modules/photos/photo-resize.py --check-config
 python3 modules/currency/currency-rate.py --check-config
 python3 modules/pihole/piholestats_manual.py --check-config
 ```

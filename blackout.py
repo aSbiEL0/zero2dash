@@ -23,7 +23,7 @@ FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 FPS_DEFAULT = 40.0
-ICON_DEFAULT = Path(__file__).resolve().parent.parent / "images" / "raspberry-pi-icon.png"
+ICON_DEFAULT = Path(__file__).resolve().parent / "raspberry-pi-icon.png"
 ICON_SIZE_RATIO = 0.18
 ICON_MIN_SIZE = 28
 ICON_MAX_SIZE = 72
@@ -477,3 +477,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
