@@ -232,6 +232,15 @@ def _normalise_stop_name(value: str) -> str:
     return " ".join(lowered.split())
 
 
+def _normalise_headsign(value: str) -> str:
+    return " ".join(value.lower().replace("-", " ").split())
+
+
+def _headsign_matches(actual: str, configured: set[str]) -> bool:
+    normalised = _normalise_headsign(actual)
+    return any(normalised == target or normalised.startswith(target + " ") for target in configured)
+
+
 def _load_candidate_stops(archive: zipfile.ZipFile, config: Config) -> list[dict[str, str]]:
     if config.stop_id:
         for row in _iter_csv_rows(archive, "stops.txt"):
@@ -331,8 +340,10 @@ def build_cache_payload(
             raise ValueError("Metrolink agency routes were not found in GTFS feed")
 
         target_headsigns = set(config.target_headsigns)
+        normalised_target_headsigns = {_normalise_headsign(item) for item in config.target_headsigns}
         trip_lookup: dict[str, dict[str, str]] = {}
         service_ids: set[str] = set()
+        observed_headsigns: set[str] = set()
         for row in _iter_csv_rows(archive, "trips.txt"):
             trip_id = row.get("trip_id", "").strip()
             service_id = row.get("service_id", "").strip()
@@ -340,7 +351,10 @@ def build_cache_payload(
             headsign = row.get("trip_headsign", "").strip()
             if not trip_id or not service_id or not headsign:
                 continue
-            if route_id not in metrolink_routes or headsign not in target_headsigns:
+            if route_id not in metrolink_routes:
+                continue
+            observed_headsigns.add(headsign)
+            if not _headsign_matches(headsign, normalised_target_headsigns):
                 continue
             trip_lookup[trip_id] = {
                 "service_id": service_id,
@@ -350,7 +364,11 @@ def build_cache_payload(
             service_ids.add(service_id)
 
         if not trip_lookup:
-            raise ValueError("no target Metrolink trips matched the configured headsigns")
+            samples = ", ".join(sorted(observed_headsigns)[:8]) or "none"
+            raise ValueError(
+                "no target Metrolink trips matched the configured headsigns; "
+                f"configured={sorted(target_headsigns)!r}; observed_samples={samples}"
+            )
 
         candidate_stops = _load_candidate_stops(archive, config)
         stop_evidence, departures_by_stop = _collect_stop_evidence_and_departures(archive, candidate_stops, trip_lookup)

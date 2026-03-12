@@ -35,7 +35,7 @@ FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 FRAME_DELAY_DEFAULT = 0.08
-TICKER_SPEED_DEFAULT = 48.0
+TICKER_SPEED_DEFAULT = 144.0
 WEEKDAY_NAMES = (
     "monday",
     "tuesday",
@@ -250,7 +250,7 @@ def render_frame(background: Image.Image, cache: dict[str, Any] | None, alerts_c
     mins_font = _fit_font(draw, "27min", width_limit=72, initial_size=16, min_size=12)
     message_font = _fit_font(draw, "Timetable unavailable", width_limit=280, initial_size=18, min_size=13)
     ticker_text = ticker_text_from_alerts(alerts_cache)
-    ticker_font = _fit_font(draw, ticker_text, width_limit=max(160, width - 30), initial_size=12, min_size=10, italic=True)
+    ticker_font = _fit_font(draw, ticker_text, width_limit=max(160, width - 30), initial_size=16, min_size=12, italic=True)
     top = 92
     row_height = 24
     status = _cache_status(cache)
