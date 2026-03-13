@@ -320,7 +320,7 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
         for index, departure in enumerate(departures):
             y = top + (index * row_height)
             headsign_text = _ellipsize_text(departure.headsign, body_font, 170)
-            draw.text((22, y), headsign_text, font=body_font, fill=white)
+            draw.text((24, y), headsign_text, font=body_font, fill=white)
             minute_text = "Due" if departure.minutes <= 0 else f"{departure.minutes}min"
             draw.text((width - 22 - _text_width(minute_text, mins_font), y), minute_text, font=mins_font, fill=white)
     return frame
