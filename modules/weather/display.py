@@ -147,7 +147,7 @@ def main() -> int:
         frame.save(args.output)
         print(f"Saved preview image to {args.output}")
 
-    if args.no-framebuffer:
+    if args.no_framebuffer:
         print("Skipping framebuffer write (--no-framebuffer set)")
         return 0
 
@@ -163,3 +163,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
