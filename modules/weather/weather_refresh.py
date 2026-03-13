@@ -279,16 +279,16 @@ def render_weather_frame(background: Image.Image, snapshot: WeatherSnapshot) -> 
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
 
-    labels_font = _font(20, bold=False)
-    values_font = _font(20, bold=False)
-    location_font = _fit_font(snapshot.location, width_limit=120, preferred_size=20, min_size=15)
+    labels_font = _font(18, bold=False)
+    values_font = _font(18, bold=False)
+    location_font = _fit_font(snapshot.location, width_limit=120, preferred_size=18, min_size=13)
 
     rows = [
         ("Location:", snapshot.location, location_font),
         ("Temperature:", f"{snapshot.temperature_c}°C", values_font),
         ("Wind:", f"{snapshot.wind_kmh}km/h", values_font),
         ("Rain:", f"{snapshot.rain_probability}%", values_font),
-        ("Max/Min Temp:", f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", _fit_font(f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", width_limit=110, preferred_size=20, min_size=14)),
+        ("Max/Min Temp:", f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", _fit_font(f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", width_limit=110, preferred_size=18, min_size=12)),
     ]
 
     left_x = 22
@@ -307,10 +307,10 @@ def render_weather_frame(background: Image.Image, snapshot: WeatherSnapshot) -> 
 def render_unavailable_frame(background_path: Path, label: str, reason: str) -> Image.Image:
     frame = load_background(background_path)
     draw = ImageDraw.Draw(frame)
-    draw.text((22, 96), "Location:", font=_font(20), fill=TEXT_COLOUR)
-    draw.text((196, 96), label, font=_fit_font(label, width_limit=105, preferred_size=20, min_size=15), fill=TEXT_COLOUR)
-    draw.text((22, 128), "Weather unavailable", font=_font(22, bold=True), fill=TEXT_COLOUR)
-    draw.text((22, 160), reason[:28], font=_font(16), fill=TEXT_COLOUR)
+    draw.text((22, 96), "Location:", font=_font(18), fill=TEXT_COLOUR)
+    draw.text((196, 96), label, font=_fit_font(label, width_limit=105, preferred_size=18, min_size=13), fill=TEXT_COLOUR)
+    draw.text((22, 128), "Weather unavailable", font=_font(20, bold=True), fill=TEXT_COLOUR)
+    draw.text((22, 160), reason[:28], font=_font(14), fill=TEXT_COLOUR)
     return frame
 
 
@@ -398,3 +398,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
