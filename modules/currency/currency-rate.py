@@ -27,7 +27,7 @@ if str(REPO_ROOT) not in sys.path:
 from _config import get_env, report_validation_errors
 
 DEFAULT_OUTPUT_PATH = MODULE_DIR / "current-currency.png"
-DEFAULT_BACKGROUND_PATH = MODULE_DIR / "currency-bkg.png"
+DEFAULT_BACKGROUND_PATH = MODULE_DIR / "currency-background.png"
 DEFAULT_STATE_PATH = REPO_ROOT / "cache" / "currency_state.json"
 DEFAULT_API_BASE = "https://api.nbp.pl/api"
 DEFAULT_SOURCE_LABEL = "source: api.nbp.pl"
