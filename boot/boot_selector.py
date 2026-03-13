@@ -96,6 +96,19 @@ IOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS
 IOC_READ = 2
 
 
+@dataclass(frozen=True)
+class TouchRegion:
+    action: str
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    def contains(self, screen_x: int, screen_y: int) -> bool:
+        return self.left <= screen_x <= self.right and self.top <= screen_y <= self.bottom
+
+
+
 def request_stop(_signum: int, _frame: object) -> None:
     global STOP_REQUESTED
     STOP_REQUESTED = True
@@ -136,6 +149,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shutdown-command", default=DEFAULT_SHUTDOWN_COMMAND, help=f"Command used for safe shutdown (default: {DEFAULT_SHUTDOWN_COMMAND})")
     parser.add_argument("--player-command", default=DEFAULT_PLAYER_COMMAND, help="Command used after entering the correct PIN.")
     parser.add_argument("--pin", default=DEFAULT_PIN, help="PIN required by the padlock keypad.")
+    parser.add_argument("--show-touch-zones", action="store_true", default=DEFAULT_SHOW_TOUCH_ZONES, help="Draw touch zone overlays on selector screens.")
     return parser.parse_args()
 
 
@@ -166,18 +180,6 @@ def validate_args(args: argparse.Namespace) -> int | None:
     if not player_command_args(args.player_command):
         print("Player command cannot be empty.", file=sys.stderr)
         return 1
-    region_specs = (
-        (args.main_menu_regions, {MAIN_MENU_HOME, MAIN_MENU_INFO, MAIN_MENU_PADLOCK, MAIN_MENU_SHUTDOWN}, "main menu"),
-        (args.day_night_regions, {DAY_NIGHT_DAY, DAY_NIGHT_NIGHT}, "day/night"),
-        (args.shutdown_regions, {SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL}, "shutdown"),
-        (args.keypad_regions, KEYPAD_DIGITS | {KEYPAD_OK, KEYPAD_NO}, "keypad"),
-    )
-    for spec, actions, label in region_specs:
-        try:
-            parse_touch_regions(spec, actions, label)
-        except ValueError as exc:
-            print(f"Invalid {label} regions: {exc}", file=sys.stderr)
-            return 1
     return None
 
 
@@ -415,16 +417,84 @@ def save_preview(image: Image.Image, path_like: str | None) -> None:
     print(f"Saved preview image to {output_path}", flush=True)
 
 
+
+def _make_region(action: str, left: int, top: int, right: int, bottom: int) -> TouchRegion:
+    return TouchRegion(action=action, left=left, top=top, right=right, bottom=bottom)
+
+
+def main_menu_regions(screen_width: int, screen_height: int) -> list[TouchRegion]:
+    mid_x = screen_width // 2
+    mid_y = screen_height // 2
+    return [
+        _make_region(MAIN_MENU_HOME, 0, 0, max(0, mid_x - 1), max(0, mid_y - 1)),
+        _make_region(MAIN_MENU_INFO, mid_x, 0, max(0, screen_width - 1), max(0, mid_y - 1)),
+        _make_region(MAIN_MENU_PADLOCK, 0, mid_y, max(0, mid_x - 1), max(0, screen_height - 1)),
+        _make_region(MAIN_MENU_SHUTDOWN, mid_x, mid_y, max(0, screen_width - 1), max(0, screen_height - 1)),
+    ]
+
+
+def vertical_regions(screen_width: int, screen_height: int, invert_y: bool, top_action: str, bottom_action: str) -> list[TouchRegion]:
+    mid_y = screen_height // 2
+    top_region = _make_region(top_action, 0, 0, max(0, screen_width - 1), max(0, mid_y - 1))
+    bottom_region = _make_region(bottom_action, 0, mid_y, max(0, screen_width - 1), max(0, screen_height - 1))
+    return [bottom_region, top_region] if invert_y else [top_region, bottom_region]
+
+
+def keypad_regions(screen_width: int, screen_height: int) -> list[TouchRegion]:
+    keypad_rows = (
+        ("1", "2", "3", KEYPAD_OK),
+        ("4", "5", "6", "0"),
+        ("7", "8", "9", KEYPAD_NO),
+    )
+    regions: list[TouchRegion] = []
+    for row_index, row in enumerate(keypad_rows):
+        top = row_index * screen_height // 3
+        bottom = ((row_index + 1) * screen_height // 3) - 1 if row_index < 2 else max(0, screen_height - 1)
+        for column_index, action in enumerate(row):
+            left = column_index * screen_width // 4
+            right = ((column_index + 1) * screen_width // 4) - 1 if column_index < 3 else max(0, screen_width - 1)
+            regions.append(_make_region(action, left, top, right, bottom))
+    return regions
+
+
+def resolve_touch_region(screen_x: int, screen_y: int, regions: list[TouchRegion], label: str) -> str:
+    for region in regions:
+        if region.contains(screen_x, screen_y):
+            return region.action
+    raise RuntimeError(f"No {label} region matched screen_x={screen_x} screen_y={screen_y}")
+
+
+def annotate_touch_regions(image: Image.Image, regions: list[TouchRegion], title: str) -> Image.Image:
+    annotated = image.copy()
+    draw = ImageDraw.Draw(annotated)
+    colours = (
+        (255, 80, 80),
+        (80, 200, 255),
+        (255, 210, 80),
+        (120, 255, 120),
+        (255, 120, 220),
+        (255, 255, 255),
+    )
+    draw.text((4, 4), title, fill=(255, 255, 255))
+    for index, region in enumerate(regions):
+        colour = colours[index % len(colours)]
+        draw.rectangle((region.left, region.top, region.right, region.bottom), outline=colour, width=2)
+        label_x = min(max(0, region.left + 3), max(0, annotated.width - 48))
+        label_y = min(max(12, region.top + 3), max(12, annotated.height - 12))
+        draw.text((label_x, label_y), region.action, fill=colour)
+    return annotated
+
+
+def log_touch_regions(label: str, regions: list[TouchRegion]) -> None:
+    for region in regions:
+        print(
+            f"[boot-selector] {label} zone {region.action}: left={region.left} top={region.top} right={region.right} bottom={region.bottom}",
+            flush=True,
+        )
+
+
 def resolve_main_menu_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str:
-    left_half = screen_x < (screen_width // 2)
-    top_half = screen_y < (screen_height // 2)
-    if top_half and left_half:
-        return MAIN_MENU_HOME
-    if top_half and not left_half:
-        return MAIN_MENU_INFO
-    if not top_half and left_half:
-        return MAIN_MENU_PADLOCK
-    return MAIN_MENU_SHUTDOWN
+    return resolve_touch_region(screen_x, screen_y, main_menu_regions(screen_width, screen_height), "main menu")
 
 
 def _resolve_vertical_zone(screen_y: int, screen_height: int, invert_y: bool, top_action: str, bottom_action: str) -> str:
@@ -434,25 +504,15 @@ def _resolve_vertical_zone(screen_y: int, screen_height: int, invert_y: bool, to
 
 
 def resolve_day_night_action(screen_y: int, screen_height: int, invert_y: bool) -> str:
-    return _resolve_vertical_zone(screen_y, screen_height, invert_y, DAY_NIGHT_DAY, DAY_NIGHT_NIGHT)
+    return resolve_touch_region(0, screen_y, vertical_regions(1, screen_height, invert_y, DAY_NIGHT_DAY, DAY_NIGHT_NIGHT), "day/night")
 
 
 def resolve_shutdown_action(screen_y: int, screen_height: int, invert_y: bool) -> str:
-    return _resolve_vertical_zone(screen_y, screen_height, invert_y, SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL)
+    return resolve_touch_region(0, screen_y, vertical_regions(1, screen_height, invert_y, SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL), "shutdown")
 
 
 def resolve_keypad_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str:
-    cell_width = max(1, screen_width // 4)
-    cell_height = max(1, screen_height // 3)
-    column = min(3, max(0, screen_x // cell_width))
-    row = min(2, max(0, screen_y // cell_height))
-    keypad_rows = (
-        ("1", "2", "3", KEYPAD_OK),
-        ("4", "5", "6", "0"),
-        ("7", "8", "9", KEYPAD_NO),
-    )
-    return keypad_rows[row][column]
-
+    return resolve_touch_region(screen_x, screen_y, keypad_regions(screen_width, screen_height), "keypad")
 
 def evaluate_pin_entry(entered_pin: str, expected_pin: str, consecutive_failures: int, max_failures: int = MAX_PIN_FAILURES) -> tuple[str, int]:
     if entered_pin == expected_pin:
@@ -705,6 +765,19 @@ def main() -> int:
     selector_image = load_selector_image(Path(args.selector_image), args.width, args.height)
     shutdown_image = load_selector_image(Path(args.shutdown_image), args.width, args.height)
     keypad_image = load_selector_image(Path(args.keypad_image), args.width, args.height)
+    main_regions = main_menu_regions(args.width, args.height)
+    day_night_regions_map = vertical_regions(args.width, args.height, args.invert_y, DAY_NIGHT_DAY, DAY_NIGHT_NIGHT)
+    shutdown_regions_map = vertical_regions(args.width, args.height, args.invert_y, SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL)
+    keypad_regions_map = keypad_regions(args.width, args.height)
+    if args.show_touch_zones:
+        log_touch_regions("main menu", main_regions)
+        log_touch_regions("day/night", day_night_regions_map)
+        log_touch_regions("shutdown", shutdown_regions_map)
+        log_touch_regions("keypad", keypad_regions_map)
+        main_menu_image = annotate_touch_regions(main_menu_image, main_regions, "Main menu zones")
+        selector_image = annotate_touch_regions(selector_image, day_night_regions_map, "Day/night zones")
+        shutdown_image = annotate_touch_regions(shutdown_image, shutdown_regions_map, "Shutdown zones")
+        keypad_image = annotate_touch_regions(keypad_image, keypad_regions_map, "Keypad zones")
     blank_image = Image.new("RGB", (args.width, args.height), BACKGROUND_RGB)
     save_preview(selector_image, args.output_selector)
 
@@ -829,6 +902,17 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+
+
+
+
+
 
 
 
