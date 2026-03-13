@@ -30,12 +30,16 @@ DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.ser
 DEFAULT_TOUCH_SETTLE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_SETTLE_SECS", "0.35"))
 DEFAULT_TOUCH_DEBOUNCE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_DEBOUNCE_SECS", "0.35"))
 DEFAULT_GIF_SPEED = float(os.environ.get("BOOT_SELECTOR_GIF_SPEED", "0.5"))
-DEFAULT_TOUCH_INVERT_Y = os.environ.get("BOOT_SELECTOR_TOUCH_INVERT_Y", "1").strip().lower() not in {"0", "false", "no", "off"}
+DEFAULT_TOUCH_INVERT_Y = os.environ.get("BOOT_SELECTOR_TOUCH_INVERT_Y", "0").strip().lower() not in {"0", "false", "no", "off"}
 DEFAULT_GIF_FRAME_MS = 100
 BACKGROUND_RGB = (0, 0, 0)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 STOP_REQUESTED = False
 BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+import touch_calibration
 DIRECT_MODE_COMMANDS = {
     "display.service": [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")],
     "night.service": [sys.executable, "-u", str(BASE_DIR / "modules" / "blackout" / "blackout.py")],
@@ -448,8 +452,26 @@ def _normalise_axis(raw_value: int, source_size: int, source_min: int, target_si
     return int(relative * (target_size - 1) / (source_size - 1))
 
 
-def _resolve_tap_mode(last_y: int, touch_height: int, touch_min_y: int, screen_height: int, invert_y: bool) -> str:
-    screen_y = _normalise_axis(last_y, touch_height, touch_min_y, screen_height)
+def _map_touch_to_screen(
+    device: str,
+    raw_x: int,
+    raw_y: int,
+    screen_width: int,
+    screen_height: int,
+    touch_width: int,
+    touch_min_x: int,
+    touch_height: int,
+    touch_min_y: int,
+) -> tuple[int, int]:
+    if touch_calibration.applies_to(device):
+        return touch_calibration.map_to_screen(raw_x, raw_y, width=screen_width, height=screen_height)
+
+    screen_x = _normalise_axis(raw_x, touch_width, touch_min_x, screen_width)
+    screen_y = _normalise_axis(raw_y, touch_height, touch_min_y, screen_height)
+    return screen_x, screen_y
+
+
+def _resolve_tap_mode(screen_y: int, screen_height: int, invert_y: bool) -> str:
     if invert_y:
         screen_y = (screen_height - 1) - screen_y
     return "day" if screen_y < (screen_height // 2) else "night"
@@ -484,8 +506,23 @@ def wait_for_selection(
         if now < ready_after or (now - last_emit) < touch_debounce_secs:
             return None
         last_emit = now
-        mode = _resolve_tap_mode(last_y, touch_height, touch_min_y, screen_height, invert_y)
-        print(f"[boot-selector] Selected mode: {mode} (touch_x={last_x}, touch_y={last_y})", flush=True)
+        screen_x, screen_y = _map_touch_to_screen(
+            device,
+            last_x,
+            last_y,
+            screen_width,
+            screen_height,
+            touch_width,
+            touch_min_x,
+            touch_height,
+            touch_min_y,
+        )
+        mode = _resolve_tap_mode(screen_y, screen_height, invert_y)
+        print(
+            f"[boot-selector] Selected mode: {mode} "
+            f"(screen_x={screen_x}, screen_y={screen_y}, touch_x={last_x}, touch_y={last_y})",
+            flush=True,
+        )
         return mode
 
     with open(device, "rb", buffering=0) as fd:
@@ -618,3 +655,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

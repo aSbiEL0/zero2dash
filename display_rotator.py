@@ -27,6 +27,8 @@ import threading
 import time
 from pathlib import Path
 
+import touch_calibration
+
 
 DEFAULT_MODULES_DIR = "modules"
 DEFAULT_MODULE_ORDER_FILE = "modules.txt"
@@ -67,7 +69,9 @@ EV_SYN = 0x00
 EV_KEY = 0x01
 EV_ABS = 0x03
 ABS_X = 0x00
+ABS_Y = 0x01
 ABS_MT_POSITION_X = 0x35
+ABS_MT_POSITION_Y = 0x36
 ABS_MT_TRACKING_ID = 0x39
 BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
@@ -719,21 +723,31 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
         print("[rotator] No touch device found; touch controls disabled.", flush=True)
         return
 
-    device_touch_width, device_touch_min = detect_touch_width(device, touch_width)
-    print(f"[rotator] Touch controls listening on {device} (width {device_touch_width})", flush=True)
+    use_calibration = touch_calibration.applies_to(device)
+    if use_calibration:
+        device_touch_width = touch_width
+        device_touch_min = 0
+        print(f"[rotator] Touch controls listening on {device} (shared calibration)", flush=True)
+    else:
+        device_touch_width, device_touch_min = detect_touch_width(device, touch_width)
+        print(f"[rotator] Touch controls listening on {device} (width {device_touch_width})", flush=True)
 
     last_x = device_touch_min + (device_touch_width // 2)
+    last_y = 0
     touch_down = False
     last_tap_ts = None
     last_emit = 0.0
 
-    def emit_tap(tap_x: int, now: float) -> None:
+    def emit_tap(raw_x: int, raw_y: int, now: float) -> None:
         nonlocal last_tap_ts, last_emit
-        relative_x = tap_x - device_touch_min
-        if relative_x < 0:
-            relative_x = 0
-        elif relative_x >= device_touch_width:
-            relative_x = device_touch_width - 1
+        if use_calibration:
+            relative_x, _screen_y = touch_calibration.map_to_screen(raw_x, raw_y, width=touch_width, height=1)
+        else:
+            relative_x = raw_x - device_touch_min
+            if relative_x < 0:
+                relative_x = 0
+            elif relative_x >= device_touch_width:
+                relative_x = device_touch_width - 1
 
         if last_tap_ts is not None and (now - last_tap_ts) <= DOUBLE_TAP_WINDOW_SECS:
             if (now - last_emit) >= tap_debounce_secs:
@@ -743,7 +757,7 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
             return
 
         if (now - last_emit) >= tap_debounce_secs:
-            cmd_q.put("PREV" if relative_x < (device_touch_width // 2) else "NEXT")
+            cmd_q.put("PREV" if relative_x < (touch_width // 2) else "NEXT")
             last_emit = now
         last_tap_ts = now
 
@@ -762,16 +776,18 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
 
                 if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
                     last_x = ev_value
+                elif ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
+                    last_y = ev_value
                 elif ev_type == EV_KEY and ev_code == BTN_TOUCH:
                     if ev_value == 1:
                         touch_down = True
                     elif ev_value == 0 and touch_down:
                         touch_down = False
-                        emit_tap(last_x, time.monotonic())
+                        emit_tap(last_x, last_y, time.monotonic())
                 elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
                     if ev_value == -1 and touch_down:
                         touch_down = False
-                        emit_tap(last_x, time.monotonic())
+                        emit_tap(last_x, last_y, time.monotonic())
                     elif ev_value >= 0:
                         touch_down = True
                 elif ev_type == EV_SYN:
@@ -984,4 +1000,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 
