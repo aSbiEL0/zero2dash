@@ -10,7 +10,8 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 
 | Unit | Purpose | Entrypoint |
 | --- | --- | --- |
-| `boot-selector.service` | Boot GIF and day/night selector | `boot/boot_selector.py` |`r`n| `display.service` | Daytime page rotator | `display_rotator.py` |
+| `boot-selector.service` | Boot GIF, 4-quadrant menu, and day/night selector | `boot/boot_selector.py` |
+| `display.service` | Daytime page rotator | `display_rotator.py` |
 | `night.service` | Night blackout screen | `modules/blackout/blackout.py` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
 | `tram.service` | Refresh cached Firswood tram timetable | `modules/trams/tram_gtfs_refresh.py` |
@@ -138,6 +139,11 @@ Common environment variables:
 - `FB_WIDTH` default: `320`
 - `FB_HEIGHT` default: `240`
 - `ACTIVE_HOURS` for day/night timer control
+- `BOOT_SELECTOR_MAIN_MENU_IMAGE` optional 4-quadrant menu asset, default `boot/mainmenu.png`
+- `BOOT_SELECTOR_DAY_NIGHT_IMAGE` optional day/night chooser asset, default `boot/day-night.png`
+- `BOOT_SELECTOR_SHUTDOWN_IMAGE` optional shutdown confirmation asset, default `boot/yes-no.png`
+- `BOOT_SELECTOR_INFO_GIF` optional info GIF asset, default `boot/credits.gif`
+- `BOOT_SELECTOR_SHUTDOWN_COMMAND` optional safe shutdown command override
 
 ### Pi-hole page
 
@@ -345,8 +351,17 @@ python3 modules/photos/photos-shuffle.py --test
 ## Notes
 
 - `modules/blackout/blackout.py` uses `modules/blackout/raspberry-pi-icon.png`.
-- `pihole-display-pre.sh` is used by boot, day, and night services.`r`n- Put the boot animation GIF at `boot/startup.gif`, or override it with `BOOT_SELECTOR_GIF_PATH`.
+- `pihole-display-pre.sh` is used by boot, day, and night services.
+- Put the boot animation GIF at `boot/startup.gif`, or override it with `BOOT_SELECTOR_GIF_PATH`.
+- After the boot GIF the selector shows a 4-quadrant menu: top-left opens the day/night screen, top-right plays the info GIF, bottom-left is unused, and bottom-right opens shutdown confirmation.
+- `--selector-image` now refers specifically to the day/night screen.
+- By default the boot assets are `boot/mainmenu.png`, `boot/day-night.png`, `boot/yes-no.png`, and `boot/credits.gif`. You can override them through `BOOT_SELECTOR_MAIN_MENU_IMAGE`, `BOOT_SELECTOR_DAY_NIGHT_IMAGE` (or legacy `BOOT_SELECTOR_IMAGE_PATH`), `BOOT_SELECTOR_SHUTDOWN_IMAGE`, and `BOOT_SELECTOR_INFO_GIF`.
+- On shutdown confirmation the selector draws a blank screen before running the shutdown command.
 - The module directories are the source of truth for page-specific scripts and page-specific assets.
+
+
+
+
 
 
 
