@@ -25,7 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from _config import get_env, report_validation_errors
-from display_layout import HEADER_HEIGHT, LAYOUT_HALF, ROW_HEIGHT, aligned_text_x, centred_text_y
+from display_layout import LAYOUT_HALF, ROW_HEIGHT, aligned_text_x, centred_text_y
 
 DEFAULT_OUTPUT_PATH = MODULE_DIR / "current-currency.png"
 DEFAULT_BACKGROUND_PATH = MODULE_DIR / "currency-background.png"
@@ -34,6 +34,7 @@ DEFAULT_API_BASE = "https://api.nbp.pl/api"
 DEFAULT_SOURCE_LABEL = "source: api.nbp.pl"
 DEFAULT_TIMEOUT_SECS = 10.0
 RATE_CHANGE_THRESHOLD = 0.01
+CONTENT_COLUMN_WIDTH = 208
 
 
 @dataclass
@@ -283,44 +284,32 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
 
     width, height = frame.size
     draw = ImageDraw.Draw(frame)
-    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 255))
     white = (255, 255, 255, 255)
     shadow = (0, 0, 0, 144)
     shadow_offset = (max(1, width // 160), max(2, height // 120))
-    title_text = "Currency"
-    title_font = _fit_font(draw, title_text, width_limit=LAYOUT_HALF.body.width, initial_size=84, bold=True)
     pair_text = "GBP / PLN"
-    pair_font = _fit_font(draw, pair_text, width_limit=LAYOUT_HALF.body.width, initial_size=26, bold=True)
-    date_font = _fit_font(draw, display_date, width_limit=LAYOUT_HALF.body.width, initial_size=22, bold=True)
-    title_y = centred_text_y(title_font, title_text, HEADER_HEIGHT // 2)
+    content_left = (width - CONTENT_COLUMN_WIDTH) // 2
+    content_column = type(LAYOUT_HALF.body)(content_left, CONTENT_COLUMN_WIDTH)
+    pair_font = _fit_font(draw, pair_text, width_limit=content_column.width, initial_size=22, bold=True)
+    date_font = _fit_font(draw, display_date, width_limit=content_column.width, initial_size=18, bold=True)
     pair_y = centred_text_y(pair_font, pair_text, LAYOUT_HALF.row_centre_y(0))
-
-    _draw_text_with_shadow(
-        draw,
-        (aligned_text_x(LAYOUT_HALF.body, title_font, title_text, "center"), title_y),
-        title_text,
-        font=title_font,
-        fill=white,
-        shadow_fill=shadow,
-        shadow_offset=shadow_offset,
-    )
 
     if status == "ok" and snapshot is not None:
         rate_text = snapshot.display_rate()
         value_centre_y = LAYOUT_HALF.row_top(1) + ROW_HEIGHT
-        rate_font = _fit_font(draw, rate_text, width_limit=LAYOUT_HALF.body.width - 48, initial_size=82, bold=True)
-        gap = 1
+        rate_font = _fit_font(draw, rate_text, width_limit=content_column.width - 40, initial_size=62, bold=True)
+        gap = 0
         rate_size = getattr(rate_font, "size", 30)
         suffix_text = "zł"
 
         while True:
-            suffix_font = load_font(max(18, int(rate_size * 0.32)), bold=True)
+            suffix_font = load_font(max(18, int(rate_size * 0.42)), bold=True)
             rate_bbox = draw.textbbox((0, 0), rate_text, font=rate_font)
             suffix_bbox = draw.textbbox((0, 0), suffix_text, font=suffix_font)
             rate_w = rate_bbox[2] - rate_bbox[0]
             suffix_w = suffix_bbox[2] - suffix_bbox[0]
             total_w = rate_w + gap + suffix_w
-            if total_w <= (LAYOUT_HALF.body.width - 24) or rate_size <= 10:
+            if total_w <= (content_column.width - 8) or rate_size <= 10:
                 break
             rate_size -= 2
             rate_font = load_font(rate_size, bold=True)
@@ -328,10 +317,10 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         value_y = centred_text_y(rate_font, rate_text, value_centre_y)
         suffix_y = centred_text_y(suffix_font, suffix_text, value_centre_y)
         date_y = centred_text_y(date_font, display_date, LAYOUT_HALF.row_centre_y(3))
-        start_x = LAYOUT_HALF.body.centre_x - (total_w // 2)
+        start_x = content_column.centre_x - (total_w // 2)
         _draw_text_with_shadow(
             draw,
-            (aligned_text_x(LAYOUT_HALF.body, pair_font, pair_text, "center"), pair_y),
+            (aligned_text_x(content_column, pair_font, pair_text, "center"), pair_y),
             pair_text,
             font=pair_font,
             fill=white,
@@ -358,7 +347,7 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         )
         _draw_text_with_shadow(
             draw,
-            (aligned_text_x(LAYOUT_HALF.body, date_font, display_date, "center"), date_y),
+            (aligned_text_x(content_column, date_font, display_date, "center"), date_y),
             display_date,
             font=date_font,
             fill=white,
@@ -367,10 +356,10 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         )
     else:
         message_text = message or "Rate update unavailable"
-        message_font = _fit_font(draw, message_text, width_limit=LAYOUT_HALF.body.width, initial_size=max(28, width // 10), bold=True)
+        message_font = _fit_font(draw, message_text, width_limit=content_column.width, initial_size=max(28, width // 10), bold=True)
         _draw_text_with_shadow(
             draw,
-            (aligned_text_x(LAYOUT_HALF.body, pair_font, pair_text, "center"), pair_y),
+            (aligned_text_x(content_column, pair_font, pair_text, "center"), pair_y),
             pair_text,
             font=pair_font,
             fill=white,
@@ -379,7 +368,7 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         )
         _draw_text_with_shadow(
             draw,
-            (aligned_text_x(LAYOUT_HALF.body, message_font, message_text, "center"), centred_text_y(message_font, message_text, LAYOUT_HALF.row_top(1) + ROW_HEIGHT)),
+            (aligned_text_x(content_column, message_font, message_text, "center"), centred_text_y(message_font, message_text, LAYOUT_HALF.row_top(1) + ROW_HEIGHT)),
             message_text,
             font=message_font,
             fill=white,
