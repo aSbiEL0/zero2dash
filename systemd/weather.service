@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh weather dashboard image
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pihole/zero2dash
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/pihole/zero2dash/.env
+ExecCondition=/usr/bin/systemctl -q is-active display.service
+TimeoutStartSec=1min
+ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/modules/weather/weather_refresh.py

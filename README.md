@@ -14,6 +14,7 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 | `display.service` | Daytime page rotator | `display_rotator.py` |
 | `night.service` | Night blackout screen | `modules/blackout/blackout.py` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
+| `weather.service` | Refresh weather image during day mode | `modules/weather/weather_refresh.py` |
 | `tram.service` | Refresh cached Firswood tram timetable | `modules/trams/tram_gtfs_refresh.py` |
 | `tram-alerts.service` | Refresh cached Bee Network tram alerts | `modules/trams/tram_alerts_refresh.py` |
 
@@ -40,6 +41,12 @@ zero2dash/
 │   │   ├── currency-rate.py
 │   │   ├── currency.py
 │   │   └── display.py
+│   ├── weather/
+│   │   ├── display.py
+│   │   ├── weather-background.png
+│   │   ├── weather-cache.json
+│   │   ├── weather.png
+│   │   └── weather_refresh.py
 │   ├── photos/
 │   │   ├── drive-sync.py
 │   │   ├── photo-resize.py
@@ -56,7 +63,9 @@ zero2dash/
 │   ├── day.timer
 │   ├── display.service
 │   ├── night.service
-│   └── night.timer
+│   ├── night.timer
+│   ├── weather.service
+│   └── weather.timer
 ├── cache/
 ├── docs/
 ├── photos/
@@ -71,6 +80,7 @@ zero2dash/
 - `modules/calendash/` owns the calendar display script, calendar generator, and calendar assets/output PNG.
 - `modules/currency/` owns the currency display script, scheduled refresh script, and currency assets/output PNG.
 - `modules/photos/` owns the photo display script plus Drive sync and resize helpers for the photos workflow.
+- `modules/weather/` owns the weather renderer, cached weather data, and generated weather image.
 - Root-level files are shared runtime helpers used across modules and services.
 
 ## Requirements
@@ -218,6 +228,25 @@ Default generated output:
 - `modules/currency/current-currency.png`
 
 
+### Weather
+
+Required weather settings:
+
+- `WEATHER_LAT`
+- `WEATHER_LON`
+
+Optional weather settings:
+
+- `WEATHER_LABEL`
+- `WEATHER_TIMEZONE`
+- `WEATHER_API_TIMEOUT`
+- `WEATHER_API_BASE`
+
+Default weather output files:
+
+- `modules/weather/weather.png`
+- `modules/weather/weather-cache.json`
+
 ### Trams
 
 Optional tram settings:
@@ -250,6 +279,7 @@ Default order is controlled by `modules.txt`:
 pihole
 calendash
 currency
+weather
 photos
 trams
 ```
@@ -268,7 +298,7 @@ sudo cp systemd/*.service /etc/systemd/system/
 sudo cp systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now boot-selector.service
-sudo systemctl enable --now day.timer night.timer currency-update.timer tram.timer tram-alerts.timer
+sudo systemctl enable --now day.timer night.timer currency-update.timer weather.timer tram.timer tram-alerts.timer
 ```
 
 ## Operating the system
@@ -279,6 +309,7 @@ sudo systemctl enable --now day.timer night.timer currency-update.timer tram.tim
 sudo systemctl restart display.service
 sudo systemctl restart night.service
 sudo systemctl restart currency-update.service
+sudo systemctl restart weather.service
 sudo systemctl restart tram.service
 sudo systemctl restart tram-alerts.service
 ```
@@ -289,9 +320,10 @@ sudo systemctl restart tram-alerts.service
 systemctl status display.service --no-pager
 systemctl status night.service --no-pager
 systemctl status currency-update.service --no-pager
+systemctl status weather.service --no-pager
 systemctl status tram.service --no-pager
 systemctl status tram-alerts.service --no-pager
-systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.timer|tram.timer|tram-alerts.timer'
+systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.timer|weather.timer|tram.timer|tram-alerts.timer'
 ```
 
 ### View logs
@@ -300,6 +332,7 @@ systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.tim
 journalctl -u display.service -n 50 --no-pager
 journalctl -u night.service -n 50 --no-pager
 journalctl -u currency-update.service -n 50 --no-pager
+journalctl -u weather.service -n 50 --no-pager
 journalctl -u tram.service -n 50 --no-pager
 journalctl -u tram-alerts.service -n 50 --no-pager
 ```
@@ -314,6 +347,7 @@ python3 modules/photos/photos-shuffle.py --check-config
 python3 modules/photos/drive-sync.py --check-config
 python3 modules/photos/photo-resize.py --check-config
 python3 modules/currency/currency-rate.py --check-config
+python3 modules/weather/weather_refresh.py --check-config
 python3 modules/pihole/piholestats_manual.py --check-config
 python3 modules/trams/tram_gtfs_refresh.py --check-config
 python3 modules/trams/tram_alerts_refresh.py --check-config
@@ -325,8 +359,12 @@ Useful dry-run or local-output checks:
 python3 modules/photos/photos-shuffle.py --test
 python3 modules/currency/currency.py --self-test
 python3 modules/currency/currency-rate.py --self-test
+python3 modules/weather/display.py --self-test
+python3 modules/weather/weather_refresh.py --self-test
 python3 modules/pihole/piholestats_manual.py --output-image /tmp/pihole-test.png
 python3 modules/calendash/display.py --output /tmp/calendash-display.png --no-framebuffer
+python3 modules/weather/display.py --output /tmp/weather-display.png --no-framebuffer
+python3 modules/weather/weather_refresh.py --output /tmp/weather.png
 python3 modules/trams/tram_gtfs_refresh.py --self-test
 python3 modules/trams/tram_alerts_refresh.py --self-test
 python3 modules/trams/display.py --output /tmp/trams-display.png --no-framebuffer --frames 1
@@ -353,4 +391,8 @@ python3 modules/photos/photos-shuffle.py --test
 - The keypad expects a PIN from `BOOT_SELECTOR_PIN`; a correct PIN runs `/home/pihole/player.sh`, and three consecutive wrong PIN submissions shut the Pi down via `BOOT_SELECTOR_SHUTDOWN_COMMAND`.
 - On shutdown confirmation the selector draws a blank screen before running the shutdown command.
 - The module directories are the source of truth for page-specific scripts and page-specific assets.
+
+
+
+
 

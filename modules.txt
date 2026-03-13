@@ -1,5 +1,6 @@
 pihole
 calendash
 currency
+weather
 photos
 trams

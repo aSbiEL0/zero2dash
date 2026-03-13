@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh weather dashboard image every 30 minutes and after boot
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*:0/30
+Persistent=true
+AccuracySec=1min
+Unit=weather.service
+
+[Install]
+WantedBy=timers.target
