@@ -88,6 +88,19 @@ If you use Google-backed pages, also verify:
 - Calendar: `GOOGLE_CALENDAR_ID`, `TIMEZONE`, and OAuth client credentials
 - Photos: `LOCAL_PHOTOS_DIR` or Google Photos credentials plus `GOOGLE_PHOTOS_ALBUM_ID`
 
+If `calendash.service` reports that interactive OAuth is disabled in a headless session, refresh the token manually on the Pi:
+
+```bash
+cd /home/pihole/zero2dash
+python3 modules/calendash/calendash-api.py --auth-only --auth-mode local_server
+```
+
+For a remote SSH session, forward the callback port first if needed:
+
+```bash
+ssh -L 8080:localhost:8080 <user>@<pi-host>
+```
+
 ## 7) Re-enable services and timers
 
 ```bash
@@ -132,3 +145,4 @@ tar -xzf backups/<backup-file>.tgz -C /home/pihole/zero2dash
 sudo systemctl daemon-reload
 sudo systemctl start display.service
 ```
+

@@ -503,6 +503,11 @@ def loopback_oauth_guidance(oauth_port: int) -> list[str]:
     ]
 
 
+
+def manual_auth_command(auth_mode: str) -> str:
+    script_path = (MODULE_DIR / "calendash-api.py").resolve()
+    return f"cd {REPO_ROOT} && python3 {script_path} --auth-only --auth-mode {auth_mode}"
+
 def save_credentials(creds: Credentials, token_path: Path) -> None:
     token_path.write_text(creds.to_json(), encoding="utf-8")
     os.chmod(token_path, 0o600)
@@ -589,10 +594,27 @@ def get_credentials(
     redirect_uri = expected_redirect_uri(oauth_port)
     logging.info("Starting OAuth flow (%s) on localhost:%d.", auth_mode, oauth_port)
     logging.info("Expected OAuth redirect URI: %s", redirect_uri)
+    auth_command = manual_auth_command(auth_mode)
     if not _interactive_auth_available(auth_mode):
+        next_steps = loopback_oauth_guidance(oauth_port)
+        next_steps.append(f"Manual token refresh command: {auth_command}")
+        persist_auth_diagnostics(
+            diagnostics_path,
+            AuthAttemptDiagnostics(
+                status="error",
+                mode=auth_mode,
+                oauth_port=oauth_port,
+                redirect_uri=redirect_uri,
+                error_type="RuntimeError",
+                error_message="interactive OAuth is disabled in this headless session",
+                next_steps=next_steps,
+            ),
+        )
+        for message in next_steps:
+            logging.error(message)
         raise RuntimeError(
             "Stored calendar credentials are unavailable and interactive OAuth is disabled in this headless session. "
-            "Run calendash-api.py manually to refresh the token before re-running the service."
+            f"Refresh the token manually with: {auth_command}"
         )
     flow = InstalledAppFlow.from_client_config(
         build_client_config(client_id, client_secret, oauth_port),
@@ -608,12 +630,27 @@ def get_credentials(
         return creds
     except Exception as exc:
         exc_text = str(exc).lower()
+        next_steps = _next_steps_for_auth_error(auth_mode, exc, redirect_uri, oauth_port)
+        next_steps.extend(loopback_oauth_guidance(oauth_port))
+        next_steps.append(f"Manual token refresh command: {auth_command}")
+        persist_auth_diagnostics(
+            diagnostics_path,
+            AuthAttemptDiagnostics(
+                status="error",
+                mode=auth_mode,
+                oauth_port=oauth_port,
+                redirect_uri=redirect_uri,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                next_steps=next_steps,
+            ),
+        )
         if any(tag in exc_text for tag in ["access blocked", "app is blocked", "app restricted", "invalid_client"]):
             logging.error(
                 "Google blocked this OAuth client. For calendar, use a Desktop OAuth client and add your account as a test user on the consent screen."
             )
             logging.error("You can also set GOOGLE_CALENDAR_CLIENT_ID / GOOGLE_CALENDAR_CLIENT_SECRET to use a dedicated calendar OAuth client.")
-        for message in loopback_oauth_guidance(oauth_port):
+        for message in next_steps:
             logging.error(message)
         raise RuntimeError("Loopback OAuth setup failed.") from exc
 

@@ -172,6 +172,15 @@ Optional:
 - `OAUTH_PORT`
 - `GOOGLE_AUTH_MODE`
 
+Google Calendar notes:
+
+- `GOOGLE_TOKEN_PATH` should point to a dedicated calendar token file.
+- Use a Desktop OAuth client.
+- If the Google app is still in testing, add the account as a test user.
+- Loopback OAuth must complete on the same machine, or through SSH port forwarding.
+- When the cached token expires or is revoked, refresh it manually on the Pi with `python3 modules/calendash/calendash-api.py --auth-only --auth-mode local_server`.
+- For remote SSH sessions, forward the callback port first, for example `ssh -L 8080:localhost:8080 <user>@<pi-host>`.
+
 Default generated output:
 
 - `modules/calendash/calendash.png`
@@ -345,3 +354,4 @@ python3 modules/photos/photos-shuffle.py --test
 - The keypad expects a PIN from `BOOT_SELECTOR_PIN`; a correct PIN runs `/home/pihole/player.sh`, and three consecutive wrong PIN submissions shut the Pi down via `BOOT_SELECTOR_SHUTDOWN_COMMAND`.
 - On shutdown confirmation the selector draws a blank screen before running the shutdown command.
 - The module directories are the source of truth for page-specific scripts and page-specific assets.
+
