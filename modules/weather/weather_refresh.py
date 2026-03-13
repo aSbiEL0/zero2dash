@@ -288,10 +288,10 @@ def render_weather_frame(background: Image.Image, snapshot: WeatherSnapshot) -> 
 
     rows = [
         ("Location:", snapshot.location, location_font),
-        ("Temperature:", f"{snapshot.temperature_c}°C", values_font),
+        ("Temp:", f"{snapshot.temperature_c}°C", values_font),
         ("Wind:", f"{snapshot.wind_kmh}km/h", values_font),
         ("Rain:", f"{snapshot.rain_probability}%", values_font),
-        ("Max/Min Temp:", f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", _fit_font(f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", width_limit=LAYOUT_HALF.right.width, preferred_size=22, min_size=22)),
+        ("Max/Min °C:", f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", _fit_font(f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", width_limit=LAYOUT_HALF.right.width, preferred_size=22, min_size=22)),
     ]
 
     for index, (label, value, value_font) in enumerate(rows):
