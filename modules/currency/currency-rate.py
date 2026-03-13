@@ -320,13 +320,13 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         suffix_top = suffix_bbox[1]
         suffix_bottom = suffix_bbox[3]
         date_top = date_bbox[1]
-        row_gap = 14
-        pair_y = 83
-        row_top = (pair_y + pair_bottom) + row_gap
-        value_y = row_top - rate_top
-        suffix_y = row_top - suffix_top
-        row_bottom = max(value_y + rate_bottom, suffix_y + suffix_bottom)
-        date_y = (row_bottom + row_gap) - date_top
+        pair_line_y = 106
+        rate_line_y = 151
+        date_line_y = 196
+        pair_y = pair_line_y - ((pair_top + pair_bottom) // 2)
+        value_y = rate_line_y - ((rate_top + rate_bottom) // 2)
+        suffix_y = rate_line_y - ((suffix_top + suffix_bottom) // 2)
+        date_y = date_line_y - ((date_top + date_bbox[3]) // 2)
         start_x = (width - total_w) // 2
         _draw_text_with_shadow(
             draw,
