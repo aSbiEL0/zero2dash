@@ -14,7 +14,7 @@ import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import date, datetime, time as dt_time, timedelta
+from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -201,12 +201,6 @@ def fetch_recent_snapshots(api_base: str, timeout_secs: float) -> list[RateSnaps
     return snapshots
 
 
-def is_snapshot_within_24_hours(snapshot: RateSnapshot, now: datetime) -> bool:
-    source_start = datetime.combine(snapshot.effective_date, dt_time.min, tzinfo=now.tzinfo)
-    age = now - source_start
-    return timedelta(0) <= age <= timedelta(hours=24)
-
-
 def choose_snapshot(config: Config, state: dict[str, Any], now: datetime) -> tuple[str, RateSnapshot | None, str | None]:
     try:
         snapshots = fetch_recent_snapshots(config.api_base, config.timeout_secs)
@@ -216,21 +210,17 @@ def choose_snapshot(config: Config, state: dict[str, Any], now: datetime) -> tup
                 return "ok", snapshot, None
 
         latest = snapshots[-1]
-        if is_snapshot_within_24_hours(latest, now):
-            logging.info("NBP has not published today's GBP rate yet; using the latest available rate from %s.", latest.effective_date.isoformat())
-            return "ok", latest, None
-
-        logging.warning("Latest available NBP rate is older than 24 hours (%s).", latest.effective_date.isoformat())
+        logging.info("NBP has not published today's GBP rate yet; using the latest available rate from %s.", latest.effective_date.isoformat())
+        return "ok", latest, None
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, socket.timeout, ValueError) as exc:
         logging.warning("NBP fetch failed: %s", exc)
 
     cached = last_success_from_state(state)
-    if cached and is_snapshot_within_24_hours(cached, now):
+    if cached is not None:
         logging.warning("Falling back to cached last success from %s.", cached.effective_date.isoformat())
         return "ok", cached, None
 
     return "error", None, "Rate update unavailable"
-
 
 def load_font(size: int, *, bold: bool = False) -> Any:
     from PIL import ImageFont
@@ -437,9 +427,11 @@ def run_once(*, force_refresh: bool = False) -> int:
 
     state = load_state(config.state_path)
     now = datetime.now().astimezone()
-    display_date = now.strftime("%d/%m/%y")
     status, snapshot, message = choose_snapshot(config, state, now)
-
+    if status == "ok" and snapshot is not None:
+        display_date = snapshot.effective_date.strftime("%d/%m/%y")
+    else:
+        display_date = now.strftime("%d/%m/%y")
     if not force_refresh and not state_needs_refresh(state, config.output_path, display_date, status, snapshot, message):
         logging.info("Currency image already current; no refresh required.")
         return 0
@@ -518,7 +510,7 @@ def run_self_tests() -> int:
 
             Handler.scenario = "stale"
             status, snapshot, message = choose_snapshot(config, {}, now)
-            _assert(status == "error" and snapshot is None and message == "Rate update unavailable", "stale latest rate should fail")
+            _assert(status == "ok" and snapshot is not None and abs(snapshot.rate - 5.01) < 0.001, "latest published rate should be accepted even when older than 24 hours")
 
             cached_state = {
                 "last_success": {
@@ -562,4 +554,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 
