@@ -287,16 +287,16 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     shadow_offset = (max(1, width // 160), max(2, height // 120))
     centre_x = width // 2
     pair_text = "GBP / PLN"
-    pair_font = load_font(18, bold=True)
+    pair_font = load_font(20, bold=True)
     date_font = load_font(18, bold=True)
 
     if status == "ok" and snapshot is not None:
         pair_bbox = draw.textbbox((0, 0), pair_text, font=pair_font)
         pair_w = pair_bbox[2] - pair_bbox[0]
         rate_text = snapshot.display_rate()
-        rate_font = _fit_font(draw, rate_text, width_limit=138, initial_size=58, bold=True)
+        rate_font = _fit_font(draw, rate_text, width_limit=138, initial_size=30, bold=True)
         gap = 1
-        rate_size = getattr(rate_font, "size", 58)
+        rate_size = getattr(rate_font, "size", 26)
         suffix_text = "zł"
 
         while True:
