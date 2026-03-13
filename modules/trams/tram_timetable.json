@@ -19787,7 +19787,7 @@
     }
   ],
   "direction_label": "towards Town Centre",
-  "generated_at": "2026-03-12T22:02:45.971015+00:00",
+  "generated_at": "2026-03-13T06:07:31.778193+00:00",
   "service_calendar": {
     "624": {
       "added_dates": [],
@@ -20984,7 +20984,7 @@
       }
     }
   },
-  "source_last_modified": "2026-03-12T02:45:47+00:00",
+  "source_last_modified": "2026-03-13T02:45:46+00:00",
   "source_url": "https://odata.tfgm.com/opendata/downloads/TfGMgtfsnew.zip",
   "stop": {
     "requested_stop_id": "",
