@@ -101,3 +101,17 @@ def ellipsize_text(text: str, font, width_limit: int) -> str:
     while trimmed and text_width(font, trimmed) > available:
         trimmed = trimmed[:-1].rstrip()
     return f"{trimmed}{ellipsis}" if trimmed else ellipsis
+
+
+def truncate_pair(
+    left_text: str,
+    right_text: str,
+    *,
+    left_font,
+    right_font,
+    left_width_limit: int,
+    right_width_limit: int,
+) -> tuple[str, str]:
+    truncated_right = ellipsize_text(right_text, right_font, right_width_limit)
+    truncated_left = ellipsize_text(left_text, left_font, left_width_limit)
+    return truncated_left, truncated_right

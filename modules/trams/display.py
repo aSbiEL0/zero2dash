@@ -29,6 +29,7 @@ from display_layout import (
     ellipsize_text,
     fit_font,
     text_width,
+    truncate_pair,
 )
 
 try:
@@ -310,22 +311,29 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     draw = ImageDraw.Draw(frame)
     white = (245, 245, 245)
     departures = compute_upcoming_departures(cache or {}, now, limit=3) if _cache_status(cache) == "ok" else []
-    body_font = _fit_font("Rochdale Town Centre", width_limit=LAYOUT_2_1.left.width, initial_size=24, min_size=16)
-    mins_font = _fit_font("27min", width_limit=LAYOUT_2_1.right.width, initial_size=22, min_size=12)
-    message_font = _fit_font("Timetable unavailable", width_limit=LAYOUT_2_1.body.width, initial_size=24, min_size=13)
+    body_font = _fit_font("Rochdale Town Centre", width_limit=LAYOUT_2_1.left.width, initial_size=22, min_size=22)
+    mins_font = _fit_font("27min", width_limit=LAYOUT_2_1.right.width, initial_size=22, min_size=22)
+    message_font = _fit_font("Timetable unavailable", width_limit=LAYOUT_2_1.body.width, initial_size=22, min_size=22)
     status = _cache_status(cache)
     if status != "ok":
-        message = "Timetable unavailable"
+        message = _ellipsize_text("Timetable unavailable", message_font, LAYOUT_2_1.body.width)
         draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
     elif not departures:
-        message = "No more trams today"
+        message = _ellipsize_text("No more trams today", message_font, LAYOUT_2_1.body.width)
         draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
     else:
         for index, departure in enumerate(departures):
             row_centre = LAYOUT_2_1.row_centre_y(index)
-            headsign_text = _ellipsize_text(departure.headsign, body_font, LAYOUT_2_1.left.width)
-            draw.text((LAYOUT_2_1.left.left, centred_text_y(body_font, headsign_text, row_centre)), headsign_text, font=body_font, fill=white)
             minute_text = "Due" if departure.minutes <= 0 else f"{departure.minutes}min"
+            headsign_text, minute_text = truncate_pair(
+                departure.headsign,
+                minute_text,
+                left_font=body_font,
+                right_font=mins_font,
+                left_width_limit=LAYOUT_2_1.left.width,
+                right_width_limit=LAYOUT_2_1.right.width,
+            )
+            draw.text((LAYOUT_2_1.left.left, centred_text_y(body_font, headsign_text, row_centre)), headsign_text, font=body_font, fill=white)
             draw.text(
                 (aligned_text_x(LAYOUT_2_1.right, mins_font, minute_text, "right"), centred_text_y(mins_font, minute_text, row_centre)),
                 minute_text,
@@ -347,7 +355,7 @@ def render_ticker_strip(base_frame: Image.Image, alerts_cache: dict[str, Any] | 
     white = (245, 245, 245)
     amber = (244, 198, 0)
     ticker_text = ticker_text_from_alerts(alerts_cache)
-    ticker_font = _fit_font(ticker_text, width_limit=LAYOUT_2_1.body.width, initial_size=24, min_size=18, italic=True)
+    ticker_font = _fit_font(ticker_text, width_limit=LAYOUT_2_1.body.width, initial_size=22, min_size=22, italic=True)
     text_y = centred_text_y(ticker_font, ticker_text, LAYOUT_2_1.row_centre_y(4)) - strip_top
     text_width = _text_width(ticker_text, ticker_font)
     ticker_fill = amber if ticker_text == "Alerts unavailable" else white

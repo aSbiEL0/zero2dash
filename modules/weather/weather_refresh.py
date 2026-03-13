@@ -32,7 +32,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from _config import get_env, report_validation_errors
-from display_layout import LAYOUT_HALF, aligned_text_x, centred_text_y, fit_font, text_width
+from display_layout import LAYOUT_HALF, aligned_text_x, centred_text_y, ellipsize_text, fit_font, text_width, truncate_pair
 
 DEFAULT_ROOT = Path("~/zero2dash").expanduser()
 SCRIPT_NAME = "weather_refresh.py"
@@ -282,20 +282,28 @@ def render_weather_frame(background: Image.Image, snapshot: WeatherSnapshot) -> 
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
 
-    labels_font = _font(18, bold=False)
-    values_font = _font(18, bold=False)
-    location_font = _fit_font(snapshot.location, width_limit=LAYOUT_HALF.right.width, preferred_size=18, min_size=13)
+    labels_font = _font(22, bold=False)
+    values_font = _font(22, bold=False)
+    location_font = _fit_font(snapshot.location, width_limit=LAYOUT_HALF.right.width, preferred_size=22, min_size=22)
 
     rows = [
         ("Location:", snapshot.location, location_font),
         ("Temperature:", f"{snapshot.temperature_c}°C", values_font),
         ("Wind:", f"{snapshot.wind_kmh}km/h", values_font),
         ("Rain:", f"{snapshot.rain_probability}%", values_font),
-        ("Max/Min Temp:", f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", _fit_font(f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", width_limit=LAYOUT_HALF.right.width, preferred_size=18, min_size=12)),
+        ("Max/Min Temp:", f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", _fit_font(f"{snapshot.min_temp_c}°C/{snapshot.max_temp_c}°C", width_limit=LAYOUT_HALF.right.width, preferred_size=22, min_size=22)),
     ]
 
     for index, (label, value, value_font) in enumerate(rows):
         row_centre = LAYOUT_HALF.row_centre_y(index)
+        label, value = truncate_pair(
+            label,
+            value,
+            left_font=labels_font,
+            right_font=value_font,
+            left_width_limit=LAYOUT_HALF.left.width,
+            right_width_limit=LAYOUT_HALF.right.width,
+        )
         draw.text((LAYOUT_HALF.left.left, centred_text_y(labels_font, label, row_centre)), label, font=labels_font, fill=TEXT_COLOUR)
         draw.text(
             (aligned_text_x(LAYOUT_HALF.right, value_font, value, "right"), centred_text_y(value_font, value, row_centre)),
@@ -310,15 +318,24 @@ def render_weather_frame(background: Image.Image, snapshot: WeatherSnapshot) -> 
 def render_unavailable_frame(background_path: Path, label: str, reason: str) -> Image.Image:
     frame = load_background(background_path)
     draw = ImageDraw.Draw(frame)
-    location_font = _fit_font(label, width_limit=LAYOUT_HALF.right.width, preferred_size=18, min_size=13)
-    message = "Weather unavailable"
-    reason_text = reason[:28]
-    message_font = _fit_font(message, width_limit=LAYOUT_HALF.body.width, preferred_size=20, min_size=14, bold=True)
-    reason_font = _fit_font(reason_text, width_limit=LAYOUT_HALF.body.width, preferred_size=14, min_size=12)
-    draw.text((LAYOUT_HALF.left.left, centred_text_y(_font(18), "Location:", LAYOUT_HALF.row_centre_y(0))), "Location:", font=_font(18), fill=TEXT_COLOUR)
-    draw.text(
-        (aligned_text_x(LAYOUT_HALF.right, location_font, label, "right"), centred_text_y(location_font, label, LAYOUT_HALF.row_centre_y(0))),
+    location_label_font = _font(22)
+    location_font = _fit_font(label, width_limit=LAYOUT_HALF.right.width, preferred_size=22, min_size=22)
+    message = ellipsize_text("Weather unavailable", _font(22, bold=True), LAYOUT_HALF.body.width)
+    reason_text = ellipsize_text(reason, _font(22), LAYOUT_HALF.body.width)
+    message_font = _fit_font(message, width_limit=LAYOUT_HALF.body.width, preferred_size=22, min_size=22, bold=True)
+    reason_font = _fit_font(reason_text, width_limit=LAYOUT_HALF.body.width, preferred_size=22, min_size=22)
+    location_label, location_text = truncate_pair(
+        "Location:",
         label,
+        left_font=location_label_font,
+        right_font=location_font,
+        left_width_limit=LAYOUT_HALF.left.width,
+        right_width_limit=LAYOUT_HALF.right.width,
+    )
+    draw.text((LAYOUT_HALF.left.left, centred_text_y(location_label_font, location_label, LAYOUT_HALF.row_centre_y(0))), location_label, font=location_label_font, fill=TEXT_COLOUR)
+    draw.text(
+        (aligned_text_x(LAYOUT_HALF.right, location_font, location_text, "right"), centred_text_y(location_font, location_text, LAYOUT_HALF.row_centre_y(0))),
+        location_text,
         font=location_font,
         fill=TEXT_COLOUR,
     )

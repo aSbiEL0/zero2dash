@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
 from _config import get_env, report_validation_errors
-from display_layout import LAYOUT_2_1, centred_text_y
+from display_layout import LAYOUT_2_1, centred_text_y, truncate_pair
 
 DEFAULT_ROOT = Path('~/zero2dash').expanduser()
 SCRIPT_NAME = "piholestats_manual.py"
@@ -584,8 +584,16 @@ def _format_temp(temp_c: float | None) -> str:
 
 
 def _draw_stat_row(draw, *, y: int, label: str, value: str, label_x: int, value_right: int):
-    label_font = load_font(20, False)
-    value_font = fit_font(draw, value, preferred_size=20, min_size=10, bold=False, max_width=LAYOUT_2_1.right.width)
+    label_font = load_font(22, False)
+    value_font = fit_font(draw, value, preferred_size=22, min_size=22, bold=False, max_width=LAYOUT_2_1.right.width)
+    label, value = truncate_pair(
+        label,
+        value,
+        left_font=label_font,
+        right_font=value_font,
+        left_width_limit=LAYOUT_2_1.left.width,
+        right_width_limit=LAYOUT_2_1.right.width,
+    )
     draw.text((label_x, centred_text_y(label_font, label, y)), label, font=label_font, fill=COL_TXT)
     draw.text(
         (value_right - text_size(draw, value, value_font)[0], centred_text_y(value_font, value, y)),

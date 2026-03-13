@@ -44,7 +44,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from _config import get_env, report_validation_errors
-from display_layout import BODY_ROWS, LAYOUT_2_1, aligned_text_x, centred_text_y
+from display_layout import BODY_ROWS, LAYOUT_2_1, aligned_text_x, centred_text_y, truncate_pair
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CANVAS_WIDTH = 320
@@ -799,14 +799,15 @@ def render_image(
     bg = Image.open(background_path).convert("RGBA").resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(bg)
 
-    font_event = load_font(20)
-    font_date = load_font(20)
-    font_message = load_font(20)
-    font_more = load_font(13)
+    font_event = load_font(22)
+    font_date = load_font(22)
+    font_message = load_font(22)
+    font_more = load_font(22)
     text_fill = (245, 245, 245, 255)
     muted_fill = (190, 190, 190, 255)
 
     if message:
+        message = truncate_text(draw, message, font_message, LAYOUT_2_1.body.width)
         tw = int(draw.textlength(message, font=font_message))
         x = max(LAYOUT_2_1.body.left, LAYOUT_2_1.body.centre_x - (tw // 2))
         y = centred_text_y(font_message, message, LAYOUT_2_1.row_centre_y(2))
@@ -819,18 +820,24 @@ def render_image(
 
         for idx, event in enumerate(visible_events):
             row_centre = LAYOUT_2_1.row_centre_y(idx)
-            max_summary_w = max(24, LAYOUT_2_1.left.width)
-            clipped_summary = truncate_text(draw, event.summary, font_event, max_summary_w)
+            clipped_summary, clipped_date = truncate_pair(
+                event.summary,
+                event.display_date,
+                left_font=font_event,
+                right_font=font_date,
+                left_width_limit=LAYOUT_2_1.left.width,
+                right_width_limit=LAYOUT_2_1.right.width,
+            )
             draw.text((LAYOUT_2_1.left.left, centred_text_y(font_event, clipped_summary, row_centre)), clipped_summary, font=font_event, fill=text_fill)
             draw.text(
-                (aligned_text_x(LAYOUT_2_1.right, font_date, event.display_date, "right"), centred_text_y(font_date, event.display_date, row_centre)),
-                event.display_date,
+                (aligned_text_x(LAYOUT_2_1.right, font_date, clipped_date, "right"), centred_text_y(font_date, clipped_date, row_centre)),
+                clipped_date,
                 font=font_date,
                 fill=text_fill,
             )
 
         if hidden_count > 0:
-            more_text = f"+{hidden_count} more"
+            more_text = truncate_text(draw, f"+{hidden_count} more", font_more, LAYOUT_2_1.body.width)
             draw.text(
                 (LAYOUT_2_1.left.left, centred_text_y(font_more, more_text, LAYOUT_2_1.row_centre_y(BODY_ROWS - 1))),
                 more_text,
