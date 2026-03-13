@@ -34,7 +34,7 @@ DEFAULT_INFO_GIF_PATH = os.environ.get("BOOT_SELECTOR_INFO_GIF", "boot/credits.g
 DEFAULT_GRANTED_GIF_PATH = os.environ.get("BOOT_SELECTOR_GRANTED_GIF", "boot/granted.gif")
 DEFAULT_DENIED_GIF_PATH = os.environ.get("BOOT_SELECTOR_DENIED_GIF", "boot/denied.gif")
 DEFAULT_SHUTDOWN_COMMAND = os.environ.get("BOOT_SELECTOR_SHUTDOWN_COMMAND", "systemctl poweroff")
-DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", "/home/pihole/player.sh")
+DEFAULT_PLAYER_COMMAND = "/home/pihole/player.sh"
 DEFAULT_PIN = os.environ.get("BOOT_SELECTOR_PIN", "")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
 DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.service")
@@ -151,7 +151,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--day-service", default=DEFAULT_DAY_SERVICE, help=f"systemd unit to start for day mode (default: {DEFAULT_DAY_SERVICE})")
     parser.add_argument("--night-service", default=DEFAULT_NIGHT_SERVICE, help=f"systemd unit to start for night mode (default: {DEFAULT_NIGHT_SERVICE})")
     parser.add_argument("--shutdown-command", default=DEFAULT_SHUTDOWN_COMMAND, help=f"Command used for safe shutdown (default: {DEFAULT_SHUTDOWN_COMMAND})")
-    parser.add_argument("--player-command", default=DEFAULT_PLAYER_COMMAND, help="Command used after entering the correct PIN.")
+    parser.add_argument("--player-command", default=DEFAULT_PLAYER_COMMAND, help=f"Command used after entering the correct PIN (default: {DEFAULT_PLAYER_COMMAND}).")
     parser.add_argument("--pin", default=DEFAULT_PIN, help="PIN required by the padlock keypad.")
     parser.add_argument("--show-touch-zones", action="store_true", default=DEFAULT_SHOW_TOUCH_ZONES, help="Draw touch zone overlays on selector screens.")
     return parser.parse_args()
@@ -927,3 +927,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

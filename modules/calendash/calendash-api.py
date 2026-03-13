@@ -121,6 +121,16 @@ def _credentials_have_required_scopes(creds: Credentials) -> bool:
     return not _missing_required_scopes(token_scopes)
 
 
+def _interactive_auth_available(mode: str) -> bool:
+    # Headless service runs must not try to start a fresh approval flow.
+    if os.getenv("INVOCATION_ID"):
+        return False
+    if mode == "local_server":
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    if mode == "console":
+        return sys.stdin.isatty()
+    return True
+
 def _invalidate_token_file(token_path: Path, reason: str) -> None:
     logging.warning("Marking token invalid at %s: %s", token_path.resolve(), reason)
     if token_path.exists():
@@ -579,6 +589,11 @@ def get_credentials(
     redirect_uri = expected_redirect_uri(oauth_port)
     logging.info("Starting OAuth flow (%s) on localhost:%d.", auth_mode, oauth_port)
     logging.info("Expected OAuth redirect URI: %s", redirect_uri)
+    if not _interactive_auth_available(auth_mode):
+        raise RuntimeError(
+            "Stored calendar credentials are unavailable and interactive OAuth is disabled in this headless session. "
+            "Run calendash-api.py manually to refresh the token before re-running the service."
+        )
     flow = InstalledAppFlow.from_client_config(
         build_client_config(client_id, client_secret, oauth_port),
         SCOPES,

@@ -8,4 +8,6 @@ Type=oneshot
 WorkingDirectory=/home/pihole/zero2dash
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/home/pihole/zero2dash/.env
+TimeoutStartSec=2min
 ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/modules/calendash/calendash-api.py
+
