@@ -287,38 +287,38 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     shadow_offset = (max(1, width // 160), max(2, height // 120))
     centre_x = width // 2
     pair_text = "GBP / PLN"
-    pair_font = load_font(max(20, width // 15), bold=True)
-    date_font = load_font(max(20, width // 14), bold=True)
+    pair_font = load_font(max(18, width // 16), bold=True)
+    date_font = load_font(max(18, width // 16), bold=True)
 
     if status == "ok" and snapshot is not None:
         pair_bbox = draw.textbbox((0, 0), pair_text, font=pair_font)
         pair_w = pair_bbox[2] - pair_bbox[0]
         pair_h = pair_bbox[3] - pair_bbox[1]
         rate_text = snapshot.display_rate()
-        rate_font = _fit_font(draw, rate_text, width_limit=int(width * 0.54), initial_size=max(84, width // 3), bold=True)
-        gap = max(3, width // 100)
-        rate_size = getattr(rate_font, "size", 84)
+        rate_font = _fit_font(draw, rate_text, width_limit=int(width * 0.60), initial_size=max(116, width // 2), bold=True)
+        gap = max(2, width // 140)
+        rate_size = getattr(rate_font, "size", 116)
         suffix_text = "zł"
 
         while True:
-            suffix_font = load_font(max(22, int(rate_size * 0.58)), bold=True)
+            suffix_font = load_font(max(26, int(rate_size * 0.40)), bold=True)
             rate_bbox = draw.textbbox((0, 0), rate_text, font=rate_font)
             suffix_bbox = draw.textbbox((0, 0), suffix_text, font=suffix_font)
             rate_w = rate_bbox[2] - rate_bbox[0]
             suffix_w = suffix_bbox[2] - suffix_bbox[0]
             total_w = rate_w + gap + suffix_w
-            if total_w <= int(width * 0.66) or rate_size <= 10:
+            if total_w <= int(width * 0.72) or rate_size <= 10:
                 break
             rate_size -= 2
             rate_font = load_font(rate_size, bold=True)
 
         date_bbox = draw.textbbox((0, 0), display_date, font=date_font)
         date_w = date_bbox[2] - date_bbox[0]
-        pair_y = int(height * 0.34)
-        value_y = pair_y + pair_h + int(height * 0.05)
+        pair_y = int(height * 0.35)
+        value_y = pair_y + pair_h + int(height * 0.03)
         rate_bottom = value_y + rate_bbox[3]
-        suffix_y = rate_bottom - suffix_bbox[3]
-        date_y = value_y + (rate_bbox[3] - rate_bbox[1]) + int(height * 0.06)
+        suffix_y = rate_bottom - suffix_bbox[3] - max(1, height // 120)
+        date_y = value_y + (rate_bbox[3] - rate_bbox[1]) + int(height * 0.01)
         start_x = (width - total_w) // 2
 
         _draw_text_with_shadow(
@@ -554,6 +554,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
