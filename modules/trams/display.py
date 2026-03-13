@@ -306,7 +306,7 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     width, _height = frame.size
     white = (245, 245, 245)
     departures = compute_upcoming_departures(cache or {}, now, limit=3) if _cache_status(cache) == "ok" else []
-    body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=22, min_size=12)                    #Tram line font size
+    body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=24, min_size=16)                    #Tram line font size
     mins_font = _fit_font("27min", width_limit=72, initial_size=22, min_size=12)                                    #Time left font size
     message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=24, min_size=13)
     top = 92
