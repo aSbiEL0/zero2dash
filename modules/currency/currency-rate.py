@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from _config import get_env, report_validation_errors
+from display_layout import LAYOUT_HALF, aligned_text_x, centred_text_y
 
 DEFAULT_OUTPUT_PATH = MODULE_DIR / "current-currency.png"
 DEFAULT_BACKGROUND_PATH = MODULE_DIR / "currency-background.png"
@@ -285,16 +286,14 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     white = (255, 255, 255, 255)
     shadow = (0, 0, 0, 144)
     shadow_offset = (max(1, width // 160), max(2, height // 120))
-    centre_x = width // 2
     pair_text = "GBP / PLN"
     pair_font = load_font(22, bold=True)
     date_font = load_font(20, bold=True)
 
     if status == "ok" and snapshot is not None:
         pair_bbox = draw.textbbox((0, 0), pair_text, font=pair_font)
-        pair_w = pair_bbox[2] - pair_bbox[0]
         rate_text = snapshot.display_rate()
-        rate_font = _fit_font(draw, rate_text, width_limit=180, initial_size=34, bold=True)
+        rate_font = _fit_font(draw, rate_text, width_limit=LAYOUT_HALF.body.width - 48, initial_size=34, bold=True)
         gap = 1
         rate_size = getattr(rate_font, "size", 30)
         suffix_text = "zł"
@@ -306,31 +305,19 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
             rate_w = rate_bbox[2] - rate_bbox[0]
             suffix_w = suffix_bbox[2] - suffix_bbox[0]
             total_w = rate_w + gap + suffix_w
-            if total_w <= 152 or rate_size <= 10:
+            if total_w <= (LAYOUT_HALF.body.width - 24) or rate_size <= 10:
                 break
             rate_size -= 2
             rate_font = load_font(rate_size, bold=True)
 
-        date_bbox = draw.textbbox((0, 0), display_date, font=date_font)
-        date_w = date_bbox[2] - date_bbox[0]
-        pair_top = pair_bbox[1]
-        pair_bottom = pair_bbox[3]
-        rate_top = rate_bbox[1]
-        rate_bottom = rate_bbox[3]
-        suffix_top = suffix_bbox[1]
-        suffix_bottom = suffix_bbox[3]
-        date_top = date_bbox[1]
-        pair_line_y = 106
-        rate_line_y = 151
-        date_line_y = 196
-        pair_y = pair_line_y - ((pair_top + pair_bottom) // 2)
-        value_y = rate_line_y - ((rate_top + rate_bottom) // 2)
-        suffix_y = rate_line_y - ((suffix_top + suffix_bottom) // 2)
-        date_y = date_line_y - ((date_top + date_bbox[3]) // 2)
-        start_x = (width - total_w) // 2
+        pair_y = centred_text_y(pair_font, pair_text, LAYOUT_HALF.row_centre_y(0))
+        value_y = centred_text_y(rate_font, rate_text, LAYOUT_HALF.row_centre_y(2))
+        suffix_y = centred_text_y(suffix_font, suffix_text, LAYOUT_HALF.row_centre_y(2))
+        date_y = centred_text_y(date_font, display_date, LAYOUT_HALF.row_centre_y(4))
+        start_x = LAYOUT_HALF.body.centre_x - (total_w // 2)
         _draw_text_with_shadow(
             draw,
-            (centre_x - (pair_w // 2), pair_y),
+            (aligned_text_x(LAYOUT_HALF.body, pair_font, pair_text, "center"), pair_y),
             pair_text,
             font=pair_font,
             fill=white,
@@ -357,7 +344,7 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         )
         _draw_text_with_shadow(
             draw,
-            (centre_x - (date_w // 2), date_y),
+            (aligned_text_x(LAYOUT_HALF.body, date_font, display_date, "center"), date_y),
             display_date,
             font=date_font,
             fill=white,
@@ -366,13 +353,10 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         )
     else:
         message_text = message or "Rate update unavailable"
-        message_font = _fit_font(draw, message_text, width_limit=int(width * 0.82), initial_size=max(28, width // 10), bold=True)
-        bbox = draw.textbbox((0, 0), message_text, font=message_font)
-        msg_w = bbox[2] - bbox[0]
-        msg_h = bbox[3] - bbox[1]
+        message_font = _fit_font(draw, message_text, width_limit=LAYOUT_HALF.body.width, initial_size=max(28, width // 10), bold=True)
         _draw_text_with_shadow(
             draw,
-            ((width - msg_w) // 2, (height - msg_h) // 2),
+            (aligned_text_x(LAYOUT_HALF.body, message_font, message_text, "center"), centred_text_y(message_font, message_text, LAYOUT_HALF.row_centre_y(2))),
             message_text,
             font=message_font,
             fill=white,

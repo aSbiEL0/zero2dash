@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
 from _config import get_env, report_validation_errors
+from display_layout import LAYOUT_2_1, centred_text_y
 
 DEFAULT_ROOT = Path('~/zero2dash').expanduser()
 SCRIPT_NAME = "piholestats_manual.py"
@@ -584,12 +585,14 @@ def _format_temp(temp_c: float | None) -> str:
 
 def _draw_stat_row(draw, *, y: int, label: str, value: str, label_x: int, value_right: int):
     label_font = load_font(20, False)
-    value_font = fit_font(draw, value, preferred_size=20, min_size=13, bold=False, max_width=122)
-    _, label_h = text_size(draw, label, label_font)
-    value_w, value_h = text_size(draw, value, value_font)
-    row_height = max(label_h, value_h)
-    draw.text((label_x, y), label, font=label_font, fill=COL_TXT)
-    draw.text((value_right - value_w, y + max(0, (row_height - value_h) // 2)), value, font=value_font, fill=COL_TXT)
+    value_font = fit_font(draw, value, preferred_size=20, min_size=10, bold=False, max_width=LAYOUT_2_1.right.width)
+    draw.text((label_x, centred_text_y(label_font, label, y)), label, font=label_font, fill=COL_TXT)
+    draw.text(
+        (value_right - text_size(draw, value, value_font)[0], centred_text_y(value_font, value, y)),
+        value,
+        font=value_font,
+        fill=COL_TXT,
+    )
 
 
 def draw_frame(stats, temp_c):
@@ -606,18 +609,14 @@ def draw_frame(stats, temp_c):
         ("Pi Temp:", _format_temp(temp_c)),
     ]
 
-    start_y = 92
-    row_gap = 28
-    label_x = 20
-    value_right = 295
     for index, (label, value) in enumerate(rows):
         _draw_stat_row(
             d,
-            y=start_y + index * row_gap,
+            y=LAYOUT_2_1.row_centre_y(index),
             label=label,
             value=value,
-            label_x=label_x,
-            value_right=value_right,
+            label_x=LAYOUT_2_1.left.left,
+            value_right=LAYOUT_2_1.right.right,
         )
 
     return img

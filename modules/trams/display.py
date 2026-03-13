@@ -18,6 +18,19 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from display_layout import (
+    LAYOUT_2_1,
+    aligned_text_x,
+    centred_text_y,
+    ellipsize_text,
+    fit_font,
+    text_width,
+)
+
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 except ImportError:
@@ -233,32 +246,24 @@ def _font(size: int, *, bold: bool = False, italic: bool = False):
 
 
 def _text_width(text: str, font: ImageFont.ImageFont | ImageFont.FreeTypeFont) -> int:
-    bbox = font.getbbox(text)
-    return bbox[2] - bbox[0]
+    return text_width(font, text)
 
 
 @lru_cache(maxsize=128)
 def _fit_font(text: str, *, width_limit: int, initial_size: int, min_size: int, bold: bool = False, italic: bool = False):
-    size = initial_size
-    while size >= min_size:
-        font = _font(size, bold=bold, italic=italic)
-        if _text_width(text, font) <= width_limit:
-            return font
-        size -= 1
-    return _font(min_size, bold=bold, italic=italic)
+    return fit_font(
+        text,
+        width_limit=width_limit,
+        preferred_size=initial_size,
+        min_size=min_size,
+        loader=_font,
+        bold=bold,
+        italic=italic,
+    )
 
 
 def _ellipsize_text(text: str, font: ImageFont.ImageFont | ImageFont.FreeTypeFont, width_limit: int) -> str:
-    if _text_width(text, font) <= width_limit:
-        return text
-    suffix = '...'
-    available = width_limit - _text_width(suffix, font)
-    if available <= 0:
-        return suffix
-    trimmed = text
-    while trimmed and _text_width(trimmed, font) > available:
-        trimmed = trimmed[:-1].rstrip()
-    return f"{trimmed}{suffix}" if trimmed else suffix
+    return ellipsize_text(text, font, width_limit)
 
 def _cache_status(cache: dict[str, Any] | None) -> str:
     if cache is None:
@@ -303,31 +308,35 @@ def load_background(path: Path, width: int, height: int) -> Image.Image:
 def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, now: datetime) -> Image.Image:
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
-    width, _height = frame.size
     white = (245, 245, 245)
     departures = compute_upcoming_departures(cache or {}, now, limit=3) if _cache_status(cache) == "ok" else []
-    body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=24, min_size=16)                    #Tram line font size
-    mins_font = _fit_font("27min", width_limit=72, initial_size=22, min_size=12)                                    #Time left font size
-    message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=24, min_size=13)
-    top = 92
-    row_height = 26
+    body_font = _fit_font("Rochdale Town Centre", width_limit=LAYOUT_2_1.left.width, initial_size=24, min_size=16)
+    mins_font = _fit_font("27min", width_limit=LAYOUT_2_1.right.width, initial_size=22, min_size=12)
+    message_font = _fit_font("Timetable unavailable", width_limit=LAYOUT_2_1.body.width, initial_size=24, min_size=13)
     status = _cache_status(cache)
     if status != "ok":
-        draw.text((24, top), "Timetable unavailable", font=message_font, fill=white)
+        message = "Timetable unavailable"
+        draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
     elif not departures:
-        draw.text((24, top), "No more trams today", font=message_font, fill=white)
+        message = "No more trams today"
+        draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
     else:
         for index, departure in enumerate(departures):
-            y = top + (index * row_height)
-            headsign_text = _ellipsize_text(departure.headsign, body_font, 170)
-            draw.text((22, y), headsign_text, font=body_font, fill=white)
+            row_centre = LAYOUT_2_1.row_centre_y(index)
+            headsign_text = _ellipsize_text(departure.headsign, body_font, LAYOUT_2_1.left.width)
+            draw.text((LAYOUT_2_1.left.left, centred_text_y(body_font, headsign_text, row_centre)), headsign_text, font=body_font, fill=white)
             minute_text = "Due" if departure.minutes <= 0 else f"{departure.minutes}min"
-            draw.text((width - 22 - _text_width(minute_text, mins_font), y), minute_text, font=mins_font, fill=white)
+            draw.text(
+                (aligned_text_x(LAYOUT_2_1.right, mins_font, minute_text, "right"), centred_text_y(mins_font, minute_text, row_centre)),
+                minute_text,
+                font=mins_font,
+                fill=white,
+            )
     return frame
 
 
 def ticker_region_top(height: int) -> int:
-    return max(0, height - 52)
+    return min(height, LAYOUT_2_1.row_top(4))
 
 
 def render_ticker_strip(base_frame: Image.Image, alerts_cache: dict[str, Any] | None, *, ticker_offset: float = 0.0) -> tuple[Image.Image, int]:
@@ -338,18 +347,18 @@ def render_ticker_strip(base_frame: Image.Image, alerts_cache: dict[str, Any] | 
     white = (245, 245, 245)
     amber = (244, 198, 0)
     ticker_text = ticker_text_from_alerts(alerts_cache)
-    ticker_font = _fit_font(ticker_text, width_limit=max(160, width - 30), initial_size=26, min_size=22, italic=True)   #Ticker font size
-    baseline_y = (height - 34) - strip_top
+    ticker_font = _fit_font(ticker_text, width_limit=LAYOUT_2_1.body.width, initial_size=24, min_size=18, italic=True)
+    text_y = centred_text_y(ticker_font, ticker_text, LAYOUT_2_1.row_centre_y(4)) - strip_top
     text_width = _text_width(ticker_text, ticker_font)
     ticker_fill = amber if ticker_text == "Alerts unavailable" else white
-    if text_width > width - 44:
+    if text_width > LAYOUT_2_1.body.width:
         loop_width = text_width + 48
-        x = 26 - (ticker_offset % loop_width)
-        while x < width:
-            draw.text((x, baseline_y), ticker_text, font=ticker_font, fill=ticker_fill)
+        x = LAYOUT_2_1.body.left - (ticker_offset % loop_width)
+        while x < LAYOUT_2_1.body.right:
+            draw.text((x, text_y), ticker_text, font=ticker_font, fill=ticker_fill)
             x += loop_width
     else:
-        draw.text((22, baseline_y), ticker_text, font=ticker_font, fill=ticker_fill)
+        draw.text((LAYOUT_2_1.body.left, text_y), ticker_text, font=ticker_font, fill=ticker_fill)
     return strip, strip_top
 
 

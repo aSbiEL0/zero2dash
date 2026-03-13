@@ -44,6 +44,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from _config import get_env, report_validation_errors
+from display_layout import BODY_ROWS, LAYOUT_2_1, aligned_text_x, centred_text_y
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CANVAS_WIDTH = 320
@@ -807,32 +808,35 @@ def render_image(
 
     if message:
         tw = int(draw.textlength(message, font=font_message))
-        _, ttop, _, tbottom = draw.textbbox((0, 0), message, font=font_message)
-        th = tbottom - ttop
-        x = max(0, (CANVAS_WIDTH - tw) // 2)
-        y = (CANVAS_HEIGHT // 2) - (th // 2) + 28
+        x = max(LAYOUT_2_1.body.left, LAYOUT_2_1.body.centre_x - (tw // 2))
+        y = centred_text_y(font_message, message, LAYOUT_2_1.row_centre_y(2))
         draw.text((x, y), message, fill=muted_fill, font=font_message)
     else:
         entries = list(events)
-        left_x = 20
-        right_x = 295
-        row_y = 92
-        row_gap = 28
-        max_rows = max(1, (CANVAS_HEIGHT - row_y - 12) // row_gap)
+        max_rows = max(1, BODY_ROWS - 1)
         visible_events = entries[:max_rows]
         hidden_count = max(0, len(entries) - len(visible_events))
 
         for idx, event in enumerate(visible_events):
-            y = row_y + idx * row_gap
-            date_w = int(draw.textlength(event.display_date, font=font_date))
-            max_summary_w = max(24, right_x - left_x - date_w - 14)
+            row_centre = LAYOUT_2_1.row_centre_y(idx)
+            max_summary_w = max(24, LAYOUT_2_1.left.width)
             clipped_summary = truncate_text(draw, event.summary, font_event, max_summary_w)
-            draw.text((left_x, y), clipped_summary, font=font_event, fill=text_fill)
-            draw.text((right_x - date_w, y), event.display_date, font=font_date, fill=text_fill)
+            draw.text((LAYOUT_2_1.left.left, centred_text_y(font_event, clipped_summary, row_centre)), clipped_summary, font=font_event, fill=text_fill)
+            draw.text(
+                (aligned_text_x(LAYOUT_2_1.right, font_date, event.display_date, "right"), centred_text_y(font_date, event.display_date, row_centre)),
+                event.display_date,
+                font=font_date,
+                fill=text_fill,
+            )
 
         if hidden_count > 0:
             more_text = f"+{hidden_count} more"
-            draw.text((20, CANVAS_HEIGHT - 20), more_text, font=font_more, fill=muted_fill)
+            draw.text(
+                (LAYOUT_2_1.left.left, centred_text_y(font_more, more_text, LAYOUT_2_1.row_centre_y(BODY_ROWS - 1))),
+                more_text,
+                font=font_more,
+                fill=muted_fill,
+            )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
