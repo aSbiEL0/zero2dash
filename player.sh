@@ -2,7 +2,7 @@
 set -eu
 
 FBDEV="${FBDEV:-/dev/fb1}"
-VIDEO_DIR="${VIDEO_DIR:-/home/pihole/vid}"
+VIDEO_DIR="/home/pihole/vid/"
 PID_FILE="${PLAYER_PID_FILE:-/tmp/player.sh.pid}"
 FRAME_WIDTH="${FRAME_WIDTH:-320}"
 FRAME_HEIGHT="${FRAME_HEIGHT:-240}"
@@ -14,16 +14,15 @@ ffmpeg_pid=""
 usage() {
   cat <<'USAGE'
 Usage:
-  ./player.sh --dir /path/to/video-folder
-  ./player.sh /path/to/video-folder
+  ./player.sh
   ./player.sh --stop
   ./player.sh --clear-screen
   ./player.sh --stop --clear-screen
-  ./player.sh
 
 Behavior:
+  - Plays videos only from /home/pihole/vid/
   - Starts playback immediately
-  - Plays all compatible videos in the selected folder in sorted order
+  - Plays all compatible videos in sorted order
   - Centre-crops 426x240 to 320x240 (53 px removed from each side)
   - Repeats the whole folder forever until you stop it (Ctrl+C)
   - --stop stops the currently running player instance via pidfile
@@ -99,24 +98,12 @@ collect_videos_to_list() {
 
 stop_requested=0
 clear_requested=0
-target_dir_set=0
-TARGET_DIR="$VIDEO_DIR"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help)
       usage
       exit 0
-      ;;
-    --dir)
-      if [ -z "${2:-}" ]; then
-        echo "Missing directory path after --dir" >&2
-        usage
-        exit 1
-      fi
-      TARGET_DIR="$2"
-      target_dir_set=1
-      shift 2
       ;;
     --stop)
       stop_requested=1
@@ -126,20 +113,19 @@ while [ "$#" -gt 0 ]; do
       clear_requested=1
       shift
       ;;
+    --dir)
+      echo "Custom video directories are not supported. Videos must be in $VIDEO_DIR" >&2
+      exit 1
+      ;;
     -*)
       echo "Unknown option: $1" >&2
       usage
       exit 1
       ;;
     *)
-      if [ "$target_dir_set" -eq 1 ]; then
-        echo "Unexpected extra argument: $1" >&2
-        usage
-        exit 1
-      fi
-      TARGET_DIR="$1"
-      target_dir_set=1
-      shift
+      echo "Unexpected argument: $1" >&2
+      echo "Videos must be in $VIDEO_DIR" >&2
+      exit 1
       ;;
   esac
 done
@@ -183,13 +169,13 @@ fi
 
 auto_crop_filter="fps=15,crop=320:240:(in_w-320)/2:0,format=rgb565le"
 
-echo "Playing all videos on $FBDEV from: $TARGET_DIR"
+echo "Playing all videos on $FBDEV from: $VIDEO_DIR"
 
 list_file="$(mktemp)"
 trap 'cleanup; rm -f "$list_file"' EXIT INT TERM HUP
 
 while true; do
-  collect_videos_to_list "$TARGET_DIR" "$list_file"
+  collect_videos_to_list "$VIDEO_DIR" "$list_file"
 
   while IFS= read -r video; do
     [ -n "$video" ] || continue
