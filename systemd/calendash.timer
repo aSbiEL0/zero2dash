@@ -1,0 +1,11 @@
+[Unit]
+Description=Generate calendar dashboard image at 06:05
+
+[Timer]
+OnCalendar=*-*-* 06:05:00
+Persistent=true
+AccuracySec=1min
+Unit=calendash.service
+
+[Install]
+WantedBy=timers.target
