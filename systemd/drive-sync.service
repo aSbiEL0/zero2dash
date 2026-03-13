@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync Drive-backed photos into LOCAL_PHOTOS_DIR
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pihole/zero2dash
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/pihole/zero2dash/.env
+TimeoutStartSec=10min
+ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/modules/photos/drive-sync.py

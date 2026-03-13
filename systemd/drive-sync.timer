@@ -1,0 +1,11 @@
+[Unit]
+Description=Sync Drive-backed photos daily at 06:10
+
+[Timer]
+OnCalendar=*-*-* 06:10:00
+Persistent=true
+AccuracySec=1min
+Unit=drive-sync.service
+
+[Install]
+WantedBy=timers.target
