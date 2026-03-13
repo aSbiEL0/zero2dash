@@ -28,8 +28,11 @@ DEFAULT_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", "boot/startup.gif")
 DEFAULT_MAIN_MENU_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_MAIN_MENU_IMAGE", "boot/mainmenu.png")
 DEFAULT_SELECTOR_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_DAY_NIGHT_IMAGE", os.environ.get("BOOT_SELECTOR_IMAGE_PATH", "boot/day-night.png"))
 DEFAULT_SHUTDOWN_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_SHUTDOWN_IMAGE", "boot/yes-no.png")
+DEFAULT_KEYPAD_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_KEYPAD_IMAGE", "boot/keypad.png")
 DEFAULT_INFO_GIF_PATH = os.environ.get("BOOT_SELECTOR_INFO_GIF", "boot/credits.gif")
 DEFAULT_SHUTDOWN_COMMAND = os.environ.get("BOOT_SELECTOR_SHUTDOWN_COMMAND", "systemctl poweroff")
+DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", "")
+DEFAULT_PIN = os.environ.get("BOOT_SELECTOR_PIN", "")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
 DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.service")
 DEFAULT_TOUCH_SETTLE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_SETTLE_SECS", "0.35"))
@@ -52,13 +55,17 @@ DIRECT_MODE_COMMANDS = {
 }
 MAIN_MENU_HOME = "home"
 MAIN_MENU_INFO = "info"
-MAIN_MENU_UNUSED = "unused"
+MAIN_MENU_PADLOCK = "padlock"
 MAIN_MENU_SHUTDOWN = "shutdown"
 DAY_NIGHT_DAY = "day"
 DAY_NIGHT_NIGHT = "night"
 SHUTDOWN_CONFIRM = "confirm"
 SHUTDOWN_CANCEL = "cancel"
 INFO_SKIP_ACTION = "menu"
+KEYPAD_OK = "ok"
+KEYPAD_NO = "no"
+KEYPAD_DIGITS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"}
+MAX_PIN_FAILURES = 3
 
 EV_SYN = 0x00
 EV_KEY = 0x01
@@ -105,6 +112,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--main-menu-image", default=DEFAULT_MAIN_MENU_IMAGE_PATH, help=f"Main menu image path (default: {DEFAULT_MAIN_MENU_IMAGE_PATH})")
     parser.add_argument("--selector-image", default=DEFAULT_SELECTOR_IMAGE_PATH, help=f"Day/night selector image path (default: {DEFAULT_SELECTOR_IMAGE_PATH})")
     parser.add_argument("--shutdown-image", default=DEFAULT_SHUTDOWN_IMAGE_PATH, help=f"Shutdown confirmation image path (default: {DEFAULT_SHUTDOWN_IMAGE_PATH})")
+    parser.add_argument("--keypad-image", default=DEFAULT_KEYPAD_IMAGE_PATH, help=f"Keypad image path (default: {DEFAULT_KEYPAD_IMAGE_PATH})")
     parser.add_argument("--info-gif", default=DEFAULT_INFO_GIF_PATH, help=f"Info GIF path (default: {DEFAULT_INFO_GIF_PATH})")
     parser.add_argument("--gif-speed", type=float, default=DEFAULT_GIF_SPEED, help=f"GIF playback speed multiplier (default: {DEFAULT_GIF_SPEED})")
     parser.add_argument("--invert-y", action="store_true", default=DEFAULT_TOUCH_INVERT_Y, help="Invert the touch Y axis when deciding top/bottom selection.")
@@ -120,10 +128,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--day-service", default=DEFAULT_DAY_SERVICE, help=f"systemd unit to start for day mode (default: {DEFAULT_DAY_SERVICE})")
     parser.add_argument("--night-service", default=DEFAULT_NIGHT_SERVICE, help=f"systemd unit to start for night mode (default: {DEFAULT_NIGHT_SERVICE})")
     parser.add_argument("--shutdown-command", default=DEFAULT_SHUTDOWN_COMMAND, help=f"Command used for safe shutdown (default: {DEFAULT_SHUTDOWN_COMMAND})")
+    parser.add_argument("--player-command", default=DEFAULT_PLAYER_COMMAND, help="Command used after entering the correct PIN.")
+    parser.add_argument("--pin", default=DEFAULT_PIN, help="PIN required by the padlock keypad.")
     return parser.parse_args()
 
 
 def shutdown_command_args(command_text: str) -> list[str]:
+    return shlex.split(command_text)
+
+
+def player_command_args(command_text: str) -> list[str]:
     return shlex.split(command_text)
 
 
@@ -139,6 +153,12 @@ def validate_args(args: argparse.Namespace) -> int | None:
         return 1
     if not shutdown_command_args(args.shutdown_command):
         print("Shutdown command cannot be empty.", file=sys.stderr)
+        return 1
+    if not args.pin:
+        print("PIN cannot be empty.", file=sys.stderr)
+        return 1
+    if not player_command_args(args.player_command):
+        print("Player command cannot be empty.", file=sys.stderr)
         return 1
     return None
 
@@ -385,7 +405,7 @@ def resolve_main_menu_action(screen_x: int, screen_y: int, screen_width: int, sc
     if top_half and not left_half:
         return MAIN_MENU_INFO
     if not top_half and left_half:
-        return MAIN_MENU_UNUSED
+        return MAIN_MENU_PADLOCK
     return MAIN_MENU_SHUTDOWN
 
 
@@ -401,6 +421,28 @@ def resolve_day_night_action(screen_y: int, screen_height: int, invert_y: bool) 
 
 def resolve_shutdown_action(screen_y: int, screen_height: int, invert_y: bool) -> str:
     return _resolve_vertical_zone(screen_y, screen_height, invert_y, SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL)
+
+
+def resolve_keypad_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str:
+    cell_width = max(1, screen_width // 4)
+    cell_height = max(1, screen_height // 3)
+    column = min(3, max(0, screen_x // cell_width))
+    row = min(2, max(0, screen_y // cell_height))
+    keypad_rows = (
+        ("1", "2", "3", KEYPAD_OK),
+        ("4", "5", "6", "0"),
+        ("7", "8", "9", KEYPAD_NO),
+    )
+    return keypad_rows[row][column]
+
+
+def evaluate_pin_entry(entered_pin: str, expected_pin: str, consecutive_failures: int, max_failures: int = MAX_PIN_FAILURES) -> tuple[str, int]:
+    if entered_pin == expected_pin:
+        return "success", 0
+    updated_failures = consecutive_failures + 1
+    if updated_failures >= max_failures:
+        return "shutdown", updated_failures
+    return "retry", updated_failures
 
 
 def _normalise_axis(raw_value: int, source_size: int, source_min: int, target_size: int) -> int:
@@ -615,6 +657,20 @@ def run_shutdown(command_text: str) -> int:
     print(f"[boot-selector] Shutdown command failed: {stderr}", file=sys.stderr, flush=True)
     return result.returncode
 
+def run_player(command_text: str) -> int:
+    command = player_command_args(command_text)
+    if not command:
+        print("[boot-selector] Player command is empty.", file=sys.stderr, flush=True)
+        return 1
+    print(f"[boot-selector] Running player command: {command}", flush=True)
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode == 0:
+        print("[boot-selector] Player command completed successfully.", flush=True)
+        return 0
+    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+    print(f"[boot-selector] Player command failed: {stderr}", file=sys.stderr, flush=True)
+    return result.returncode
+
 def main() -> int:
     args = parse_args()
     validation_error = validate_args(args)
@@ -630,6 +686,7 @@ def main() -> int:
     main_menu_image = load_selector_image(Path(args.main_menu_image), args.width, args.height)
     selector_image = load_selector_image(Path(args.selector_image), args.width, args.height)
     shutdown_image = load_selector_image(Path(args.shutdown_image), args.width, args.height)
+    keypad_image = load_selector_image(Path(args.keypad_image), args.width, args.height)
     blank_image = Image.new("RGB", (args.width, args.height), BACKGROUND_RGB)
     save_preview(selector_image, args.output_selector)
 
@@ -642,6 +699,7 @@ def main() -> int:
         framebuffer.open()
 
     touch_reader = TouchReader(args.width, args.height)
+    consecutive_pin_failures = 0
     try:
         if not args.skip_gif:
             playback_gif(framebuffer, Path(args.gif), args.width, args.height, args.gif_speed, args.output_gif_first, args.output_gif_last)
@@ -693,6 +751,38 @@ def main() -> int:
                 )
                 continue
 
+            if main_action == MAIN_MENU_PADLOCK:
+                entered_pin = ""
+                while not STOP_REQUESTED:
+                    if framebuffer is not None:
+                        framebuffer.write_image(keypad_image)
+                    keypad_action = wait_for_action(
+                        touch_reader,
+                        "keypad selection",
+                        lambda screen_x, screen_y: resolve_keypad_action(screen_x, screen_y, args.width, args.height),
+                        args.touch_settle_secs,
+                        args.touch_debounce_secs,
+                    )
+                    if keypad_action in KEYPAD_DIGITS:
+                        entered_pin += keypad_action
+                        continue
+                    if keypad_action == KEYPAD_NO:
+                        break
+                    if keypad_action == KEYPAD_OK:
+                        result, consecutive_pin_failures = evaluate_pin_entry(entered_pin, args.pin, consecutive_pin_failures)
+                        entered_pin = ""
+                        if result == "success":
+                            if framebuffer is not None:
+                                framebuffer.write_image(blank_image)
+                            return run_player(args.player_command)
+                        if result == "shutdown":
+                            if framebuffer is not None:
+                                framebuffer.write_image(blank_image)
+                            return run_shutdown(args.shutdown_command)
+                        break
+                    return 1 if STOP_REQUESTED else 0
+                continue
+
             if main_action == MAIN_MENU_SHUTDOWN:
                 if framebuffer is not None:
                     framebuffer.write_image(shutdown_image)
@@ -711,8 +801,6 @@ def main() -> int:
                     continue
                 return 1 if STOP_REQUESTED else 0
 
-            if main_action == MAIN_MENU_UNUSED:
-                continue
             return 1 if STOP_REQUESTED else 0
         return 1 if STOP_REQUESTED else 0
     finally:
@@ -723,5 +811,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

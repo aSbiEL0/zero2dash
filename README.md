@@ -353,15 +353,9 @@ python3 modules/photos/photos-shuffle.py --test
 - `modules/blackout/blackout.py` uses `modules/blackout/raspberry-pi-icon.png`.
 - `pihole-display-pre.sh` is used by boot, day, and night services.
 - Put the boot animation GIF at `boot/startup.gif`, or override it with `BOOT_SELECTOR_GIF_PATH`.
-- After the boot GIF the selector shows a 4-quadrant menu: top-left opens the day/night screen, top-right plays the info GIF, bottom-left is unused, and bottom-right opens shutdown confirmation.
+- After the boot GIF the selector shows a 4-quadrant menu: top-left opens the day/night screen, top-right plays the info GIF, bottom-left opens the PIN keypad, and bottom-right opens shutdown confirmation.
 - `--selector-image` now refers specifically to the day/night screen.
-- By default the boot assets are `boot/mainmenu.png`, `boot/day-night.png`, `boot/yes-no.png`, and `boot/credits.gif`. You can override them through `BOOT_SELECTOR_MAIN_MENU_IMAGE`, `BOOT_SELECTOR_DAY_NIGHT_IMAGE` (or legacy `BOOT_SELECTOR_IMAGE_PATH`), `BOOT_SELECTOR_SHUTDOWN_IMAGE`, and `BOOT_SELECTOR_INFO_GIF`.
+- By default the boot assets are `boot/mainmenu.png`, `boot/day-night.png`, `boot/yes-no.png`, `boot/keypad.png`, and `boot/credits.gif`. You can override them through `BOOT_SELECTOR_MAIN_MENU_IMAGE`, `BOOT_SELECTOR_DAY_NIGHT_IMAGE` (or legacy `BOOT_SELECTOR_IMAGE_PATH`), `BOOT_SELECTOR_SHUTDOWN_IMAGE`, `BOOT_SELECTOR_KEYPAD_IMAGE`, and `BOOT_SELECTOR_INFO_GIF`.
+- The keypad expects a PIN from `BOOT_SELECTOR_PIN`; a correct PIN runs `BOOT_SELECTOR_PLAYER_COMMAND`, and three consecutive wrong PIN submissions shut the Pi down via `BOOT_SELECTOR_SHUTDOWN_COMMAND`.
 - On shutdown confirmation the selector draws a blank screen before running the shutdown command.
 - The module directories are the source of truth for page-specific scripts and page-specific assets.
-
-
-
-
-
-
-
