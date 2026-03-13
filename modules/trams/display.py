@@ -35,7 +35,7 @@ FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 FRAME_DELAY_DEFAULT = 0.02
-TICKER_SPEED_DEFAULT = 16.0
+TICKER_SPEED_DEFAULT = 24.0
 ALERT_ROTATION_SECS = 15
 WEEKDAY_NAMES = (
     "monday",
@@ -307,8 +307,8 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     white = (245, 245, 245)
     departures = compute_upcoming_departures(cache or {}, now, limit=3) if _cache_status(cache) == "ok" else []
     body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=20, min_size=12)
-    mins_font = _fit_font("27min", width_limit=72, initial_size=20, min_size=12)
-    message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=18, min_size=13)
+    mins_font = _fit_font("27min", width_limit=72, initial_size=22, min_size=12)
+    message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=20, min_size=13)
     top = 92
     row_height = 26
     status = _cache_status(cache)
