@@ -139,10 +139,6 @@ Common environment variables:
 - `FB_WIDTH` default: `320`
 - `FB_HEIGHT` default: `240`
 - `ACTIVE_HOURS` for day/night timer control
-- `BOOT_SELECTOR_MAIN_MENU_IMAGE` optional 4-quadrant menu asset, default `boot/mainmenu.png`
-- `BOOT_SELECTOR_DAY_NIGHT_IMAGE` optional day/night chooser asset, default `boot/day-night.png`
-- `BOOT_SELECTOR_SHUTDOWN_IMAGE` optional shutdown confirmation asset, default `boot/yes-no.png`
-- `BOOT_SELECTOR_INFO_GIF` optional info GIF asset, default `boot/credits.gif`
 - `BOOT_SELECTOR_SHUTDOWN_COMMAND` optional safe shutdown command override
 
 ### Pi-hole page
@@ -173,9 +169,6 @@ Required for Google Calendar rendering:
 Optional:
 
 - `GOOGLE_TOKEN_PATH`
-- `BACKGROUND_IMAGE`
-- `ICON_IMAGE`
-- `OUTPUT_PATH`
 - `OAUTH_PORT`
 - `GOOGLE_AUTH_MODE`
 
@@ -196,9 +189,6 @@ Optional Google Photos settings:
 - `GOOGLE_PHOTOS_CLIENT_ID`
 - `GOOGLE_PHOTOS_CLIENT_SECRET`
 - `GOOGLE_TOKEN_PATH_PHOTOS`
-- `CACHE_DIR`
-- `FALLBACK_IMAGE`
-- `LOGO_PATH`
 
 Google Photos notes:
 
@@ -206,14 +196,12 @@ Google Photos notes:
 - If the Google app is still in testing, add the account as a test user.
 - Loopback OAuth must complete on the same machine, or through SSH port forwarding.
 - Personal/shared albums are unreliable for unattended use; `LOCAL_PHOTOS_DIR` is the practical primary source.
+- Bundled fallback assets stay in `modules/photos/` by default.
 
 ### Currency
 
 Optional currency settings:
 
-- `CURRENCY_OUTPUT_PATH`
-- `CURRENCY_BACKGROUND_IMAGE`
-- `CURRENCY_STATE_PATH`
 - `CURRENCY_NBP_API_BASE`
 - `CURRENCY_API_TIMEOUT`
 
@@ -227,7 +215,6 @@ Default generated output:
 Optional tram settings:
 
 - `TRAM_GTFS_URL`
-- `TRAM_GTFS_CACHE_PATH`
 - `TRAM_GTFS_TIMEOUT`
 - `TRAM_STOP_NAME`
 - `TRAM_STOP_ID`
@@ -235,7 +222,6 @@ Optional tram settings:
 - `TRAM_TIMEZONE`
 - `TRAM_TARGET_HEADSIGNS`
 - `TRAM_ALERTS_URL`
-- `TRAM_ALERTS_CACHE_PATH`
 - `TRAM_ALERTS_TIMEOUT`
 - `TRAM_FONT_PATH`
 - `TRAM_FONT_PATH_BOLD`
@@ -355,8 +341,7 @@ python3 modules/photos/photos-shuffle.py --test
 - Put the boot animation GIF at `boot/startup.gif`, or override it with `BOOT_SELECTOR_GIF_PATH`.
 - After the boot GIF the selector shows a 4-quadrant menu: top-left opens the day/night screen, top-right plays the info GIF, bottom-left opens the PIN keypad, and bottom-right opens shutdown confirmation.
 - `--selector-image` now refers specifically to the day/night screen.
-- By default the boot assets are `boot/mainmenu.png`, `boot/day-night.png`, `boot/yes-no.png`, `boot/keypad.png`, and `boot/credits.gif`. You can override them through `BOOT_SELECTOR_MAIN_MENU_IMAGE`, `BOOT_SELECTOR_DAY_NIGHT_IMAGE` (or legacy `BOOT_SELECTOR_IMAGE_PATH`), `BOOT_SELECTOR_SHUTDOWN_IMAGE`, `BOOT_SELECTOR_KEYPAD_IMAGE`, and `BOOT_SELECTOR_INFO_GIF`.
+- By default the boot assets are `boot/mainmenu.png`, `boot/day-night.png`, `boot/yes-no.png`, `boot/keypad.png`, and `boot/credits.gif`. Treat those as bundled application assets, not routine `.env` settings.
 - The keypad expects a PIN from `BOOT_SELECTOR_PIN`; a correct PIN runs `/home/pihole/player.sh`, and three consecutive wrong PIN submissions shut the Pi down via `BOOT_SELECTOR_SHUTDOWN_COMMAND`.
 - On shutdown confirmation the selector draws a blank screen before running the shutdown command.
 - The module directories are the source of truth for page-specific scripts and page-specific assets.
-

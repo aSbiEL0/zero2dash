@@ -9,6 +9,7 @@ Before=display.service night.service
 Type=simple
 WorkingDirectory=/home/pihole/zero2dash
 Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/pihole
 Environment=FB_DEVICE=/dev/fb1
 EnvironmentFile=-/home/pihole/zero2dash/.env
 
