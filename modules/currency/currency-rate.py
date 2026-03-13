@@ -313,16 +313,20 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
 
         date_bbox = draw.textbbox((0, 0), display_date, font=date_font)
         date_w = date_bbox[2] - date_bbox[0]
-        pair_h = pair_bbox[3] - pair_bbox[1]
-        rate_h = rate_bbox[3] - rate_bbox[1]
-        suffix_h = suffix_bbox[3] - suffix_bbox[1]
+        pair_top = pair_bbox[1]
+        pair_bottom = pair_bbox[3]
+        rate_top = rate_bbox[1]
+        rate_bottom = rate_bbox[3]
+        suffix_top = suffix_bbox[1]
+        suffix_bottom = suffix_bbox[3]
+        date_top = date_bbox[1]
         row_gap = 14
         pair_y = 83
-        row_top = pair_y + pair_h + row_gap
-        row_h = max(rate_h, suffix_h)
-        value_y = row_top + ((row_h - rate_h) // 2)
-        suffix_y = row_top + ((row_h - suffix_h) // 2)
-        date_y = row_top + row_h + row_gap
+        row_top = (pair_y + pair_bottom) + row_gap
+        value_y = row_top - rate_top
+        suffix_y = row_top - suffix_top
+        row_bottom = max(value_y + rate_bottom, suffix_y + suffix_bottom)
+        date_y = (row_bottom + row_gap) - date_top
         start_x = (width - total_w) // 2
         _draw_text_with_shadow(
             draw,
