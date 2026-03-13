@@ -306,21 +306,21 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     width, _height = frame.size
     white = (245, 245, 245)
     departures = compute_upcoming_departures(cache or {}, now, limit=3) if _cache_status(cache) == "ok" else []
-    body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=20, min_size=12)
-    mins_font = _fit_font("27min", width_limit=72, initial_size=22, min_size=12)
-    message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=20, min_size=13)
+    body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=22, min_size=12)                    #Tram line font size
+    mins_font = _fit_font("27min", width_limit=72, initial_size=22, min_size=12)                                    #Time left font size
+    message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=24, min_size=13)
     top = 92
     row_height = 26
     status = _cache_status(cache)
     if status != "ok":
-        draw.text((22, top), "Timetable unavailable", font=message_font, fill=white)
+        draw.text((24, top), "Timetable unavailable", font=message_font, fill=white)
     elif not departures:
-        draw.text((22, top), "No more trams today", font=message_font, fill=white)
+        draw.text((24, top), "No more trams today", font=message_font, fill=white)
     else:
         for index, departure in enumerate(departures):
             y = top + (index * row_height)
             headsign_text = _ellipsize_text(departure.headsign, body_font, 170)
-            draw.text((24, y), headsign_text, font=body_font, fill=white)
+            draw.text((22, y), headsign_text, font=body_font, fill=white)
             minute_text = "Due" if departure.minutes <= 0 else f"{departure.minutes}min"
             draw.text((width - 22 - _text_width(minute_text, mins_font), y), minute_text, font=mins_font, fill=white)
     return frame
@@ -338,7 +338,7 @@ def render_ticker_strip(base_frame: Image.Image, alerts_cache: dict[str, Any] | 
     white = (245, 245, 245)
     amber = (244, 198, 0)
     ticker_text = ticker_text_from_alerts(alerts_cache)
-    ticker_font = _fit_font(ticker_text, width_limit=max(160, width - 30), initial_size=22, min_size=18, italic=True)
+    ticker_font = _fit_font(ticker_text, width_limit=max(160, width - 30), initial_size=26, min_size=22, italic=True)   #Ticker font size
     baseline_y = (height - 34) - strip_top
     text_width = _text_width(ticker_text, ticker_font)
     ticker_fill = amber if ticker_text == "Alerts unavailable" else white
