@@ -5,7 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 
@@ -104,6 +104,12 @@ class TramTests(unittest.TestCase):
         self.assertEqual(tram_display.ticker_text_from_alerts(None), "Alerts unavailable")
         self.assertEqual(tram_display.ticker_text_from_alerts({"items": []}), "No current tram alerts")
 
+    def test_ticker_rotates_between_alerts(self) -> None:
+        alerts = {"items": [{"ticker_text": "Alert A"}, {"ticker_text": "Alert B"}, {"ticker_text": "Alert C"}]}
+        self.assertEqual(tram_display.ticker_text_from_alerts(alerts, now=datetime(1970, 1, 1, 0, 0, 0, tzinfo=timezone.utc)), "Alert A")
+        self.assertEqual(tram_display.ticker_text_from_alerts(alerts, now=datetime(1970, 1, 1, 0, 0, 15, tzinfo=timezone.utc)), "Alert B")
+        self.assertEqual(tram_display.ticker_text_from_alerts(alerts, now=datetime(1970, 1, 1, 0, 0, 30, tzinfo=timezone.utc)), "Alert C")
+
     def test_alert_parser_and_filter_keep_route_relevant_items(self) -> None:
         structured = json.dumps({"items": [{"title": "Tram disruption at Cornbrook", "description": "Services between Firswood and Trafford Centre are delayed."}, {"title": "Bus diversion", "description": "Not relevant."}]})
         alerts = tram_alerts_refresh.parse_structured_alerts(structured, "https://example.invalid")
@@ -155,3 +161,4 @@ class TramTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -36,6 +36,7 @@ WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 FRAME_DELAY_DEFAULT = 0.02
 TICKER_SPEED_DEFAULT = 16.0
+ALERT_ROTATION_SECS = 15
 WEEKDAY_NAMES = (
     "monday",
     "tuesday",
@@ -255,11 +256,9 @@ def _cache_status(cache: dict[str, Any] | None) -> str:
     return "ok"
 
 
-def ticker_text_from_alerts(alerts_cache: dict[str, Any] | None) -> str:
+def _alert_texts_from_cache(alerts_cache: dict[str, Any] | None) -> list[str] | None:
     if alerts_cache is None or not isinstance(alerts_cache.get("items"), list):
-        return "Alerts unavailable"
-    if not alerts_cache["items"]:
-        return "No current tram alerts"
+        return None
     texts: list[str] = []
     for item in alerts_cache["items"]:
         if isinstance(item, dict):
@@ -268,8 +267,20 @@ def ticker_text_from_alerts(alerts_cache: dict[str, Any] | None) -> str:
             text = str(item).strip()
         if text:
             texts.append(text)
-    return "   |   ".join(texts) if texts else "No current tram alerts"
+    return texts
 
+
+def ticker_text_from_alerts(alerts_cache: dict[str, Any] | None, *, now: datetime | None = None) -> str:
+    texts = _alert_texts_from_cache(alerts_cache)
+    if texts is None:
+        return "Alerts unavailable"
+    if not texts:
+        return "No current tram alerts"
+    if len(texts) == 1:
+        return texts[0]
+    current = now or datetime.now(timezone.utc)
+    rotation_slot = int(current.timestamp() // ALERT_ROTATION_SECS)
+    return texts[rotation_slot % len(texts)]
 
 def load_background(path: Path, width: int, height: int) -> Image.Image:
     if path.exists():
@@ -282,12 +293,12 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     draw = ImageDraw.Draw(frame)
     width, _height = frame.size
     white = (245, 245, 245)
-    departures = compute_upcoming_departures(cache or {}, now, limit=4) if _cache_status(cache) == "ok" else []
-    body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=18, min_size=12)
-    mins_font = _fit_font("27min", width_limit=72, initial_size=18, min_size=12)
+    departures = compute_upcoming_departures(cache or {}, now, limit=3) if _cache_status(cache) == "ok" else []
+    body_font = _fit_font("Rochdale Town Centre", width_limit=210, initial_size=20, min_size=12)
+    mins_font = _fit_font("27min", width_limit=72, initial_size=20, min_size=12)
     message_font = _fit_font("Timetable unavailable", width_limit=280, initial_size=18, min_size=13)
     top = 92
-    row_height = 24
+    row_height = 26
     status = _cache_status(cache)
     if status != "ok":
         draw.text((22, top), "Timetable unavailable", font=message_font, fill=white)
@@ -466,3 +477,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

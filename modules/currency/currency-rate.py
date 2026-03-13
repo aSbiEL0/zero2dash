@@ -288,7 +288,7 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     centre_x = width // 2
     pair_text = "GBP / PLN"
     pair_font = load_font(22, bold=True)
-    date_font = load_font(10, bold=True)
+    date_font = load_font(20, bold=True)
 
     if status == "ok" and snapshot is not None:
         pair_bbox = draw.textbbox((0, 0), pair_text, font=pair_font)
