@@ -174,9 +174,6 @@ def validate_args(args: argparse.Namespace) -> int | None:
     if not shutdown_command_args(args.shutdown_command):
         print("Shutdown command cannot be empty.", file=sys.stderr)
         return 1
-    if not args.pin:
-        print("PIN cannot be empty.", file=sys.stderr)
-        return 1
     if not player_command_args(args.player_command):
         print("Player command cannot be empty.", file=sys.stderr)
         return 1
