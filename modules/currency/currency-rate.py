@@ -295,63 +295,51 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     white = (255, 255, 255, 255)
     shadow = (0, 0, 0, 144)
     shadow_offset = (max(1, width // 160), max(2, height // 120))
-    side_margin = int(width * 0.05)
-    top_margin = int(height * 0.03)
-    bottom_margin = int(height * 0.04)
-
-    date_font = load_font(max(22, width // 12), bold=True)
-    label_font = _fit_font(draw, "1 GBP =", width_limit=int(width * 0.34), initial_size=max(22, width // 12), bold=True)
-    source_font = load_font(max(11, width // 30), bold=True)
-
-    date_bbox = draw.textbbox((0, 0), display_date, font=date_font)
-    date_h = date_bbox[3] - date_bbox[1]
-    label_bbox = draw.textbbox((0, 0), "1 GBP =", font=label_font)
-    label_w = label_bbox[2] - label_bbox[0]
-    label_h = label_bbox[3] - label_bbox[1]
-    top_y = top_margin
-
-    _draw_text_with_shadow(
-        draw,
-        (side_margin, top_y),
-        display_date,
-        font=date_font,
-        fill=white,
-        shadow_fill=shadow,
-        shadow_offset=shadow_offset,
-    )
-    _draw_text_with_shadow(
-        draw,
-        (width - side_margin - label_w, top_y + max(0, date_h - label_h)),
-        "1 GBP =",
-        font=label_font,
-        fill=white,
-        shadow_fill=shadow,
-        shadow_offset=shadow_offset,
-    )
+    centre_x = width // 2
+    pair_text = "GBP / PLN"
+    pair_font = load_font(max(20, width // 15), bold=True)
+    date_font = load_font(max(20, width // 14), bold=True)
 
     if status == "ok" and snapshot is not None:
+        pair_bbox = draw.textbbox((0, 0), pair_text, font=pair_font)
+        pair_w = pair_bbox[2] - pair_bbox[0]
+        pair_h = pair_bbox[3] - pair_bbox[1]
         rate_text = snapshot.display_rate()
-        rate_font = _fit_font(draw, rate_text, width_limit=int(width * 0.78), initial_size=max(84, width // 3), bold=True)
+        rate_font = _fit_font(draw, rate_text, width_limit=int(width * 0.54), initial_size=max(84, width // 3), bold=True)
         gap = max(3, width // 100)
         rate_size = getattr(rate_font, "size", 84)
+        suffix_text = "zł"
 
         while True:
-            suffix_font = load_font(max(26, int(rate_size * 0.60)), bold=True)
+            suffix_font = load_font(max(22, int(rate_size * 0.58)), bold=True)
             rate_bbox = draw.textbbox((0, 0), rate_text, font=rate_font)
-            suffix_bbox = draw.textbbox((0, 0), "zł", font=suffix_font)
+            suffix_bbox = draw.textbbox((0, 0), suffix_text, font=suffix_font)
             rate_w = rate_bbox[2] - rate_bbox[0]
             suffix_w = suffix_bbox[2] - suffix_bbox[0]
             total_w = rate_w + gap + suffix_w
-            if total_w <= width - (side_margin * 2) or rate_size <= 10:
+            if total_w <= int(width * 0.66) or rate_size <= 10:
                 break
             rate_size -= 2
             rate_font = load_font(rate_size, bold=True)
 
-        start_x = max(side_margin, (width - total_w) // 2)
-        value_y = int(height * 0.28)
+        date_bbox = draw.textbbox((0, 0), display_date, font=date_font)
+        date_w = date_bbox[2] - date_bbox[0]
+        pair_y = int(height * 0.34)
+        value_y = pair_y + pair_h + int(height * 0.05)
         rate_bottom = value_y + rate_bbox[3]
         suffix_y = rate_bottom - suffix_bbox[3]
+        date_y = value_y + (rate_bbox[3] - rate_bbox[1]) + int(height * 0.06)
+        start_x = (width - total_w) // 2
 
+        _draw_text_with_shadow(
+            draw,
+            (centre_x - (pair_w // 2), pair_y),
+            pair_text,
+            font=pair_font,
+            fill=white,
+            shadow_fill=shadow,
+            shadow_offset=shadow_offset,
+        )
         _draw_text_with_shadow(
             draw,
             (start_x, value_y),
@@ -364,8 +352,17 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         _draw_text_with_shadow(
             draw,
             (start_x + rate_w + gap, suffix_y),
-            "zł",
+            suffix_text,
             font=suffix_font,
+            fill=white,
+            shadow_fill=shadow,
+            shadow_offset=shadow_offset,
+        )
+        _draw_text_with_shadow(
+            draw,
+            (centre_x - (date_w // 2), date_y),
+            display_date,
+            font=date_font,
             fill=white,
             shadow_fill=shadow,
             shadow_offset=shadow_offset,
@@ -386,23 +383,9 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
             shadow_offset=shadow_offset,
         )
 
-    source_bbox = draw.textbbox((0, 0), DEFAULT_SOURCE_LABEL, font=source_font)
-    source_w = source_bbox[2] - source_bbox[0]
-    source_h = source_bbox[3] - source_bbox[1]
-    _draw_text_with_shadow(
-        draw,
-        ((width - source_w) // 2, height - bottom_margin - source_h),
-        DEFAULT_SOURCE_LABEL,
-        font=source_font,
-        fill=white,
-        shadow_fill=(0, 0, 0, 112),
-        shadow_offset=(1, 1),
-    )
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.convert("RGB").save(output_path, format="PNG")
     logging.info("Wrote image: %s", output_path)
-
 
 def state_needs_refresh(state: dict[str, Any], output_path: Path, display_date: str, status: str, snapshot: RateSnapshot | None, message: str | None) -> bool:
     if not output_path.exists():
@@ -454,7 +437,7 @@ def run_once(*, force_refresh: bool = False) -> int:
 
     state = load_state(config.state_path)
     now = datetime.now().astimezone()
-    display_date = now.strftime("%d/%m/%Y")
+    display_date = now.strftime("%d/%m/%y")
     status, snapshot, message = choose_snapshot(config, state, now)
 
     if not force_refresh and not state_needs_refresh(state, config.output_path, display_date, status, snapshot, message):
@@ -579,7 +562,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
 
