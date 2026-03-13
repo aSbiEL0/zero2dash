@@ -31,6 +31,8 @@ DEFAULT_SELECTOR_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_DAY_NIGHT_IMAGE", os
 DEFAULT_SHUTDOWN_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_SHUTDOWN_IMAGE", "boot/yes-no.png")
 DEFAULT_KEYPAD_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_KEYPAD_IMAGE", "boot/keypad.png")
 DEFAULT_INFO_GIF_PATH = os.environ.get("BOOT_SELECTOR_INFO_GIF", "boot/credits.gif")
+DEFAULT_GRANTED_GIF_PATH = os.environ.get("BOOT_SELECTOR_GRANTED_GIF", "boot/granted.gif")
+DEFAULT_DENIED_GIF_PATH = os.environ.get("BOOT_SELECTOR_DENIED_GIF", "boot/denied.gif")
 DEFAULT_SHUTDOWN_COMMAND = os.environ.get("BOOT_SELECTOR_SHUTDOWN_COMMAND", "systemctl poweroff")
 DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", "/home/pihole/home/pihole/player.sh")
 DEFAULT_PIN = os.environ.get("BOOT_SELECTOR_PIN", "")
@@ -133,6 +135,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shutdown-image", default=DEFAULT_SHUTDOWN_IMAGE_PATH, help=f"Shutdown confirmation image path (default: {DEFAULT_SHUTDOWN_IMAGE_PATH})")
     parser.add_argument("--keypad-image", default=DEFAULT_KEYPAD_IMAGE_PATH, help=f"Keypad image path (default: {DEFAULT_KEYPAD_IMAGE_PATH})")
     parser.add_argument("--info-gif", default=DEFAULT_INFO_GIF_PATH, help=f"Info GIF path (default: {DEFAULT_INFO_GIF_PATH})")
+    parser.add_argument("--granted-gif", default=DEFAULT_GRANTED_GIF_PATH, help=f"Granted GIF path (default: {DEFAULT_GRANTED_GIF_PATH})")
+    parser.add_argument("--denied-gif", default=DEFAULT_DENIED_GIF_PATH, help=f"Denied GIF path (default: {DEFAULT_DENIED_GIF_PATH})")
     parser.add_argument("--gif-speed", type=float, default=DEFAULT_GIF_SPEED, help=f"GIF playback speed multiplier (default: {DEFAULT_GIF_SPEED})")
     parser.add_argument("--invert-y", action="store_true", default=DEFAULT_TOUCH_INVERT_Y, help="Invert the touch Y axis when deciding top/bottom selection.")
     parser.add_argument("--no-invert-y", action="store_false", dest="invert_y", help="Disable Y-axis inversion for top/bottom selection.")
@@ -860,14 +864,38 @@ def main() -> int:
                         result, consecutive_pin_failures = evaluate_pin_entry(entered_pin, args.pin, consecutive_pin_failures)
                         entered_pin = ""
                         if result == "success":
-                            if framebuffer is not None:
-                                framebuffer.write_image(blank_image)
+                            playback_gif(
+                                framebuffer,
+                                Path(args.granted_gif),
+                                args.width,
+                                args.height,
+                                args.gif_speed,
+                                None,
+                                None,
+                            )
                             return run_player(args.player_command)
+                        if result == "retry":
+                            playback_gif(
+                                framebuffer,
+                                Path(args.denied_gif),
+                                args.width,
+                                args.height,
+                                args.gif_speed,
+                                None,
+                                None,
+                            )
+                            break
                         if result == "shutdown":
-                            if framebuffer is not None:
-                                framebuffer.write_image(blank_image)
+                            playback_gif(
+                                framebuffer,
+                                Path(args.denied_gif),
+                                args.width,
+                                args.height,
+                                args.gif_speed,
+                                None,
+                                None,
+                            )
                             return run_shutdown(args.shutdown_command)
-                        break
                     return 1 if STOP_REQUESTED else 0
                 continue
 
@@ -899,22 +927,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

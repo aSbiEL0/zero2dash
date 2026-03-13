@@ -29,7 +29,7 @@ class _DummyImageModule:
     Resampling = types.SimpleNamespace(LANCZOS=1)
 
 
-sys.modules.setdefault("PIL", types.SimpleNamespace(Image=_DummyImageModule, ImageSequence=types.SimpleNamespace(Iterator=lambda _gif: [])))
+sys.modules.setdefault("PIL", types.SimpleNamespace(Image=_DummyImageModule, ImageDraw=types.SimpleNamespace(Draw=lambda *args, **kwargs: None), ImageSequence=types.SimpleNamespace(Iterator=lambda _gif: [])))
 boot_selector = _load_module("boot_selector", "boot/boot_selector.py")
 
 
@@ -73,6 +73,16 @@ class BootSelectorTests(unittest.TestCase):
         self.assertEqual(boot_selector.resolve_keypad_action(250, 10, 320, 240), boot_selector.KEYPAD_OK)
         self.assertEqual(boot_selector.resolve_keypad_action(250, 120, 320, 240), "0")
         self.assertEqual(boot_selector.resolve_keypad_action(250, 220, 320, 240), boot_selector.KEYPAD_NO)
+
+    def test_parse_args_exposes_auth_feedback_gifs(self) -> None:
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = ["boot_selector.py"]
+            args = boot_selector.parse_args()
+        finally:
+            sys.argv = original_argv
+        self.assertEqual(args.granted_gif, boot_selector.DEFAULT_GRANTED_GIF_PATH)
+        self.assertEqual(args.denied_gif, boot_selector.DEFAULT_DENIED_GIF_PATH)
 
     def test_shutdown_command_is_split_safely(self) -> None:
         command = boot_selector.shutdown_command_args('shutdown --message "night mode" now')
