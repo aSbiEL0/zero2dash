@@ -1,0 +1,3 @@
+cd ~/zero2dash
+sudo bash /home/pihole/zero2dash/player.sh --stop --clear-screen
+echo Player stopped. Clearing display...
