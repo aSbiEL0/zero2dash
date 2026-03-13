@@ -35,7 +35,7 @@ FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 FRAME_DELAY_DEFAULT = 0.02
-TICKER_SPEED_DEFAULT = 122.0
+TICKER_SPEED_DEFAULT = 16.0
 WEEKDAY_NAMES = (
     "monday",
     "tuesday",
