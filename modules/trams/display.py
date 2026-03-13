@@ -248,6 +248,18 @@ def _fit_font(text: str, *, width_limit: int, initial_size: int, min_size: int, 
     return _font(min_size, bold=bold, italic=italic)
 
 
+def _ellipsize_text(text: str, font: ImageFont.ImageFont | ImageFont.FreeTypeFont, width_limit: int) -> str:
+    if _text_width(text, font) <= width_limit:
+        return text
+    suffix = '...'
+    available = width_limit - _text_width(suffix, font)
+    if available <= 0:
+        return suffix
+    trimmed = text
+    while trimmed and _text_width(trimmed, font) > available:
+        trimmed = trimmed[:-1].rstrip()
+    return f"{trimmed}{suffix}" if trimmed else suffix
+
 def _cache_status(cache: dict[str, Any] | None) -> str:
     if cache is None:
         return "missing"
@@ -307,7 +319,8 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     else:
         for index, departure in enumerate(departures):
             y = top + (index * row_height)
-            draw.text((22, y), departure.headsign, font=body_font, fill=white)
+            headsign_text = _ellipsize_text(departure.headsign, body_font, 170)
+            draw.text((22, y), headsign_text, font=body_font, fill=white)
             minute_text = "Due" if departure.minutes <= 0 else f"{departure.minutes}min"
             draw.text((width - 22 - _text_width(minute_text, mins_font), y), minute_text, font=mins_font, fill=white)
     return frame
@@ -477,5 +490,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
 
 

@@ -35,7 +35,6 @@ zero2dash/
 │   │   ├── calendash-icon.png
 │   │   ├── calendash.png
 │   │   ├── display.py
-│   │   └── display_impl.py
 │   ├── currency/
 │   │   ├── currency-bkg.png
 │   │   ├── currency-rate.py

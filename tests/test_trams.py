@@ -110,6 +110,10 @@ class TramTests(unittest.TestCase):
         self.assertEqual(tram_display.ticker_text_from_alerts(alerts, now=datetime(1970, 1, 1, 0, 0, 15, tzinfo=timezone.utc)), "Alert B")
         self.assertEqual(tram_display.ticker_text_from_alerts(alerts, now=datetime(1970, 1, 1, 0, 0, 30, tzinfo=timezone.utc)), "Alert C")
 
+    def test_departure_text_is_ellipsized_when_it_overflows(self) -> None:
+        font = tram_display._font(20)
+        self.assertEqual(tram_display._ellipsize_text("Rochdale Town Centre", font, 170), "Rochdale Town...")
+
     def test_alert_parser_and_filter_keep_route_relevant_items(self) -> None:
         structured = json.dumps({"items": [{"title": "Tram disruption at Cornbrook", "description": "Services between Firswood and Trafford Centre are delayed."}, {"title": "Bus diversion", "description": "Not relevant."}]})
         alerts = tram_alerts_refresh.parse_structured_alerts(structured, "https://example.invalid")
@@ -161,4 +165,5 @@ class TramTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
