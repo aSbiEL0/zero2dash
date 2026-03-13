@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import fcntl
 import glob
 import mmap
@@ -18,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from PIL import Image, ImageSequence
+from PIL import Image, ImageDraw, ImageSequence
 
 
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
@@ -31,14 +32,19 @@ DEFAULT_SHUTDOWN_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_SHUTDOWN_IMAGE", "bo
 DEFAULT_KEYPAD_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_KEYPAD_IMAGE", "boot/keypad.png")
 DEFAULT_INFO_GIF_PATH = os.environ.get("BOOT_SELECTOR_INFO_GIF", "boot/credits.gif")
 DEFAULT_SHUTDOWN_COMMAND = os.environ.get("BOOT_SELECTOR_SHUTDOWN_COMMAND", "systemctl poweroff")
-DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", "")
+DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", "/home/pihole/player.sh")
 DEFAULT_PIN = os.environ.get("BOOT_SELECTOR_PIN", "")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
 DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.service")
+DEFAULT_MAIN_MENU_REGIONS = os.environ.get("BOOT_SELECTOR_MAIN_MENU_REGIONS", "")
+DEFAULT_DAY_NIGHT_REGIONS = os.environ.get("BOOT_SELECTOR_DAY_NIGHT_REGIONS", "")
+DEFAULT_SHUTDOWN_REGIONS = os.environ.get("BOOT_SELECTOR_SHUTDOWN_REGIONS", "")
+DEFAULT_KEYPAD_REGIONS = os.environ.get("BOOT_SELECTOR_KEYPAD_REGIONS", "")
 DEFAULT_TOUCH_SETTLE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_SETTLE_SECS", "0.35"))
 DEFAULT_TOUCH_DEBOUNCE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_DEBOUNCE_SECS", "0.35"))
 DEFAULT_GIF_SPEED = float(os.environ.get("BOOT_SELECTOR_GIF_SPEED", "0.5"))
 DEFAULT_TOUCH_INVERT_Y = os.environ.get("BOOT_SELECTOR_TOUCH_INVERT_Y", "0").strip().lower() not in {"0", "false", "no", "off"}
+DEFAULT_SHOW_TOUCH_ZONES = os.environ.get("BOOT_SELECTOR_SHOW_TOUCH_ZONES", "0").strip().lower() not in {"0", "false", "no", "off"}
 DEFAULT_GIF_FRAME_MS = 100
 BACKGROUND_RGB = (0, 0, 0)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
@@ -160,6 +166,18 @@ def validate_args(args: argparse.Namespace) -> int | None:
     if not player_command_args(args.player_command):
         print("Player command cannot be empty.", file=sys.stderr)
         return 1
+    region_specs = (
+        (args.main_menu_regions, {MAIN_MENU_HOME, MAIN_MENU_INFO, MAIN_MENU_PADLOCK, MAIN_MENU_SHUTDOWN}, "main menu"),
+        (args.day_night_regions, {DAY_NIGHT_DAY, DAY_NIGHT_NIGHT}, "day/night"),
+        (args.shutdown_regions, {SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL}, "shutdown"),
+        (args.keypad_regions, KEYPAD_DIGITS | {KEYPAD_OK, KEYPAD_NO}, "keypad"),
+    )
+    for spec, actions, label in region_specs:
+        try:
+            parse_touch_regions(spec, actions, label)
+        except ValueError as exc:
+            print(f"Invalid {label} regions: {exc}", file=sys.stderr)
+            return 1
     return None
 
 
@@ -811,3 +829,11 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+
+
