@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-03-13T01:38:23Z",
+  "status": "success",
+  "mode": "token_refresh",
+  "oauth_port": 8090,
+  "redirect_uri": "http://localhost:8090/"
+}
