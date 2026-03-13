@@ -344,7 +344,7 @@ def render_ticker_strip(base_frame: Image.Image, alerts_cache: dict[str, Any] | 
     ticker_fill = amber if ticker_text == "Alerts unavailable" else white
     if text_width > width - 44:
         loop_width = text_width + 48
-        x = 22 - (ticker_offset % loop_width)
+        x = 26 - (ticker_offset % loop_width)
         while x < width:
             draw.text((x, baseline_y), ticker_text, font=ticker_font, fill=ticker_fill)
             x += loop_width
