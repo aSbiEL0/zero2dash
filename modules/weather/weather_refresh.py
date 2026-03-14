@@ -304,7 +304,12 @@ def render_weather_frame(background: Image.Image, snapshot: WeatherSnapshot) -> 
             left_width_limit=LAYOUT_HALF.left.width,
             right_width_limit=LAYOUT_HALF.right.width,
         )
-        draw.text((LAYOUT_HALF.left.left, centred_text_y(labels_font, label, row_centre)), label, font=labels_font, fill=TEXT_COLOUR)
+        draw.text(
+            (aligned_text_x(LAYOUT_HALF.left, labels_font, label, "left"), centred_text_y(labels_font, label, row_centre)),
+            label,
+            font=labels_font,
+            fill=TEXT_COLOUR,
+        )
         draw.text(
             (aligned_text_x(LAYOUT_HALF.right, value_font, value, "right"), centred_text_y(value_font, value, row_centre)),
             value,
@@ -332,15 +337,30 @@ def render_unavailable_frame(background_path: Path, label: str, reason: str) -> 
         left_width_limit=LAYOUT_HALF.left.width,
         right_width_limit=LAYOUT_HALF.right.width,
     )
-    draw.text((LAYOUT_HALF.left.left, centred_text_y(location_label_font, location_label, LAYOUT_HALF.row_centre_y(0))), location_label, font=location_label_font, fill=TEXT_COLOUR)
+    draw.text(
+        (aligned_text_x(LAYOUT_HALF.left, location_label_font, location_label, "left"), centred_text_y(location_label_font, location_label, LAYOUT_HALF.row_centre_y(0))),
+        location_label,
+        font=location_label_font,
+        fill=TEXT_COLOUR,
+    )
     draw.text(
         (aligned_text_x(LAYOUT_HALF.right, location_font, location_text, "right"), centred_text_y(location_font, location_text, LAYOUT_HALF.row_centre_y(0))),
         location_text,
         font=location_font,
         fill=TEXT_COLOUR,
     )
-    draw.text((LAYOUT_HALF.body.left, centred_text_y(message_font, message, LAYOUT_HALF.row_centre_y(1))), message, font=message_font, fill=TEXT_COLOUR)
-    draw.text((LAYOUT_HALF.body.left, centred_text_y(reason_font, reason_text, LAYOUT_HALF.row_centre_y(2))), reason_text, font=reason_font, fill=TEXT_COLOUR)
+    draw.text(
+        (aligned_text_x(LAYOUT_HALF.body, message_font, message, "left"), centred_text_y(message_font, message, LAYOUT_HALF.row_centre_y(1))),
+        message,
+        font=message_font,
+        fill=TEXT_COLOUR,
+    )
+    draw.text(
+        (aligned_text_x(LAYOUT_HALF.body, reason_font, reason_text, "left"), centred_text_y(reason_font, reason_text, LAYOUT_HALF.row_centre_y(2))),
+        reason_text,
+        font=reason_font,
+        fill=TEXT_COLOUR,
+    )
     return frame
 
 
