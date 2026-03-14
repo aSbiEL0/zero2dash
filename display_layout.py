@@ -14,6 +14,7 @@ ROW_HEIGHT = 32
 BODY_ROWS = 5
 SIDE_MARGIN = 15
 BODY_WIDTH = CANVAS_WIDTH - (SIDE_MARGIN * 2)
+RIGHT_EXTRA_INSET = 5
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,7 @@ def aligned_text_x(column: Column, font, text: str, align: CanvasAlign) -> int:
     if align == "left":
         return column.left
     if align == "right":
-        return column.right - width
+        return column.right - width - RIGHT_EXTRA_INSET
     return column.centre_x - (width // 2)
 
 
