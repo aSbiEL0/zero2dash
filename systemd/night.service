@@ -2,6 +2,7 @@
 Description=TFT Night Blackout Display
 After=network-online.target
 Wants=network-online.target
+Conflicts=boot-selector.service
 Conflicts=display.service
 Before=display.service
 
@@ -20,4 +21,5 @@ RestartSec=2
 StandardOutput=journal
 StandardError=journal
 
+# Manual compatibility foreground path during shell-first migration.
 

@@ -4,7 +4,7 @@ Description=Start NIGHT GUI at 22:00
 [Timer]
 OnCalendar=*-*-* 22:00:00
 AccuracySec=1min
-Unit=night.service
+Unit=shell-mode-switch@night.service
 
 [Install]
 WantedBy=timers.target

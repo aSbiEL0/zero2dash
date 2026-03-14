@@ -14,6 +14,10 @@ cache/drive_sync_state.json
 cache/photo_resize_state.json
 cache/currency_state.json
 logs/*
+logs/*.json
 .env.save
 stop.sh
 rendering.sh
+cache/*.patch
+cache/edit_*.py
+cache/*_manual.json

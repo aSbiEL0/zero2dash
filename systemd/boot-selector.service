@@ -1,5 +1,5 @@
 [Unit]
-Description=TFT Boot Selector
+Description=zero2dash shell foreground runtime
 After=network-online.target
 Wants=network-online.target
 Conflicts=display.service night.service

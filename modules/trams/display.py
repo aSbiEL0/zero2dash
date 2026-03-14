@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 import argparse
 import json
 import os
@@ -261,10 +262,20 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     status = _cache_status(cache)
     if status != "ok":
         message = _ellipsize_text("Timetable unavailable", message_font, LAYOUT_2_1.body.width)
-        draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
+        draw.text(
+            (aligned_text_x(LAYOUT_2_1.body, message_font, message, "left"), centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))),
+            message,
+            font=message_font,
+            fill=white,
+        )
     elif not departures:
         message = _ellipsize_text("No more trams today", message_font, LAYOUT_2_1.body.width)
-        draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
+        draw.text(
+            (aligned_text_x(LAYOUT_2_1.body, message_font, message, "left"), centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))),
+            message,
+            font=message_font,
+            fill=white,
+        )
     else:
         for index, departure in enumerate(departures):
             row_centre = LAYOUT_2_1.row_centre_y(index)
@@ -277,7 +288,12 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
                 left_width_limit=LAYOUT_2_1.left.width,
                 right_width_limit=LAYOUT_2_1.right.width,
             )
-            draw.text((LAYOUT_2_1.left.left, centred_text_y(body_font, headsign_text, row_centre)), headsign_text, font=body_font, fill=white)
+            draw.text(
+                (aligned_text_x(LAYOUT_2_1.left, body_font, headsign_text, "left"), centred_text_y(body_font, headsign_text, row_centre)),
+                headsign_text,
+                font=body_font,
+                fill=white,
+            )
             draw.text(
                 (aligned_text_x(LAYOUT_2_1.right, mins_font, minute_text, "right"), centred_text_y(mins_font, minute_text, row_centre)),
                 minute_text,

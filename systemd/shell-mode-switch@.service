@@ -1,0 +1,13 @@
+[Unit]
+Description=Request zero2dash shell mode switch to %I
+After=boot-selector.service
+Wants=boot-selector.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pihole/zero2dash
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/pihole
+EnvironmentFile=-/home/pihole/zero2dash/.env
+ExecCondition=/usr/bin/systemctl -q is-active boot-selector.service
+ExecStart=/usr/bin/python3 -u /home/pihole/zero2dash/boot/boot_selector.py --request-mode %i

@@ -2,6 +2,7 @@
 Description=Pi-hole TFT Day Display Rotator
 After=network-online.target
 Wants=network-online.target
+Conflicts=boot-selector.service
 Conflicts=night.service
 Before=night.service
 
@@ -20,6 +21,5 @@ RestartSec=2
 StandardOutput=journal
 StandardError=journal
 
-[Install]
-WantedBy=multi-user.target
+# Manual compatibility foreground path during shell-first migration.
 

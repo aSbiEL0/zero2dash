@@ -52,6 +52,7 @@ CANVAS_HEIGHT = 240
 MODULE_DIR = SCRIPT_DIR
 DEFAULT_OUTPUT_PATH = MODULE_DIR / "calendash.png"
 DEFAULT_BACKGROUND_PATH = MODULE_DIR / "calendash-bkg.png"
+CALENDASH_TEXT_Y_OFFSET = 15
 DEFAULT_TOKEN_PATH = Path("token.json")
 DEFAULT_OAUTH_PORT = 8080
 DEFAULT_AUTH_MODE = "local_server"
@@ -808,9 +809,8 @@ def render_image(
 
     if message:
         message = truncate_text(draw, message, font_message, LAYOUT_2_1.body.width)
-        tw = int(draw.textlength(message, font=font_message))
-        x = max(LAYOUT_2_1.body.left, LAYOUT_2_1.body.centre_x - (tw // 2))
-        y = centred_text_y(font_message, message, LAYOUT_2_1.row_centre_y(2))
+        x = aligned_text_x(LAYOUT_2_1.body, font_message, message, "center")
+        y = centred_text_y(font_message, message, LAYOUT_2_1.row_centre_y(2) + CALENDASH_TEXT_Y_OFFSET)
         draw.text((x, y), message, fill=muted_fill, font=font_message)
     else:
         entries = list(events)
@@ -819,7 +819,7 @@ def render_image(
         hidden_count = max(0, len(entries) - len(visible_events))
 
         for idx, event in enumerate(visible_events):
-            row_centre = LAYOUT_2_1.row_centre_y(idx)
+            row_centre = LAYOUT_2_1.row_centre_y(idx) + CALENDASH_TEXT_Y_OFFSET
             clipped_summary, clipped_date = truncate_pair(
                 event.summary,
                 event.display_date,
@@ -828,7 +828,12 @@ def render_image(
                 left_width_limit=LAYOUT_2_1.left.width,
                 right_width_limit=LAYOUT_2_1.right.width,
             )
-            draw.text((LAYOUT_2_1.left.left, centred_text_y(font_event, clipped_summary, row_centre)), clipped_summary, font=font_event, fill=text_fill)
+            draw.text(
+                (aligned_text_x(LAYOUT_2_1.left, font_event, clipped_summary, "left"), centred_text_y(font_event, clipped_summary, row_centre)),
+                clipped_summary,
+                font=font_event,
+                fill=text_fill,
+            )
             draw.text(
                 (aligned_text_x(LAYOUT_2_1.right, font_date, clipped_date, "right"), centred_text_y(font_date, clipped_date, row_centre)),
                 clipped_date,
@@ -839,7 +844,7 @@ def render_image(
         if hidden_count > 0:
             more_text = truncate_text(draw, f"+{hidden_count} more", font_more, LAYOUT_2_1.body.width)
             draw.text(
-                (LAYOUT_2_1.left.left, centred_text_y(font_more, more_text, LAYOUT_2_1.row_centre_y(BODY_ROWS - 1))),
+                (aligned_text_x(LAYOUT_2_1.left, font_more, more_text, "left"), centred_text_y(font_more, more_text, LAYOUT_2_1.row_centre_y(BODY_ROWS - 1) + CALENDASH_TEXT_Y_OFFSET)),
                 more_text,
                 font=font_more,
                 fill=muted_fill,

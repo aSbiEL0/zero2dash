@@ -10,9 +10,10 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 
 | Unit | Purpose | Entrypoint |
 | --- | --- | --- |
-| `boot-selector.service` | Boot GIF, 4-quadrant menu, and day/night selector | `boot/boot_selector.py` |
-| `display.service` | Daytime page rotator | `display_rotator.py` |
-| `night.service` | Night blackout screen | `modules/blackout/blackout.py` |
+| `boot-selector.service` | Primary shell runtime, paged app menu, child-app lifecycle owner | `boot/boot_selector.py` |
+| `display.service` | Manual compatibility path for Dashboards app | `display_rotator.py` |
+| `night.service` | Manual compatibility path for Night blackout app | `modules/blackout/blackout.py` |
+| `shell-mode-switch@.service` | Oneshot shell mode request bridge for timers and operators | `boot/boot_selector.py --request-mode <mode>` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
 | `weather.service` | Refresh weather image during day mode | `modules/weather/weather_refresh.py` |
 | `tram.service` | Refresh cached Firswood tram timetable | `modules/trams/tram_gtfs_refresh.py` |
@@ -50,18 +51,21 @@ zero2dash/
 │   ├── photos/
 │   │   ├── drive-sync.py
 │   │   ├── photo-resize.py
-│   │   └── display.py
+│   │   ├── display.py
+│   │   └── slideshow.py
 │   └── pihole/
 │       ├── pihole-bkg.png
 │       ├── pihole_api.py
 │       └── display.py
 ├── systemd/
+│   ├── boot-selector.service
 │   ├── currency-update.service
 │   ├── currency-update.timer
 │   ├── day.timer
 │   ├── display.service
 │   ├── night.service
 │   ├── night.timer
+│   ├── shell-mode-switch@.service
 │   ├── weather.service
 │   └── weather.timer
 ├── cache/
@@ -146,6 +150,24 @@ Common environment variables:
 - `FB_HEIGHT` default: `240`
 - `ACTIVE_HOURS` for day/night timer control
 - `BOOT_SELECTOR_SHUTDOWN_COMMAND` optional safe shutdown command override
+- `BOOT_SELECTOR_MODE_REQUEST_PATH` optional shell mode request file override
+
+## Shell-first runtime
+
+The normal foreground runtime is now `boot-selector.service`.
+
+- The shell owns the framebuffer during normal operation.
+- Dashboards runs as a child app via `display_rotator.py`.
+- Photos runs as a child app via `modules/photos/slideshow.py`.
+- `display.service` and `night.service` remain available as manual compatibility paths.
+- `day.timer` and `night.timer` now target `shell-mode-switch@.service` instead of starting competing foreground UI services.
+
+Shell modes:
+
+- `menu`
+- `dashboards`
+- `photos`
+- `night`
 
 ### Pi-hole page
 
@@ -212,6 +234,9 @@ Google Photos notes:
 - Loopback OAuth must complete on the same machine, or through SSH port forwarding.
 - Personal/shared albums are unreliable for unattended use; `LOCAL_PHOTOS_DIR` is the practical primary source.
 - Bundled fallback assets stay in `modules/photos/` by default.
+- Source selection order is: local, then online Google Photos, then offline cache, then bundled fallback image.
+- `modules/photos/display.py` remains the one-shot renderer for compatibility.
+- `modules/photos/slideshow.py` is the long-running shell-launched Photos app.
 
 ### Currency
 
@@ -268,7 +293,7 @@ Default tram cache files:
 
 ## Module order
 
-The day rotator discovers pages from `modules/`.
+The Dashboards app discovers pages from `modules/`.
 
 Default order is controlled by `modules.txt`:
 
@@ -277,7 +302,6 @@ pihole
 calendash
 currency
 weather
-photos
 trams
 ```
 
@@ -298,11 +322,19 @@ sudo systemctl enable --now boot-selector.service
 sudo systemctl enable --now day.timer night.timer currency-update.timer weather.timer tram.timer tram-alerts.timer
 ```
 
+Optional manual compatibility services:
+
+```sh
+sudo systemctl enable display.service
+sudo systemctl enable night.service
+```
+
 ## Operating the system
 
 ### Start or restart services
 
 ```sh
+sudo systemctl restart boot-selector.service
 sudo systemctl restart display.service
 sudo systemctl restart night.service
 sudo systemctl restart currency-update.service
@@ -314,8 +346,10 @@ sudo systemctl restart tram-alerts.service
 ### Check status
 
 ```sh
+systemctl status boot-selector.service --no-pager
 systemctl status display.service --no-pager
 systemctl status night.service --no-pager
+systemctl status 'shell-mode-switch@*.service' --no-pager
 systemctl status currency-update.service --no-pager
 systemctl status weather.service --no-pager
 systemctl status tram.service --no-pager
@@ -326,8 +360,10 @@ systemctl list-timers --all | grep -E 'day.timer|night.timer|currency-update.tim
 ### View logs
 
 ```sh
+journalctl -u boot-selector.service -n 50 --no-pager
 journalctl -u display.service -n 50 --no-pager
 journalctl -u night.service -n 50 --no-pager
+journalctl -u 'shell-mode-switch@*.service' -n 20 --no-pager
 journalctl -u currency-update.service -n 50 --no-pager
 journalctl -u weather.service -n 50 --no-pager
 journalctl -u tram.service -n 50 --no-pager
@@ -339,8 +375,10 @@ journalctl -u tram-alerts.service -n 50 --no-pager
 Configuration checks:
 
 ```sh
+python3 boot/boot_selector.py --dump-contracts --no-framebuffer --skip-gif
 python3 modules/calendash/calendash-api.py --check-config
 python3 modules/photos/display.py --check-config
+python3 modules/photos/slideshow.py --check-config
 python3 modules/photos/drive-sync.py --check-config
 python3 modules/photos/photo-resize.py --check-config
 python3 modules/currency/currency-rate.py --check-config
@@ -353,7 +391,10 @@ python3 modules/trams/tram_alerts_refresh.py --check-config
 Useful dry-run or local-output checks:
 
 ```sh
+python3 boot/boot_selector.py --no-framebuffer --skip-gif
 python3 modules/photos/display.py --test
+python3 modules/photos/slideshow.py --self-test
+python3 modules/photos/slideshow.py --no-framebuffer --output /tmp/photos-slideshow-test.png --max-frames 2
 python3 modules/currency/currency.py --self-test
 python3 modules/currency/currency-rate.py --self-test
 python3 modules/weather/display.py --self-test
@@ -375,15 +416,45 @@ If you manage photos through a shared Google Drive folder:
 python3 modules/photos/drive-sync.py
 python3 modules/photos/photo-resize.py
 python3 modules/photos/display.py --test
+python3 modules/photos/slideshow.py --self-test
 ```
+
+## Pi live test checklist
+
+Use this sequence on the Pi after deploying the repo and installing dependencies:
+
+```sh
+cd /home/pihole/zero2dash
+python3 -m pip install -r requirements.txt
+python3 boot/boot_selector.py --dump-contracts --no-framebuffer --skip-gif
+python3 modules/photos/slideshow.py --check-config
+python3 modules/photos/slideshow.py --self-test
+python3 display_rotator.py --list-pages
+sudo cp systemd/*.service /etc/systemd/system/
+sudo cp systemd/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart boot-selector.service
+systemctl status boot-selector.service --no-pager
+systemctl list-timers --all | grep -E 'day.timer|night.timer'
+```
+
+Manual runtime smoke checks on the Pi:
+
+- Confirm the shell boots to the paged menu.
+- Launch Dashboards from the shell and verify Photos is not in the rotator.
+- Launch Photos from the shell and verify automatic slide advance.
+- Hold the reserved Home corner and confirm the shell reclaims control.
+- Request shell modes explicitly with `python3 boot/boot_selector.py --request-mode dashboards`, `photos`, `night`, and `menu`.
+- Verify `day.timer` switches to Dashboards and `night.timer` switches to Night without starting a competing foreground service.
+- Confirm `display.service` and `night.service` still work as manual compatibility paths when invoked directly.
 
 ## Notes
 
 - `modules/blackout/blackout.py` uses `modules/blackout/raspberry-pi-icon.png`.
 - `pihole-display-pre.sh` is used by boot, day, and night services.
 - Put the boot animation GIF at `boot/startup.gif`, or override it with `BOOT_SELECTOR_GIF_PATH`.
-- After the boot GIF the selector shows a 4-quadrant menu: top-left opens the day/night screen, top-right plays the info GIF, bottom-left opens the PIN keypad, and bottom-right opens shutdown confirmation.
-- `--selector-image` now refers specifically to the day/night screen.
+- After the boot GIF the shell shows a paged 4-tile menu for Dashboards, Photos, Info GIF, keypad, and shutdown.
+- `--selector-image` is used as the Dashboards preview asset in the shell menu.
 - By default the boot assets are `boot/mainmenu.png`, `boot/day-night.png`, `boot/yes-no.png`, `boot/keypad.png`, and `boot/credits.gif`. Treat those as bundled application assets, not routine `.env` settings.
 - The keypad expects a PIN from `BOOT_SELECTOR_PIN`; a correct PIN runs `/home/pihole/player.sh`, and three consecutive wrong PIN submissions shut the Pi down via `BOOT_SELECTOR_SHUTDOWN_COMMAND`.
 - On shutdown confirmation the selector draws a blank screen before running the shutdown command.
