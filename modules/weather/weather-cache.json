@@ -1,1 +1,1 @@
-{"location": "Manchester", "max_temp_c": 7, "min_temp_c": 4, "observed_at": "2026-03-13T23:45:00", "rain_probability": 34, "temperature_c": 4, "timezone_name": "Europe/London", "wind_kmh": 6}
+{"location": "Manchester", "max_temp_c": 10, "min_temp_c": 2, "observed_at": "2026-03-14T21:30:00", "rain_probability": 0, "temperature_c": 5, "timezone_name": "Europe/London", "wind_kmh": 7}
