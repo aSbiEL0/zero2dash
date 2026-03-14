@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
 from _config import get_env, report_validation_errors
-from display_layout import LAYOUT_2_1, Column, aligned_text_x, centred_text_y, truncate_pair
+from display_layout import LAYOUT_2_1, centred_text_y, truncate_pair
 
 DEFAULT_ROOT = Path('~/zero2dash').expanduser()
 SCRIPT_NAME = "piholestats_manual.py"
@@ -583,7 +583,7 @@ def _format_temp(temp_c: float | None) -> str:
     return f"{temp_c:0.1f}\N{DEGREE SIGN}C"
 
 
-def _draw_stat_row(draw, *, y: int, label: str, value: str, label_column: Column, value_column: Column):
+def _draw_stat_row(draw, *, y: int, label: str, value: str, label_x: int, value_right: int):
     label_font = load_font(22, False)
     value_font = fit_font(draw, value, preferred_size=22, min_size=22, bold=False, max_width=LAYOUT_2_1.right.width)
     label, value = truncate_pair(
@@ -594,14 +594,9 @@ def _draw_stat_row(draw, *, y: int, label: str, value: str, label_column: Column
         left_width_limit=LAYOUT_2_1.left.width,
         right_width_limit=LAYOUT_2_1.right.width,
     )
+    draw.text((label_x, centred_text_y(label_font, label, y)), label, font=label_font, fill=COL_TXT)
     draw.text(
-        (aligned_text_x(label_column, label_font, label, "left"), centred_text_y(label_font, label, y)),
-        label,
-        font=label_font,
-        fill=COL_TXT,
-    )
-    draw.text(
-        (aligned_text_x(value_column, value_font, value, "right"), centred_text_y(value_font, value, y)),
+        (value_right - text_size(draw, value, value_font)[0], centred_text_y(value_font, value, y)),
         value,
         font=value_font,
         fill=COL_TXT,
@@ -628,8 +623,8 @@ def draw_frame(stats, temp_c):
             y=LAYOUT_2_1.row_centre_y(index),
             label=label,
             value=value,
-            label_column=LAYOUT_2_1.left,
-            value_column=LAYOUT_2_1.right,
+            label_x=LAYOUT_2_1.left.left,
+            value_right=LAYOUT_2_1.right.right,
         )
 
     return img
