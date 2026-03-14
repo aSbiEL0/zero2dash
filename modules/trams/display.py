@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import mmap
 import os
 import signal
 import sys
@@ -22,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from framebuffer import FramebufferWriter, rgb888_to_rgb565
 from display_layout import (
     LAYOUT_2_1,
     aligned_text_x,
@@ -80,62 +80,6 @@ def load_timezone(name: str):
     if name in {"Europe/London", "UTC"}:
         return timezone.utc
     raise ValueError(f"Timezone data unavailable for {name!r}; install tzdata or use a host with IANA timezone support")
-
-
-def rgb888_to_rgb565(image: Image.Image) -> bytes:
-    rgb = image.convert("RGB").tobytes()
-    payload = bytearray((len(rgb) // 3) * 2)
-    out_idx = 0
-    for idx in range(0, len(rgb), 3):
-        value = ((rgb[idx] & 0xF8) << 8) | ((rgb[idx + 1] & 0xFC) << 3) | (rgb[idx + 2] >> 3)
-        payload[out_idx] = value & 0xFF
-        payload[out_idx + 1] = (value >> 8) & 0xFF
-        out_idx += 2
-    return bytes(payload)
-
-
-class FramebufferWriter:
-    def __init__(self, fbdev: str, width: int, height: int) -> None:
-        self.fbdev = fbdev
-        self.width = width
-        self.height = height
-        self.expected = width * height * 2
-        self._handle: Any | None = None
-        self._mapping: mmap.mmap | None = None
-
-    def open(self) -> None:
-        handle = open(self.fbdev, "r+b", buffering=0)
-        self._handle = handle
-        self._mapping = mmap.mmap(handle.fileno(), self.expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
-
-    def write_frame(self, image: Image.Image) -> None:
-        if self._mapping is None:
-            raise RuntimeError("Framebuffer is not open")
-        payload = rgb888_to_rgb565(image)
-        if len(payload) != self.expected:
-            raise RuntimeError(f"Framebuffer payload size mismatch: expected {self.expected} bytes, got {len(payload)} bytes")
-        self._mapping.seek(0)
-        self._mapping.write(payload)
-
-    def write_region(self, image: Image.Image, left: int, top: int) -> None:
-        if self._mapping is None:
-            raise RuntimeError("Framebuffer is not open")
-        payload = rgb888_to_rgb565(image)
-        row_bytes = image.width * 2
-        for row in range(image.height):
-            start = row * row_bytes
-            end = start + row_bytes
-            offset = (((top + row) * self.width) + left) * 2
-            self._mapping.seek(offset)
-            self._mapping.write(payload[start:end])
-
-    def close(self) -> None:
-        if self._mapping is not None:
-            self._mapping.close()
-            self._mapping = None
-        if self._handle is not None:
-            self._handle.close()
-            self._handle = None
 
 
 def parse_args() -> argparse.Namespace:

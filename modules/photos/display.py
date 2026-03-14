@@ -57,6 +57,7 @@ from _config import get_env, report_validation_errors
 
 from dotenv import load_dotenv
 from PIL import Image, ImageEnhance
+from framebuffer import rgb888_to_rgb565 as shared_rgb888_to_rgb565, write_framebuffer as shared_write_framebuffer
 
 try:
     from google.auth.transport.requests import Request
@@ -635,29 +636,11 @@ def composite_frame(photo_path: Path, logo_path: Path, width: int, height: int) 
 
 
 def rgb888_to_rgb565_bytes(img: Image.Image) -> bytes:
-    rgb = img.convert("RGB").tobytes()
-    out = bytearray((len(rgb) // 3) * 2)
-    j = 0
-    for i in range(0, len(rgb), 3):
-        r = rgb[i]
-        g = rgb[i + 1]
-        b = rgb[i + 2]
-        value = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-        out[j] = value & 0xFF
-        out[j + 1] = (value >> 8) & 0xFF
-        j += 2
-    return bytes(out)
+    return shared_rgb888_to_rgb565(img)
 
 
 def write_framebuffer(img: Image.Image, fb_device: str, width: int, height: int) -> None:
-    payload = rgb888_to_rgb565_bytes(img)
-    expected = width * height * 2
-    if len(payload) != expected:
-        raise ValueError(f"RGB565 payload size mismatch: {len(payload)} != {expected}")
-
-    with open(fb_device, "r+b", buffering=0) as fb:
-        fb.seek(0)
-        fb.write(payload)
+    shared_write_framebuffer(img, fb_device, width, height)
 
 
 def choose_local_image(config: Config, log: Log) -> Path:

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import fcntl
 import glob
-import json
 import os
 import argparse
 import re
@@ -28,44 +27,39 @@ import time
 from pathlib import Path
 
 import touch_calibration
+from rotator.backoff import calculate_backoff_secs, format_failure_reason
+from rotator.config import (
+    parse_backoff_max_secs,
+    parse_quarantine_cycles,
+    parse_quarantine_failure_threshold,
+    parse_rotate_secs,
+    parse_tap_debounce,
+    parse_width,
+)
+from rotator.defaults import (
+    DASHBOARD_EXCLUDED_MODULES,
+    DEFAULT_BACKOFF_MAX_SECS,
+    DEFAULT_BACKOFF_STEPS,
+    DEFAULT_MODULE_ENTRYPOINT,
+    DEFAULT_MODULE_METADATA_FILE,
+    DEFAULT_MODULE_ORDER_FILE,
+    DEFAULT_MODULES_DIR,
+    DEFAULT_QUARANTINE_CYCLES,
+    DEFAULT_QUARANTINE_FAILURE_THRESHOLD,
+    DEFAULT_ROTATE_SECS,
+    DEFAULT_WIDTH,
+    DISCOVERY_CONFIG_DOCS,
+    MIN_DWELL_SECS,
+    TAP_DEBOUNCE_SECS,
+)
+from rotator import discovery as rotator_discovery
 
 
-DEFAULT_MODULES_DIR = "modules"
-DEFAULT_MODULE_ORDER_FILE = "modules.txt"
-DEFAULT_MODULE_ENTRYPOINT = "display.py"
-DEFAULT_MODULE_METADATA_FILE = "rotator.json"
-DEFAULT_ROTATE_SECS = 13
-MIN_DWELL_SECS = 5
 SHUTDOWN_WAIT_SECS = 5
 DEFAULT_FBDEV = "/dev/fb1"
-DEFAULT_WIDTH = 320
 DOUBLE_TAP_WINDOW_SECS = 0.25
-TAP_DEBOUNCE_SECS = 0.20
 DEFAULT_FB_BLANK_FAILURE_THRESHOLD = 3
 DEFAULT_POWER_SUMMARY_INTERVAL_SECS = 300
-DEFAULT_BACKOFF_STEPS = (10, 30, 60)
-DEFAULT_BACKOFF_MAX_SECS = 300
-DEFAULT_QUARANTINE_FAILURE_THRESHOLD = 3
-DEFAULT_QUARANTINE_CYCLES = 3
-DASHBOARD_EXCLUDED_MODULES = frozenset({"photos"})
-
-DISCOVERY_CONFIG_DOCS = [
-    {
-        "env": "ROTATOR_MODULES_DIR",
-        "default": DEFAULT_MODULES_DIR,
-        "description": "Directory containing rotator module folders.",
-    },
-    {
-        "env": "ROTATOR_MODULE_ORDER_FILE",
-        "default": DEFAULT_MODULE_ORDER_FILE,
-        "description": "Optional module-order manifest. When absent, modules are discovered alphabetically.",
-    },
-    {
-        "env": "ROTATOR_MODULE_ENTRYPOINT",
-        "default": DEFAULT_MODULE_ENTRYPOINT,
-        "description": "Entrypoint filename expected inside each module directory.",
-    },
-]
 
 # linux/input-event-codes.h
 EV_SYN = 0x00
@@ -322,183 +316,30 @@ def _resolve_path(raw_path: str, *, base_dir: Path) -> Path:
     return path
 
 
-def _read_module_manifest(order_file: Path) -> list[tuple[int, str]]:
-    modules: list[tuple[int, str]] = []
-    for line_number, raw_line in enumerate(order_file.read_text(encoding="utf-8").splitlines(), start=1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        modules.append((line_number, line))
-    return modules
-
-
-def _module_entrypoint(module_dir: Path, entrypoint_name: str) -> Path:
-    return module_dir / entrypoint_name
-
-
-def _discover_module_entrypoints(modules_dir: Path, entrypoint_name: str) -> list[Path]:
-    discovered: list[Path] = []
-    for child in sorted(modules_dir.iterdir()):
-        if not child.is_dir():
-            continue
-        if child.name.lower() in DASHBOARD_EXCLUDED_MODULES:
-            continue
-        entrypoint = _module_entrypoint(child, entrypoint_name)
-        if entrypoint.is_file():
-            discovered.append(entrypoint)
-    return discovered
-
-
-def _load_module_metadata(module_dir: Path) -> dict[str, object] | None:
-    metadata_path = module_dir / DEFAULT_MODULE_METADATA_FILE
-    if not metadata_path.is_file():
-        return None
-
-    try:
-        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        print(f"[rotator] Ignoring invalid metadata file {metadata_path}: {exc}", flush=True)
-        return None
-
-    if not isinstance(payload, dict):
-        print(f"[rotator] Ignoring invalid metadata file {metadata_path}: expected a JSON object", flush=True)
-        return None
-    return payload
-
-
-def resolve_page_dwell_secs(script_path: str, base_dir: Path, default_dwell_secs: int) -> int:
-    modules_dir_raw = os.environ.get("ROTATOR_MODULES_DIR", DEFAULT_MODULES_DIR).strip() or DEFAULT_MODULES_DIR
-    modules_dir = _resolve_path(modules_dir_raw, base_dir=base_dir)
-    script = Path(script_path)
-
-    try:
-        relative_parts = script.relative_to(modules_dir).parts
-    except ValueError:
-        return default_dwell_secs
-
-    if len(relative_parts) < 2:
-        return default_dwell_secs
-
-    module_dir = modules_dir / relative_parts[0]
-    metadata = _load_module_metadata(module_dir)
-    if metadata is None or "dwell_secs" not in metadata:
-        return default_dwell_secs
-
-    raw_dwell_secs = metadata.get("dwell_secs")
-    try:
-        dwell_secs = int(raw_dwell_secs)
-    except (TypeError, ValueError):
-        dwell_secs = -1
-
-    if dwell_secs < MIN_DWELL_SECS:
-        print(
-            (
-                f"[rotator] Invalid dwell_secs for {script_path} in "
-                f"{module_dir / DEFAULT_MODULE_METADATA_FILE}: {raw_dwell_secs!r}; "
-                f"using ROTATOR_SECS={default_dwell_secs}"
-            ),
-            flush=True,
-        )
-        return default_dwell_secs
-
-    print(
-        (
-            f"[rotator] dwell_secs override for {script_path}: {dwell_secs} "
-            f"via {module_dir / DEFAULT_MODULE_METADATA_FILE}"
-        ),
-        flush=True,
-    )
-    return dwell_secs
-
-
-def resolve_page_specs(page_entries: list[str], base_dir: Path, default_dwell_secs: int) -> list[tuple[str, int]]:
-    page_specs: list[tuple[str, int]] = []
-    for item in page_entries:
-        resolved = resolve_script(item, base_dir)
-        if resolved is None:
-            continue
-        page_specs.append((resolved, resolve_page_dwell_secs(resolved, base_dir, default_dwell_secs)))
-    return page_specs
-
-
-def discover_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
-    modules_dir_raw = os.environ.get("ROTATOR_MODULES_DIR", DEFAULT_MODULES_DIR).strip() or DEFAULT_MODULES_DIR
-    module_order_file_raw = os.environ.get("ROTATOR_MODULE_ORDER_FILE", DEFAULT_MODULE_ORDER_FILE).strip() or DEFAULT_MODULE_ORDER_FILE
-    module_entrypoint = os.environ.get("ROTATOR_MODULE_ENTRYPOINT", DEFAULT_MODULE_ENTRYPOINT).strip() or DEFAULT_MODULE_ENTRYPOINT
-
-    modules_dir = _resolve_path(modules_dir_raw, base_dir=base_dir)
-    if not modules_dir.exists():
-        print(f"[rotator] Modules directory does not exist: {modules_dir}", flush=True)
-        return []
-
-    included: list[str] = []
-    discovery_report: list[tuple[str, str]] = []
-    seen_modules: set[str] = set()
-
-    order_file = _resolve_path(module_order_file_raw, base_dir=base_dir)
-    discovery_source = "fallback scan"
-
-    if order_file.exists():
-        try:
-            order_file_display = order_file.relative_to(base_dir).as_posix()
-        except ValueError:
-            order_file_display = str(order_file)
-        discovery_source = f"manifest {order_file_display}"
-
-        for line_number, module_name in _read_module_manifest(order_file):
-            if "/" in module_name or "\\" in module_name:
-                discovery_report.append((module_name, f"skipped (invalid module name at line {line_number})"))
-                continue
-            if module_name.lower() in DASHBOARD_EXCLUDED_MODULES:
-                discovery_report.append((module_name, f"skipped (excluded dashboard module at line {line_number})"))
-                continue
-            if module_name in seen_modules:
-                discovery_report.append((module_name, f"skipped (duplicate module at line {line_number})"))
-                continue
-            seen_modules.add(module_name)
-
-            module_dir = modules_dir / module_name
-            entrypoint = _module_entrypoint(module_dir, module_entrypoint)
-            if not module_dir.is_dir():
-                discovery_report.append((module_name, f"skipped (missing module directory at line {line_number})"))
-                continue
-            if not entrypoint.is_file():
-                discovery_report.append((module_name, f"skipped (missing {module_entrypoint} at line {line_number})"))
-                continue
-
-            relative = entrypoint.relative_to(base_dir).as_posix()
-            included.append(relative)
-            discovery_report.append((relative, f"included (manifest line {line_number})"))
-    else:
-        for entrypoint in _discover_module_entrypoints(modules_dir, module_entrypoint):
-            relative = entrypoint.relative_to(base_dir).as_posix()
-            included.append(relative)
-            discovery_report.append((relative, "included (fallback alphabetical scan)"))
-
-    print("[rotator] Discovery config:", flush=True)
-    for item in DISCOVERY_CONFIG_DOCS:
-        value = os.environ.get(item["env"], str(item["default"])).strip() or str(item["default"])
-        print(f"[rotator]   {item['env']}={value} ({item['description']})", flush=True)
-    print(f"[rotator]   source={discovery_source}", flush=True)
-
-    print("[rotator] Discovery result:", flush=True)
-    for script, status in discovery_report:
-        print(f"[rotator]   {script}: {status}", flush=True)
-
-    if list_pages:
-        print("[rotator] --list-pages summary:", flush=True)
-        for script, status in discovery_report:
-            print(f"{script}\t{status}", flush=True)
-
-    return included
-
-
 def parse_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
     # Backward-compatible manual override; otherwise scan a directory.
     raw = os.environ.get("ROTATOR_PAGES", "").strip()
     if raw:
         return [entry.strip() for entry in raw.split(",") if entry.strip()]
-    return discover_pages(base_dir, list_pages=list_pages)
+    return discover_pages(base_dir, list_pages=list_pages, resolve_path=lambda raw_path, root: _resolve_path(raw_path, base_dir=root))
+
+
+def resolve_page_specs(page_entries: list[str], base_dir: Path, default_dwell_secs: int) -> list[tuple[str, int]]:
+    return rotator_discovery.resolve_page_specs(
+        page_entries,
+        base_dir,
+        default_dwell_secs,
+        resolve_script=resolve_script,
+        resolve_path=lambda raw_path, root: _resolve_path(raw_path, base_dir=root),
+    )
+
+
+def discover_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
+    return rotator_discovery.discover_pages(
+        base_dir,
+        list_pages=list_pages,
+        resolve_path=lambda raw_path, root: _resolve_path(raw_path, base_dir=root),
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -514,76 +355,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Probe touch input selection and print the chosen device/reason, then exit.",
     )
     return parser.parse_args(argv)
-
-
-def parse_rotate_secs() -> int:
-    raw = os.environ.get("ROTATOR_SECS", str(DEFAULT_ROTATE_SECS)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = DEFAULT_ROTATE_SECS
-    return max(MIN_DWELL_SECS, value)
-
-
-def parse_width() -> int:
-    raw = os.environ.get("ROTATOR_TOUCH_WIDTH", str(DEFAULT_WIDTH)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = DEFAULT_WIDTH
-    return max(100, value)
-
-
-def parse_tap_debounce() -> float:
-    raw = os.environ.get("ROTATOR_TAP_DEBOUNCE_SECS", str(TAP_DEBOUNCE_SECS)).strip()
-    try:
-        value = float(raw)
-    except ValueError:
-        value = TAP_DEBOUNCE_SECS
-    return max(0.0, value)
-
-
-def parse_quarantine_failure_threshold() -> int:
-    raw = os.environ.get("ROTATOR_QUARANTINE_FAILURE_THRESHOLD", str(DEFAULT_QUARANTINE_FAILURE_THRESHOLD)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = DEFAULT_QUARANTINE_FAILURE_THRESHOLD
-    return max(1, value)
-
-
-def parse_quarantine_cycles() -> int:
-    raw = os.environ.get("ROTATOR_QUARANTINE_CYCLES", str(DEFAULT_QUARANTINE_CYCLES)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = DEFAULT_QUARANTINE_CYCLES
-    return max(1, value)
-
-
-def parse_backoff_max_secs() -> int:
-    raw = os.environ.get("ROTATOR_BACKOFF_MAX_SECS", str(DEFAULT_BACKOFF_MAX_SECS)).strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = DEFAULT_BACKOFF_MAX_SECS
-    return max(1, value)
-
-
-def calculate_backoff_secs(consecutive_failures: int, backoff_cap_secs: int) -> int:
-    if consecutive_failures <= 0:
-        return 0
-    if consecutive_failures <= len(DEFAULT_BACKOFF_STEPS):
-        return min(DEFAULT_BACKOFF_STEPS[consecutive_failures - 1], backoff_cap_secs)
-    return min(DEFAULT_BACKOFF_STEPS[-1], backoff_cap_secs)
-
-
-def format_failure_reason(returncode: int | None) -> str:
-    if returncode is None:
-        return "process stopped without a return code"
-    if returncode < 0:
-        return f"terminated by signal {-returncode}"
-    return f"exit code {returncode}"
 
 
 def _candidate_absinfo_paths(device: str) -> list[Path]:

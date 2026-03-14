@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import mmap
 import os
-import struct
 import subprocess
 import sys
 import time
@@ -16,6 +14,12 @@ from typing import Callable
 from PIL import Image
 
 MODULE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = MODULE_DIR.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from framebuffer import write_framebuffer as write_rgb565_framebuffer
+
 DEFAULT_IMAGE = MODULE_DIR / "weather.png"
 DEFAULT_REFRESH_SCRIPT = MODULE_DIR / "weather_refresh.py"
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
@@ -25,20 +29,6 @@ REFRESH_WAIT_SECS = 5.0
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
 
-def rgb888_to_rgb565(image: Image.Image) -> bytes:
-    r, g, b = image.split()
-    r = r.point(lambda value: value >> 3)
-    g = g.point(lambda value: value >> 2)
-    b = b.point(lambda value: value >> 3)
-
-    rgb565 = bytearray()
-    rp, gp, bp = r.tobytes(), g.tobytes(), b.tobytes()
-    for idx in range(len(rp)):
-        value = ((rp[idx] & 0x1F) << 11) | ((gp[idx] & 0x3F) << 5) | (bp[idx] & 0x1F)
-        rgb565 += struct.pack("<H", value)
-    return bytes(rgb565)
-
-
 def load_frame(image_path: Path, width: int, height: int) -> Image.Image:
     if not image_path.exists():
         raise FileNotFoundError(f"Weather image not found: {image_path}")
@@ -46,16 +36,7 @@ def load_frame(image_path: Path, width: int, height: int) -> Image.Image:
 
 
 def write_to_framebuffer(image: Image.Image, fbdev: str, width: int, height: int) -> None:
-    payload = rgb888_to_rgb565(image)
-    expected = width * height * 2
-    if len(payload) != expected:
-        raise RuntimeError(f"Framebuffer payload size mismatch: expected {expected} bytes, got {len(payload)} bytes")
-
-    with open(fbdev, "r+b", buffering=0) as framebuffer:
-        mm = mmap.mmap(framebuffer.fileno(), expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
-        mm.seek(0)
-        mm.write(payload)
-        mm.close()
+    write_rgb565_framebuffer(image, fbdev, width, height)
 
 
 def refresh_image(refresh_script: Path) -> int:
@@ -134,14 +115,14 @@ def main() -> int:
         return 1
 
     if not ensure_image(image_path, refresh_script, args.refresh_wait):
-        print(f"Weather image still unavailable after one refresh attempt: {image_path}")
-        return 0
+        print(f"Weather image still unavailable after one refresh attempt: {image_path}", file=sys.stderr)
+        return 1
 
     try:
         frame = load_frame(image_path, args.width, args.height)
     except FileNotFoundError as exc:
         print(exc, file=sys.stderr)
-        return 0
+        return 1
 
     if args.output:
         frame.save(args.output)
