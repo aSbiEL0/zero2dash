@@ -33,7 +33,9 @@ import touch_calibration
 DEFAULT_MODULES_DIR = "modules"
 DEFAULT_MODULE_ORDER_FILE = "modules.txt"
 DEFAULT_MODULE_ENTRYPOINT = "display.py"
+DEFAULT_MODULE_METADATA_FILE = "rotator.json"
 DEFAULT_ROTATE_SECS = 13
+MIN_DWELL_SECS = 5
 SHUTDOWN_WAIT_SECS = 5
 DEFAULT_FBDEV = "/dev/fb1"
 DEFAULT_WIDTH = 320
@@ -45,6 +47,7 @@ DEFAULT_BACKOFF_STEPS = (10, 30, 60)
 DEFAULT_BACKOFF_MAX_SECS = 300
 DEFAULT_QUARANTINE_FAILURE_THRESHOLD = 3
 DEFAULT_QUARANTINE_CYCLES = 3
+DASHBOARD_EXCLUDED_MODULES = frozenset({"photos"})
 
 DISCOVERY_CONFIG_DOCS = [
     {
@@ -338,10 +341,84 @@ def _discover_module_entrypoints(modules_dir: Path, entrypoint_name: str) -> lis
     for child in sorted(modules_dir.iterdir()):
         if not child.is_dir():
             continue
+        if child.name.lower() in DASHBOARD_EXCLUDED_MODULES:
+            continue
         entrypoint = _module_entrypoint(child, entrypoint_name)
         if entrypoint.is_file():
             discovered.append(entrypoint)
     return discovered
+
+
+def _load_module_metadata(module_dir: Path) -> dict[str, object] | None:
+    metadata_path = module_dir / DEFAULT_MODULE_METADATA_FILE
+    if not metadata_path.is_file():
+        return None
+
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[rotator] Ignoring invalid metadata file {metadata_path}: {exc}", flush=True)
+        return None
+
+    if not isinstance(payload, dict):
+        print(f"[rotator] Ignoring invalid metadata file {metadata_path}: expected a JSON object", flush=True)
+        return None
+    return payload
+
+
+def resolve_page_dwell_secs(script_path: str, base_dir: Path, default_dwell_secs: int) -> int:
+    modules_dir_raw = os.environ.get("ROTATOR_MODULES_DIR", DEFAULT_MODULES_DIR).strip() or DEFAULT_MODULES_DIR
+    modules_dir = _resolve_path(modules_dir_raw, base_dir=base_dir)
+    script = Path(script_path)
+
+    try:
+        relative_parts = script.relative_to(modules_dir).parts
+    except ValueError:
+        return default_dwell_secs
+
+    if len(relative_parts) < 2:
+        return default_dwell_secs
+
+    module_dir = modules_dir / relative_parts[0]
+    metadata = _load_module_metadata(module_dir)
+    if metadata is None or "dwell_secs" not in metadata:
+        return default_dwell_secs
+
+    raw_dwell_secs = metadata.get("dwell_secs")
+    try:
+        dwell_secs = int(raw_dwell_secs)
+    except (TypeError, ValueError):
+        dwell_secs = -1
+
+    if dwell_secs < MIN_DWELL_SECS:
+        print(
+            (
+                f"[rotator] Invalid dwell_secs for {script_path} in "
+                f"{module_dir / DEFAULT_MODULE_METADATA_FILE}: {raw_dwell_secs!r}; "
+                f"using ROTATOR_SECS={default_dwell_secs}"
+            ),
+            flush=True,
+        )
+        return default_dwell_secs
+
+    print(
+        (
+            f"[rotator] dwell_secs override for {script_path}: {dwell_secs} "
+            f"via {module_dir / DEFAULT_MODULE_METADATA_FILE}"
+        ),
+        flush=True,
+    )
+    return dwell_secs
+
+
+def resolve_page_specs(page_entries: list[str], base_dir: Path, default_dwell_secs: int) -> list[tuple[str, int]]:
+    page_specs: list[tuple[str, int]] = []
+    for item in page_entries:
+        resolved = resolve_script(item, base_dir)
+        if resolved is None:
+            continue
+        page_specs.append((resolved, resolve_page_dwell_secs(resolved, base_dir, default_dwell_secs)))
+    return page_specs
 
 
 def discover_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
@@ -371,6 +448,9 @@ def discover_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
         for line_number, module_name in _read_module_manifest(order_file):
             if "/" in module_name or "\\" in module_name:
                 discovery_report.append((module_name, f"skipped (invalid module name at line {line_number})"))
+                continue
+            if module_name.lower() in DASHBOARD_EXCLUDED_MODULES:
+                discovery_report.append((module_name, f"skipped (excluded dashboard module at line {line_number})"))
                 continue
             if module_name in seen_modules:
                 discovery_report.append((module_name, f"skipped (duplicate module at line {line_number})"))
@@ -442,7 +522,7 @@ def parse_rotate_secs() -> int:
         value = int(raw)
     except ValueError:
         value = DEFAULT_ROTATE_SECS
-    return max(5, value)
+    return max(MIN_DWELL_SECS, value)
 
 
 def parse_width() -> int:
@@ -829,11 +909,9 @@ def main() -> int:
     if args.probe_touch:
         return run_touch_probe(touch_width)
 
-    pages = [
-        resolved
-        for resolved in (resolve_script(item, base_dir) for item in parse_pages(base_dir, list_pages=args.list_pages))
-        if resolved is not None
-    ]
+    page_specs = resolve_page_specs(parse_pages(base_dir, list_pages=args.list_pages), base_dir, rotate_secs)
+    pages = [script for script, _dwell_secs in page_specs]
+    page_dwell_secs = {script: dwell_secs for script, dwell_secs in page_specs}
 
     if args.list_pages:
         return 0 if pages else 1
@@ -900,7 +978,7 @@ def main() -> int:
 
         active_child = launch_page(script)
 
-        rotate_due = time.monotonic() + rotate_secs
+        rotate_due = time.monotonic() + page_dwell_secs.get(script, rotate_secs)
         next_index = (index + 1) % len(pages)
         early_exit = False
         completed_full_duration = False

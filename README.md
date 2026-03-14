@@ -50,12 +50,10 @@ zero2dash/
 │   ├── photos/
 │   │   ├── drive-sync.py
 │   │   ├── photo-resize.py
-│   │   ├── photos-shuffle.py
 │   │   └── display.py
 │   └── pihole/
 │       ├── pihole-bkg.png
 │       ├── pihole_api.py
-│       ├── piholestats_manual.py
 │       └── display.py
 ├── systemd/
 │   ├── currency-update.service
@@ -67,7 +65,6 @@ zero2dash/
 │   ├── weather.service
 │   └── weather.timer
 ├── cache/
-├── docs/
 ├── photos/
 ├── requirements.txt
 └── README.md
@@ -343,12 +340,12 @@ Configuration checks:
 
 ```sh
 python3 modules/calendash/calendash-api.py --check-config
-python3 modules/photos/photos-shuffle.py --check-config
+python3 modules/photos/display.py --check-config
 python3 modules/photos/drive-sync.py --check-config
 python3 modules/photos/photo-resize.py --check-config
 python3 modules/currency/currency-rate.py --check-config
 python3 modules/weather/weather_refresh.py --check-config
-python3 modules/pihole/piholestats_manual.py --check-config
+python3 modules/pihole/display.py --check-config
 python3 modules/trams/tram_gtfs_refresh.py --check-config
 python3 modules/trams/tram_alerts_refresh.py --check-config
 ```
@@ -356,12 +353,12 @@ python3 modules/trams/tram_alerts_refresh.py --check-config
 Useful dry-run or local-output checks:
 
 ```sh
-python3 modules/photos/photos-shuffle.py --test
+python3 modules/photos/display.py --test
 python3 modules/currency/currency.py --self-test
 python3 modules/currency/currency-rate.py --self-test
 python3 modules/weather/display.py --self-test
 python3 modules/weather/weather_refresh.py --self-test
-python3 modules/pihole/piholestats_manual.py --output-image /tmp/pihole-test.png
+python3 modules/pihole/display.py --output-image /tmp/pihole-test.png
 python3 modules/calendash/display.py --output /tmp/calendash-display.png --no-framebuffer
 python3 modules/weather/display.py --output /tmp/weather-display.png --no-framebuffer
 python3 modules/weather/weather_refresh.py --output /tmp/weather.png
@@ -377,7 +374,7 @@ If you manage photos through a shared Google Drive folder:
 ```sh
 python3 modules/photos/drive-sync.py
 python3 modules/photos/photo-resize.py
-python3 modules/photos/photos-shuffle.py --test
+python3 modules/photos/display.py --test
 ```
 
 ## Notes

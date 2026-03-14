@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boot-time framebuffer selector with a 4-quadrant touch menu."""
+"""Boot-time framebuffer shell with a paged 4-tile touch menu."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 from dataclasses import dataclass
 import fcntl
 import glob
+import json
 import mmap
 import os
 import re
@@ -16,6 +17,7 @@ import signal
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -47,6 +49,14 @@ DEFAULT_TOUCH_DEBOUNCE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_DEBOUNCE
 DEFAULT_GIF_SPEED = float(os.environ.get("BOOT_SELECTOR_GIF_SPEED", "0.5"))
 DEFAULT_TOUCH_INVERT_Y = os.environ.get("BOOT_SELECTOR_TOUCH_INVERT_Y", "0").strip().lower() not in {"0", "false", "no", "off"}
 DEFAULT_SHOW_TOUCH_ZONES = os.environ.get("BOOT_SELECTOR_SHOW_TOUCH_ZONES", "0").strip().lower() not in {"0", "false", "no", "off"}
+DEFAULT_CHILD_STOP_GRACE_SECS = float(os.environ.get("BOOT_SELECTOR_CHILD_STOP_GRACE_SECS", "3.0"))
+DEFAULT_HOME_GESTURE_HOLD_SECS = float(os.environ.get("BOOT_SELECTOR_HOME_GESTURE_HOLD_SECS", "1.5"))
+DEFAULT_HOME_GESTURE_CORNER_WIDTH = int(os.environ.get("BOOT_SELECTOR_HOME_GESTURE_CORNER_WIDTH", "64"))
+DEFAULT_HOME_GESTURE_CORNER_HEIGHT = int(os.environ.get("BOOT_SELECTOR_HOME_GESTURE_CORNER_HEIGHT", "48"))
+DEFAULT_MODE_REQUEST_PATH = os.environ.get(
+    "BOOT_SELECTOR_MODE_REQUEST_PATH",
+    str(Path(tempfile.gettempdir()) / "zero2dash-shell-mode-request"),
+)
 DEFAULT_GIF_FRAME_MS = 100
 BACKGROUND_RGB = (0, 0, 0)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
@@ -67,6 +77,22 @@ MAIN_MENU_PADLOCK = "padlock"
 MAIN_MENU_SHUTDOWN = "shutdown"
 DAY_NIGHT_DAY = "day"
 DAY_NIGHT_NIGHT = "night"
+SHELL_MODE_MENU = "menu"
+SHELL_MODE_DASHBOARDS = "dashboards"
+SHELL_MODE_PHOTOS = "photos"
+SHELL_MODE_NIGHT = "night"
+SHELL_MODES = (
+    SHELL_MODE_MENU,
+    SHELL_MODE_DASHBOARDS,
+    SHELL_MODE_PHOTOS,
+    SHELL_MODE_NIGHT,
+)
+SHELL_STATE_BOOT_GIF = "boot_gif"
+SHELL_STATE_MAIN_MENU = "main_menu"
+SHELL_STATE_DAY_NIGHT_MENU = "day_night_menu"
+SHELL_STATE_KEYPAD = "keypad"
+SHELL_STATE_SHUTDOWN_CONFIRM = "shutdown_confirm"
+SHELL_STATE_RUNNING_APP = "running_app"
 SHUTDOWN_CONFIRM = "confirm"
 SHUTDOWN_CANCEL = "cancel"
 INFO_SKIP_ACTION = "menu"
@@ -74,6 +100,30 @@ KEYPAD_OK = "ok"
 KEYPAD_NO = "no"
 KEYPAD_DIGITS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"}
 MAX_PIN_FAILURES = 3
+APP_KIND_CHILD_PROCESS = "child_process"
+APP_KIND_SHELL_SCREEN = "shell_screen"
+APP_ID_DASHBOARDS = "dashboards"
+APP_ID_PHOTOS = "photos"
+APP_ID_INFO = "info"
+APP_ID_KEYPAD = "keypad"
+APP_ID_SHUTDOWN = "shutdown"
+INTERNAL_APP_ID_NIGHT = "night"
+POLL_TIMEOUT_SECS = 0.2
+MENU_TILES_PER_PAGE = 4
+MENU_ACTION_NOOP = "menu_noop"
+MENU_ACTION_PREV_PAGE = "menu_prev_page"
+MENU_ACTION_NEXT_PAGE = "menu_next_page"
+MENU_HEADER_HEIGHT = 20
+MENU_FOOTER_HEIGHT = 28
+MENU_MARGIN = 8
+MENU_GAP = 8
+MENU_ACCENT_RGB = (90, 180, 255)
+MENU_BACKGROUND_TOP_RGB = (11, 18, 28)
+MENU_BACKGROUND_BOTTOM_RGB = (24, 34, 48)
+MENU_TILE_FILL_RGB = (26, 35, 48)
+MENU_TILE_OUTLINE_RGB = (74, 110, 150)
+MENU_TEXT_RGB = (244, 247, 250)
+MENU_SUBTLE_TEXT_RGB = (180, 192, 206)
 
 EV_SYN = 0x00
 EV_KEY = 0x01
@@ -110,6 +160,150 @@ class TouchRegion:
         return self.left <= screen_x <= self.right and self.top <= screen_y <= self.bottom
 
 
+@dataclass(frozen=True)
+class AppSpec:
+    id: str
+    label: str
+    menu_page: int
+    tile_index: int
+    kind: str
+    launch_command: tuple[str, ...]
+    preview_asset: str
+    supports_home_gesture: bool
+
+    def to_contract_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "menu_page": self.menu_page,
+            "tile_index": self.tile_index,
+            "kind": self.kind,
+            "launch_command": list(self.launch_command),
+            "preview_asset": self.preview_asset,
+            "supports_home_gesture": self.supports_home_gesture,
+        }
+
+
+@dataclass
+class RunningChildApp:
+    app: AppSpec
+    process: subprocess.Popen[bytes] | subprocess.Popen[str]
+    started_at: float
+
+
+@dataclass(frozen=True)
+class ShellImages:
+    menu_pages: tuple[Image.Image, ...]
+    shutdown: Image.Image
+    keypad: Image.Image
+    blank: Image.Image
+
+
+@dataclass(frozen=True)
+class MenuPage:
+    page_index: int
+    page_count: int
+    tile_app_ids: tuple[str | None, ...]
+    image: Image.Image
+
+
+class ModeSwitchRequestStore:
+    def __init__(self, path_like: str | Path) -> None:
+        self.path = Path(path_like)
+
+    def write_request(self, mode: str) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_suffix(f"{self.path.suffix}.tmp")
+        tmp_path.write_text(f"{mode}\n", encoding="utf-8")
+        os.replace(tmp_path, self.path)
+
+    def consume_request(self) -> str | None:
+        try:
+            payload = self.path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            print(f"[boot-selector] Failed to read mode request {self.path}: {exc}", file=sys.stderr, flush=True)
+            return None
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"[boot-selector] Failed to clear mode request {self.path}: {exc}", file=sys.stderr, flush=True)
+        if payload not in SHELL_MODES:
+            print(f"[boot-selector] Ignoring invalid shell mode request: {payload!r}", file=sys.stderr, flush=True)
+            return None
+        print(f"[boot-selector] Consumed shell mode request: {payload}", flush=True)
+        return payload
+
+
+class ChildAppManager:
+    def __init__(self, stop_grace_secs: float) -> None:
+        self.stop_grace_secs = stop_grace_secs
+        self._running: RunningChildApp | None = None
+
+    def running_app(self) -> RunningChildApp | None:
+        if self._running is None:
+            return None
+        return_code = self._running.process.poll()
+        if return_code is None:
+            return self._running
+        print(
+            f"[boot-selector] Child app {self._running.app.id} exited with code {return_code}. Returning control to shell.",
+            flush=True,
+        )
+        self._running = None
+        return None
+
+    def is_running(self) -> bool:
+        return self.running_app() is not None
+
+    def start_app(self, app: AppSpec) -> bool:
+        if app.kind != APP_KIND_CHILD_PROCESS:
+            print(f"[boot-selector] App {app.id} is shell-owned and cannot be launched as a child process.", file=sys.stderr, flush=True)
+            return False
+        if not app.launch_command:
+            print(f"[boot-selector] App {app.id} does not define a launch command.", file=sys.stderr, flush=True)
+            return False
+        current = self.running_app()
+        if current is not None and current.app.id == app.id:
+            print(f"[boot-selector] Child app {app.id} is already running.", flush=True)
+            return True
+        if current is not None:
+            self.stop_current(reason=f"switching from {current.app.id} to {app.id}")
+        print(f"[boot-selector] Starting child app {app.id}: {list(app.launch_command)}", flush=True)
+        try:
+            process = subprocess.Popen(list(app.launch_command))
+        except OSError as exc:
+            print(f"[boot-selector] Failed to start child app {app.id}: {exc}", file=sys.stderr, flush=True)
+            return False
+        self._running = RunningChildApp(app=app, process=process, started_at=time.monotonic())
+        return True
+
+    def stop_current(self, reason: str) -> bool:
+        running = self.running_app()
+        if running is None:
+            return False
+        process = running.process
+        print(f"[boot-selector] Stopping child app {running.app.id}: {reason}", flush=True)
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            self._running = None
+            return True
+        try:
+            process.wait(timeout=self.stop_grace_secs)
+        except subprocess.TimeoutExpired:
+            print(f"[boot-selector] Child app {running.app.id} did not exit after SIGTERM; forcing termination.", flush=True)
+            process.kill()
+            process.wait(timeout=2.0)
+        self._running = None
+        return True
+
+    def shutdown(self) -> None:
+        self.stop_current(reason="shell shutdown")
+
 
 def request_stop(_signum: int, _frame: object) -> None:
     global STOP_REQUESTED
@@ -143,11 +337,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-selector", help="Optional output path for the rendered day/night selector screen.")
     parser.add_argument("--output-gif-first", help="Optional output path for the first rendered startup GIF frame.")
     parser.add_argument("--output-gif-last", help="Optional output path for the last rendered startup GIF frame.")
+    parser.add_argument("--dump-contracts", action="store_true", help="Print the Stream A shell contracts as JSON and exit.")
     parser.add_argument("--no-framebuffer", action="store_true", help="Skip framebuffer writes for local verification.")
     parser.add_argument("--skip-gif", action="store_true", help="Skip startup GIF playback and show the menu immediately.")
     parser.add_argument("--probe-touch", action="store_true", help="Probe touch device selection and exit.")
+    parser.add_argument("--request-mode", choices=SHELL_MODES, help="Write a shell mode-switch request for a running shell and exit.")
+    parser.add_argument("--mode-request-path", default=DEFAULT_MODE_REQUEST_PATH, help=f"Path used for shell mode-switch requests (default: {DEFAULT_MODE_REQUEST_PATH})")
     parser.add_argument("--touch-settle-secs", type=float, default=DEFAULT_TOUCH_SETTLE_SECS, help=f"Ignore touches briefly after each screen draw (default: {DEFAULT_TOUCH_SETTLE_SECS})")
     parser.add_argument("--touch-debounce-secs", type=float, default=DEFAULT_TOUCH_DEBOUNCE_SECS, help=f"Minimum interval between accepted taps (default: {DEFAULT_TOUCH_DEBOUNCE_SECS})")
+    parser.add_argument("--child-stop-grace-secs", type=float, default=DEFAULT_CHILD_STOP_GRACE_SECS, help=f"Seconds to wait for child apps to stop before force-killing them (default: {DEFAULT_CHILD_STOP_GRACE_SECS})")
+    parser.add_argument("--home-gesture-hold-secs", type=float, default=DEFAULT_HOME_GESTURE_HOLD_SECS, help=f"Reserved-corner hold duration used to reclaim child apps (default: {DEFAULT_HOME_GESTURE_HOLD_SECS})")
+    parser.add_argument("--home-gesture-corner-width", type=int, default=DEFAULT_HOME_GESTURE_CORNER_WIDTH, help=f"Width of the reserved home-gesture corner in pixels (default: {DEFAULT_HOME_GESTURE_CORNER_WIDTH})")
+    parser.add_argument("--home-gesture-corner-height", type=int, default=DEFAULT_HOME_GESTURE_CORNER_HEIGHT, help=f"Height of the reserved home-gesture corner in pixels (default: {DEFAULT_HOME_GESTURE_CORNER_HEIGHT})")
     parser.add_argument("--day-service", default=DEFAULT_DAY_SERVICE, help=f"systemd unit to start for day mode (default: {DEFAULT_DAY_SERVICE})")
     parser.add_argument("--night-service", default=DEFAULT_NIGHT_SERVICE, help=f"systemd unit to start for night mode (default: {DEFAULT_NIGHT_SERVICE})")
     parser.add_argument("--shutdown-command", default=DEFAULT_SHUTDOWN_COMMAND, help=f"Command used for safe shutdown (default: {DEFAULT_SHUTDOWN_COMMAND})")
@@ -172,6 +373,12 @@ def validate_args(args: argparse.Namespace) -> int | None:
     if args.touch_settle_secs < 0 or args.touch_debounce_secs < 0:
         print("Touch timing values cannot be negative.", file=sys.stderr)
         return 1
+    if args.child_stop_grace_secs < 0 or args.home_gesture_hold_secs < 0:
+        print("Child-stop and home-gesture timing values cannot be negative.", file=sys.stderr)
+        return 1
+    if args.home_gesture_corner_width <= 0 or args.home_gesture_corner_height <= 0:
+        print("Home-gesture corner dimensions must be positive integers.", file=sys.stderr)
+        return 1
     if args.gif_speed <= 0:
         print("GIF speed must be greater than zero.", file=sys.stderr)
         return 1
@@ -182,6 +389,144 @@ def validate_args(args: argparse.Namespace) -> int | None:
         print("Player command cannot be empty.", file=sys.stderr)
         return 1
     return None
+
+
+def _command_for_service(service_name: str, fallback_command: list[str]) -> tuple[str, ...]:
+    command = DIRECT_MODE_COMMANDS.get(service_name)
+    if command is None:
+        print(
+            f"[boot-selector] No direct mapping is defined for {service_name}; using shell-owned fallback command {fallback_command}.",
+            file=sys.stderr,
+            flush=True,
+        )
+        command = fallback_command
+    return tuple(command)
+
+
+def build_app_registry(args: argparse.Namespace) -> dict[str, AppSpec]:
+    return {
+        APP_ID_DASHBOARDS: AppSpec(
+            id=APP_ID_DASHBOARDS,
+            label="Dashboards",
+            menu_page=0,
+            tile_index=0,
+            kind=APP_KIND_CHILD_PROCESS,
+            launch_command=_command_for_service(
+                args.day_service,
+                [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")],
+            ),
+            preview_asset=args.selector_image,
+            supports_home_gesture=True,
+        ),
+        APP_ID_INFO: AppSpec(
+            id=APP_ID_INFO,
+            label="Info GIF",
+            menu_page=0,
+            tile_index=1,
+            kind=APP_KIND_SHELL_SCREEN,
+            launch_command=(),
+            preview_asset=args.info_gif,
+            supports_home_gesture=False,
+        ),
+        APP_ID_KEYPAD: AppSpec(
+            id=APP_ID_KEYPAD,
+            label="Keypad",
+            menu_page=0,
+            tile_index=2,
+            kind=APP_KIND_SHELL_SCREEN,
+            launch_command=(),
+            preview_asset=args.keypad_image,
+            supports_home_gesture=False,
+        ),
+        APP_ID_SHUTDOWN: AppSpec(
+            id=APP_ID_SHUTDOWN,
+            label="Shutdown",
+            menu_page=0,
+            tile_index=3,
+            kind=APP_KIND_SHELL_SCREEN,
+            launch_command=(),
+            preview_asset=args.shutdown_image,
+            supports_home_gesture=False,
+        ),
+        APP_ID_PHOTOS: AppSpec(
+            id=APP_ID_PHOTOS,
+            label="Photos",
+            menu_page=1,
+            tile_index=0,
+            kind=APP_KIND_CHILD_PROCESS,
+            launch_command=(
+                sys.executable,
+                "-u",
+                str(BASE_DIR / "modules" / "photos" / "slideshow.py"),
+            ),
+            preview_asset=str(BASE_DIR / "modules" / "photos" / "photos-fallback.png"),
+            supports_home_gesture=True,
+        ),
+    }
+
+
+def build_night_mode_app(args: argparse.Namespace) -> AppSpec:
+    return AppSpec(
+        id=INTERNAL_APP_ID_NIGHT,
+        label="Night",
+        menu_page=-1,
+        tile_index=-1,
+        kind=APP_KIND_CHILD_PROCESS,
+        launch_command=_command_for_service(
+            args.night_service,
+            [sys.executable, "-u", str(BASE_DIR / "modules" / "blackout" / "blackout.py")],
+        ),
+        preview_asset=args.selector_image,
+        supports_home_gesture=True,
+    )
+
+
+def build_contract_snapshot(
+    app_registry: dict[str, AppSpec],
+    night_app: AppSpec,
+    mode_request_path: str,
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    ordered_registry = sorted(
+        (app.to_contract_dict() for app in app_registry.values()),
+        key=lambda item: (int(item["menu_page"]), int(item["tile_index"]), str(item["id"])),
+    )
+    return {
+        "app_registry": ordered_registry,
+        "menu": {
+            "model": "paged_4_tile_shell_menu",
+            "tiles_per_page": MENU_TILES_PER_PAGE,
+            "page_count": max((app.menu_page for app in app_registry.values()), default=0) + 1,
+        },
+        "child_lifecycle": {
+            "start": "ChildAppManager.start_app(app_spec)",
+            "detect_running": "ChildAppManager.running_app() / is_running()",
+            "graceful_stop": f"SIGTERM with {args.child_stop_grace_secs:.2f}s grace period",
+            "forced_termination_fallback": "SIGKILL after the grace period if the child is still running",
+            "clean_return_to_shell": "Shell returns to main_menu after child exit, Home hold, or menu mode request",
+            "home_gesture": {
+                "enabled_for_child_apps": True,
+                "corner": {
+                    "left": 0,
+                    "top": 0,
+                    "right": max(0, args.home_gesture_corner_width - 1),
+                    "bottom": max(0, args.home_gesture_corner_height - 1),
+                },
+                "hold_secs": args.home_gesture_hold_secs,
+            },
+        },
+        "mode_switch": {
+            "modes": list(SHELL_MODES),
+            "request_path": mode_request_path,
+            "trigger_cli": "boot/boot_selector.py --request-mode <menu|dashboards|photos|night>",
+            "mode_targets": {
+                SHELL_MODE_MENU: {"shell_state": SHELL_STATE_MAIN_MENU},
+                SHELL_MODE_DASHBOARDS: {"app_id": app_registry[APP_ID_DASHBOARDS].id},
+                SHELL_MODE_PHOTOS: {"app_id": app_registry[APP_ID_PHOTOS].id},
+                SHELL_MODE_NIGHT: {"app_id": night_app.id},
+            },
+        },
+    }
 
 
 def rgb888_to_rgb565(image: Image.Image) -> bytes:
@@ -418,20 +763,197 @@ def save_preview(image: Image.Image, path_like: str | None) -> None:
     print(f"Saved preview image to {output_path}", flush=True)
 
 
+def resolve_preview_asset_path(path_like: str) -> Path:
+    preview_path = Path(path_like)
+    if not preview_path.is_absolute():
+        preview_path = BASE_DIR / preview_path
+    return preview_path
+
+
+def _measure_text(draw: ImageDraw.ImageDraw, text: str) -> tuple[int, int]:
+    if hasattr(draw, "textbbox"):
+        left, top, right, bottom = draw.textbbox((0, 0), text)
+        return right - left, bottom - top
+    return draw.textsize(text)
+
+
+def menu_content_bounds(screen_height: int) -> tuple[int, int, int]:
+    content_top = MENU_HEADER_HEIGHT
+    footer_top = max(MENU_HEADER_HEIGHT + 1, screen_height - MENU_FOOTER_HEIGHT)
+    content_bottom = max(content_top, footer_top - 1)
+    return content_top, content_bottom, footer_top
+
+
 
 def _make_region(action: str, left: int, top: int, right: int, bottom: int) -> TouchRegion:
     return TouchRegion(action=action, left=left, top=top, right=right, bottom=bottom)
 
 
-def main_menu_regions(screen_width: int, screen_height: int) -> list[TouchRegion]:
+def menu_touch_regions(menu_page: MenuPage, screen_width: int, screen_height: int) -> list[TouchRegion]:
+    content_top, content_bottom, footer_top = menu_content_bounds(screen_height)
     mid_x = screen_width // 2
-    mid_y = screen_height // 2
-    return [
-        _make_region(MAIN_MENU_HOME, 0, 0, max(0, mid_x - 1), max(0, mid_y - 1)),
-        _make_region(MAIN_MENU_INFO, mid_x, 0, max(0, screen_width - 1), max(0, mid_y - 1)),
-        _make_region(MAIN_MENU_PADLOCK, 0, mid_y, max(0, mid_x - 1), max(0, screen_height - 1)),
-        _make_region(MAIN_MENU_SHUTDOWN, mid_x, mid_y, max(0, screen_width - 1), max(0, screen_height - 1)),
+    mid_y = content_top + ((content_bottom - content_top + 1) // 2)
+    actions = list(menu_page.tile_app_ids) + [None] * MENU_TILES_PER_PAGE
+    regions = [
+        _make_region(MENU_ACTION_NOOP, 0, 0, max(0, screen_width - 1), max(0, content_top - 1)),
+        _make_region(actions[0] or MENU_ACTION_NOOP, 0, content_top, max(0, mid_x - 1), max(0, mid_y - 1)),
+        _make_region(actions[1] or MENU_ACTION_NOOP, mid_x, content_top, max(0, screen_width - 1), max(0, mid_y - 1)),
+        _make_region(actions[2] or MENU_ACTION_NOOP, 0, mid_y, max(0, mid_x - 1), max(0, content_bottom)),
+        _make_region(actions[3] or MENU_ACTION_NOOP, mid_x, mid_y, max(0, screen_width - 1), max(0, content_bottom)),
     ]
+    if menu_page.page_count <= 1:
+        regions.append(_make_region(MENU_ACTION_NOOP, 0, footer_top, max(0, screen_width - 1), max(0, screen_height - 1)))
+        return regions
+
+    nav_width = max(56, min(84, screen_width // 5))
+    left_nav_right = max(0, nav_width - 1)
+    right_nav_left = max(0, screen_width - nav_width)
+    center_left = min(screen_width - 1, left_nav_right + 1)
+    center_right = max(center_left, right_nav_left - 1)
+    regions.extend(
+        [
+            _make_region(MENU_ACTION_PREV_PAGE, 0, footer_top, left_nav_right, max(0, screen_height - 1)),
+            _make_region(MENU_ACTION_NOOP, center_left, footer_top, center_right, max(0, screen_height - 1)),
+            _make_region(MENU_ACTION_NEXT_PAGE, right_nav_left, footer_top, max(0, screen_width - 1), max(0, screen_height - 1)),
+        ]
+    )
+    return regions
+
+
+def _tile_boxes(screen_width: int, screen_height: int) -> list[tuple[int, int, int, int]]:
+    content_top, content_bottom, _footer_top = menu_content_bounds(screen_height)
+    grid_left = MENU_MARGIN
+    grid_right = max(grid_left, screen_width - MENU_MARGIN - 1)
+    grid_top = content_top + MENU_MARGIN
+    grid_bottom = max(grid_top, content_bottom - MENU_MARGIN)
+    total_width = max(2, grid_right - grid_left + 1)
+    total_height = max(2, grid_bottom - grid_top + 1)
+    tile_width = max(1, (total_width - MENU_GAP) // 2)
+    tile_height = max(1, (total_height - MENU_GAP) // 2)
+    right_column_left = min(grid_right, grid_left + tile_width + MENU_GAP)
+    bottom_row_top = min(grid_bottom, grid_top + tile_height + MENU_GAP)
+    return [
+        (grid_left, grid_top, max(grid_left, right_column_left - MENU_GAP - 1), max(grid_top, bottom_row_top - MENU_GAP - 1)),
+        (right_column_left, grid_top, grid_right, max(grid_top, bottom_row_top - MENU_GAP - 1)),
+        (grid_left, bottom_row_top, max(grid_left, right_column_left - MENU_GAP - 1), grid_bottom),
+        (right_column_left, bottom_row_top, grid_right, grid_bottom),
+    ]
+
+
+def _tile_preview_box(tile_box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    left, top, right, bottom = tile_box
+    label_height = 22
+    return (
+        left + 6,
+        top + 6,
+        max(left + 6, right - 6),
+        max(top + 6, bottom - label_height),
+    )
+
+
+def _draw_centered_text(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], text: str, fill: tuple[int, int, int]) -> None:
+    left, top, right, bottom = box
+    text_width, text_height = _measure_text(draw, text)
+    text_x = left + max(0, ((right - left + 1) - text_width) // 2)
+    text_y = top + max(0, ((bottom - top + 1) - text_height) // 2)
+    draw.text((text_x, text_y), text, fill=fill)
+
+
+def render_menu_page(
+    menu_page: MenuPage,
+    app_registry: dict[str, AppSpec],
+    screen_width: int,
+    screen_height: int,
+    *,
+    show_touch_zones: bool,
+) -> Image.Image:
+    menu_image = Image.new("RGB", (screen_width, screen_height), MENU_BACKGROUND_TOP_RGB)
+    draw = ImageDraw.Draw(menu_image)
+    for row in range(screen_height):
+        ratio = row / max(1, screen_height - 1)
+        colour = tuple(
+            int(MENU_BACKGROUND_TOP_RGB[channel] + ((MENU_BACKGROUND_BOTTOM_RGB[channel] - MENU_BACKGROUND_TOP_RGB[channel]) * ratio))
+            for channel in range(3)
+        )
+        draw.line((0, row, screen_width, row), fill=colour)
+
+    title = "zero2dash apps"
+    page_label = f"Page {menu_page.page_index + 1}/{menu_page.page_count}"
+    _draw_centered_text(draw, (0, 2, max(0, screen_width - 1), MENU_HEADER_HEIGHT - 1), title, MENU_TEXT_RGB)
+    page_width, _page_height = _measure_text(draw, page_label)
+    draw.text((max(4, screen_width - page_width - 8), 4), page_label, fill=MENU_SUBTLE_TEXT_RGB)
+
+    for tile_index, tile_box in enumerate(_tile_boxes(screen_width, screen_height)):
+        app_id = menu_page.tile_app_ids[tile_index]
+        draw.rectangle(tile_box, fill=MENU_TILE_FILL_RGB, outline=MENU_TILE_OUTLINE_RGB, width=2)
+        if app_id is None:
+            _draw_centered_text(draw, tile_box, "Unused", MENU_SUBTLE_TEXT_RGB)
+            continue
+
+        app = app_registry[app_id]
+        preview_left, preview_top, preview_right, preview_bottom = _tile_preview_box(tile_box)
+        preview = load_selector_image(
+            resolve_preview_asset_path(app.preview_asset),
+            max(1, preview_right - preview_left + 1),
+            max(1, preview_bottom - preview_top + 1),
+        )
+        menu_image.paste(preview, (preview_left, preview_top))
+        draw.rectangle(tile_box, outline=MENU_ACCENT_RGB, width=1)
+        left, _top, right, bottom = tile_box
+        _draw_centered_text(draw, (left + 4, bottom - 22, right - 4, bottom - 4), app.label, MENU_TEXT_RGB)
+
+    content_top, _content_bottom, footer_top = menu_content_bounds(screen_height)
+    draw.line((0, content_top, screen_width, content_top), fill=(48, 70, 96), width=1)
+    draw.line((0, footer_top, screen_width, footer_top), fill=(48, 70, 96), width=1)
+    if menu_page.page_count > 1:
+        _draw_centered_text(draw, (0, footer_top, 71, screen_height - 1), "< Prev", MENU_TEXT_RGB)
+        _draw_centered_text(draw, (screen_width - 72, footer_top, screen_width - 1, screen_height - 1), "Next >", MENU_TEXT_RGB)
+        _draw_centered_text(draw, (72, footer_top, max(72, screen_width - 73), screen_height - 1), "tap arrows to change page", MENU_SUBTLE_TEXT_RGB)
+    else:
+        _draw_centered_text(draw, (0, footer_top, max(0, screen_width - 1), screen_height - 1), "tap a tile to open", MENU_SUBTLE_TEXT_RGB)
+
+    if show_touch_zones:
+        menu_image = annotate_touch_regions(
+            menu_image,
+            menu_touch_regions(menu_page, screen_width, screen_height),
+            f"Menu page {menu_page.page_index + 1}",
+        )
+    return menu_image
+
+
+def build_menu_pages(
+    app_registry: dict[str, AppSpec],
+    screen_width: int,
+    screen_height: int,
+    *,
+    show_touch_zones: bool,
+) -> list[MenuPage]:
+    ordered_apps = sorted(app_registry.values(), key=lambda app: (app.menu_page, app.tile_index, app.id))
+    page_count = max((app.menu_page for app in ordered_apps), default=0) + 1
+    menu_pages: list[MenuPage] = []
+    for page_index in range(page_count):
+        tile_app_ids: list[str | None] = [None] * MENU_TILES_PER_PAGE
+        for app in ordered_apps:
+            if app.menu_page != page_index:
+                continue
+            if 0 <= app.tile_index < MENU_TILES_PER_PAGE:
+                tile_app_ids[app.tile_index] = app.id
+        page_stub = MenuPage(
+            page_index=page_index,
+            page_count=page_count,
+            tile_app_ids=tuple(tile_app_ids),
+            image=Image.new("RGB", (screen_width, screen_height), BACKGROUND_RGB),
+        )
+        page_image = render_menu_page(page_stub, app_registry, screen_width, screen_height, show_touch_zones=show_touch_zones)
+        menu_pages.append(
+            MenuPage(
+                page_index=page_index,
+                page_count=page_count,
+                tile_app_ids=tuple(tile_app_ids),
+                image=page_image,
+            )
+        )
+    return menu_pages
 
 
 def vertical_regions(screen_width: int, screen_height: int, invert_y: bool, top_action: str, bottom_action: str) -> list[TouchRegion]:
@@ -494,8 +1016,8 @@ def log_touch_regions(label: str, regions: list[TouchRegion]) -> None:
         )
 
 
-def resolve_main_menu_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str:
-    return resolve_touch_region(screen_x, screen_y, main_menu_regions(screen_width, screen_height), "main menu")
+def resolve_menu_action(menu_page: MenuPage, screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str:
+    return resolve_touch_region(screen_x, screen_y, menu_touch_regions(menu_page, screen_width, screen_height), "app menu")
 
 
 def _resolve_vertical_zone(screen_y: int, screen_height: int, invert_y: bool, top_action: str, bottom_action: str) -> str:
@@ -556,6 +1078,7 @@ class TouchReader:
         self.last_y = 0
         self.last_emit = 0.0
         self.touch_down = False
+        self.home_hold_started_at: float | None = None
         if not self.device:
             return
         self.touch_width, self.touch_min_x, self.touch_height, self.touch_min_y = detect_touch_bounds(self.device, screen_width, screen_height)
@@ -576,13 +1099,10 @@ class TouchReader:
             self.handle.close()
             self.handle = None
 
-    def _commit_tap(self, now: float, ready_after: float, touch_debounce_secs: float, resolver) -> str | None:
+    def _current_screen_position(self) -> tuple[int, int]:
         if self.device is None:
-            return None
-        if now < ready_after or (now - self.last_emit) < touch_debounce_secs:
-            return None
-        self.last_emit = now
-        screen_x, screen_y = _map_touch_to_screen(
+            return 0, 0
+        return _map_touch_to_screen(
             self.device,
             self.last_x,
             self.last_y,
@@ -593,6 +1113,14 @@ class TouchReader:
             self.touch_height,
             self.touch_min_y,
         )
+
+    def _commit_tap(self, now: float, ready_after: float, touch_debounce_secs: float, resolver) -> str | None:
+        if self.device is None:
+            return None
+        if now < ready_after or (now - self.last_emit) < touch_debounce_secs:
+            return None
+        self.last_emit = now
+        screen_x, screen_y = self._current_screen_position()
         action = resolver(screen_x, screen_y)
         print(f"[boot-selector] Selected action: {action} (screen_x={screen_x}, screen_y={screen_y}, touch_x={self.last_x}, touch_y={self.last_y})", flush=True)
         return action
@@ -639,6 +1167,58 @@ class TouchReader:
                     self.touch_down = True
         return None
 
+    def wait_for_home_gesture(self, home_region: TouchRegion, hold_secs: float, timeout_secs: float) -> bool:
+        if self.handle is None or self.device is None:
+            time.sleep(max(0.0, timeout_secs))
+            return False
+        deadline = time.monotonic() + max(0.0, timeout_secs)
+        while not STOP_REQUESTED:
+            now = time.monotonic()
+            if self.touch_down:
+                screen_x, screen_y = self._current_screen_position()
+                if home_region.contains(screen_x, screen_y):
+                    if self.home_hold_started_at is None:
+                        self.home_hold_started_at = now
+                    elif now - self.home_hold_started_at >= hold_secs:
+                        print(
+                            f"[boot-selector] Home gesture detected at screen_x={screen_x}, screen_y={screen_y}.",
+                            flush=True,
+                        )
+                        self.home_hold_started_at = None
+                        self.last_emit = now
+                        return True
+                else:
+                    self.home_hold_started_at = None
+            else:
+                self.home_hold_started_at = None
+            remaining = deadline - now
+            if remaining <= 0:
+                return False
+            readable, _, _ = select.select([self.handle], [], [], min(0.05, remaining))
+            if not readable:
+                continue
+            raw = self.handle.read(INPUT_EVENT_STRUCT.size)
+            if len(raw) != INPUT_EVENT_STRUCT.size:
+                continue
+            _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
+            if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
+                self.last_x = ev_value
+            elif ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
+                self.last_y = ev_value
+            elif ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                if ev_value == 1:
+                    self.touch_down = True
+                elif ev_value == 0:
+                    self.touch_down = False
+                    self.home_hold_started_at = None
+            elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                if ev_value == -1:
+                    self.touch_down = False
+                    self.home_hold_started_at = None
+                elif ev_value >= 0:
+                    self.touch_down = True
+        return False
+
 
 def playback_gif(framebuffer: FramebufferWriter | None, gif_path: Path, width: int, height: int, speed: float, output_first: str | None, output_last: str | None, touch_reader: TouchReader | None = None, touch_settle_secs: float = 0.0, touch_debounce_secs: float = 0.0, skip_action: str | None = None) -> str | None:
     if not gif_path.exists():
@@ -673,13 +1253,104 @@ def playback_gif(framebuffer: FramebufferWriter | None, gif_path: Path, width: i
     return None
 
 
-def wait_for_action(touch_reader: TouchReader, label: str, resolver, touch_settle_secs: float, touch_debounce_secs: float) -> str | None:
+def wait_for_action(
+    touch_reader: TouchReader,
+    label: str,
+    resolver,
+    touch_settle_secs: float,
+    touch_debounce_secs: float,
+    timeout_secs: float | None = None,
+) -> str | None:
     if not touch_reader.is_available():
         print("[boot-selector] No touch device found; touch controls disabled.", flush=True)
         return None
     print(f"[boot-selector] Waiting for {label} on {touch_reader.describe()}.", flush=True)
     ready_after = time.monotonic() + max(0.0, touch_settle_secs)
-    return touch_reader.read_action(resolver, ready_after, touch_debounce_secs)
+    return touch_reader.read_action(resolver, ready_after, touch_debounce_secs, timeout_secs=timeout_secs)
+
+
+def wait_for_shell_action_or_mode(
+    touch_reader: TouchReader,
+    label: str,
+    resolver,
+    touch_settle_secs: float,
+    touch_debounce_secs: float,
+    mode_store: ModeSwitchRequestStore,
+) -> tuple[str | None, str | None]:
+    ready_after = time.monotonic() + max(0.0, touch_settle_secs)
+    announced = False
+    while not STOP_REQUESTED:
+        requested_mode = mode_store.consume_request()
+        if requested_mode is not None:
+            return None, requested_mode
+        if not touch_reader.is_available():
+            if not announced:
+                print("[boot-selector] No touch device found; waiting for shell mode requests only.", flush=True)
+                announced = True
+            time.sleep(POLL_TIMEOUT_SECS)
+            continue
+        if not announced:
+            print(f"[boot-selector] Waiting for {label} on {touch_reader.describe()}.", flush=True)
+            announced = True
+        action = touch_reader.read_action(resolver, ready_after, touch_debounce_secs, timeout_secs=POLL_TIMEOUT_SECS)
+        if action is not None:
+            return action, None
+    return None, None
+
+
+def home_gesture_region(screen_width: int, screen_height: int, corner_width: int, corner_height: int) -> TouchRegion:
+    return TouchRegion(
+        action=SHELL_MODE_MENU,
+        left=0,
+        top=0,
+        right=max(0, min(screen_width, corner_width) - 1),
+        bottom=max(0, min(screen_height, corner_height) - 1),
+    )
+
+
+def wait_for_running_app_event(
+    child_manager: ChildAppManager,
+    touch_reader: TouchReader,
+    mode_store: ModeSwitchRequestStore,
+    home_region: TouchRegion,
+    home_hold_secs: float,
+) -> str:
+    while not STOP_REQUESTED:
+        requested_mode = mode_store.consume_request()
+        if requested_mode is not None:
+            return requested_mode
+        running = child_manager.running_app()
+        if running is None:
+            return SHELL_MODE_MENU
+        if running.app.supports_home_gesture and touch_reader.wait_for_home_gesture(home_region, home_hold_secs, POLL_TIMEOUT_SECS):
+            return SHELL_MODE_MENU
+        if not touch_reader.is_available() or not running.app.supports_home_gesture:
+            time.sleep(POLL_TIMEOUT_SECS)
+    return SHELL_MODE_MENU
+
+
+def handle_mode_request(
+    requested_mode: str,
+    app_registry: dict[str, AppSpec],
+    night_app: AppSpec,
+    child_manager: ChildAppManager,
+) -> str:
+    if requested_mode == SHELL_MODE_MENU:
+        child_manager.stop_current(reason="menu mode request")
+        return SHELL_STATE_MAIN_MENU
+    if requested_mode == SHELL_MODE_DASHBOARDS:
+        if child_manager.start_app(app_registry[APP_ID_DASHBOARDS]):
+            return SHELL_STATE_RUNNING_APP
+        return SHELL_STATE_MAIN_MENU
+    if requested_mode == SHELL_MODE_PHOTOS:
+        if child_manager.start_app(app_registry[APP_ID_PHOTOS]):
+            return SHELL_STATE_RUNNING_APP
+        return SHELL_STATE_MAIN_MENU
+    if requested_mode == SHELL_MODE_NIGHT:
+        if child_manager.start_app(night_app):
+            return SHELL_STATE_RUNNING_APP
+        return SHELL_STATE_MAIN_MENU
+    return SHELL_STATE_MAIN_MENU
 
 
 def run_touch_probe(width: int, height: int) -> int:
@@ -693,33 +1364,6 @@ def run_touch_probe(width: int, height: int) -> int:
     print(f"[boot-selector] Probe reason: {reason}", flush=True)
     print(f"[boot-selector] Probe calibration: width={touch_width} min_x={touch_min_x} height={touch_height} min_y={touch_min_y}", flush=True)
     return 0
-
-
-def _launch_direct_mode(service_name: str) -> int:
-    command = DIRECT_MODE_COMMANDS.get(service_name)
-    if not command:
-        print(f"[boot-selector] No direct-launch fallback is defined for {service_name}.", file=sys.stderr, flush=True)
-        return 1
-    print(f"[boot-selector] Falling back to direct launch for {service_name}: {command}", flush=True)
-    os.execv(command[0], command)
-    return 1
-
-
-def launch_service(service_name: str) -> int:
-    running_under_systemd = bool(os.environ.get("INVOCATION_ID", "").strip())
-    if not running_under_systemd:
-        print(f"[boot-selector] Manual run detected; bypassing systemctl for {service_name}.", flush=True)
-        return _launch_direct_mode(service_name)
-    result = subprocess.run(["systemctl", "start", service_name], check=False, capture_output=True, text=True)
-    if result.returncode == 0:
-        print(f"[boot-selector] Started {service_name}", flush=True)
-        return 0
-    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
-    print(f"[boot-selector] Failed to start {service_name}: {stderr}", file=sys.stderr, flush=True)
-    auth_markers = ("Authentication is required", "polkit", "Access denied", "Interactive authentication required")
-    if any(marker.lower() in stderr.lower() for marker in auth_markers):
-        return _launch_direct_mode(service_name)
-    return result.returncode
 
 
 def run_shutdown(command_text: str) -> int:
@@ -759,28 +1403,48 @@ def main() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
+    mode_store = ModeSwitchRequestStore(args.mode_request_path)
+
+    if args.request_mode:
+        mode_store.write_request(args.request_mode)
+        print(f"[boot-selector] Wrote shell mode request {args.request_mode} to {mode_store.path}", flush=True)
+        return 0
+
+    app_registry = build_app_registry(args)
+    night_app = build_night_mode_app(args)
+
+    if args.dump_contracts:
+        snapshot = build_contract_snapshot(app_registry, night_app, str(mode_store.path), args)
+        print(json.dumps(snapshot, indent=2), flush=True)
+        return 0
+
     if args.probe_touch:
         return run_touch_probe(args.width, args.height)
 
-    main_menu_image = load_selector_image(Path(args.main_menu_image), args.width, args.height)
-    selector_image = load_selector_image(Path(args.selector_image), args.width, args.height)
+    menu_pages = build_menu_pages(
+        app_registry,
+        args.width,
+        args.height,
+        show_touch_zones=args.show_touch_zones,
+    )
     shutdown_image = load_selector_image(Path(args.shutdown_image), args.width, args.height)
     keypad_image = load_selector_image(Path(args.keypad_image), args.width, args.height)
-    main_regions = main_menu_regions(args.width, args.height)
-    day_night_regions_map = vertical_regions(args.width, args.height, args.invert_y, DAY_NIGHT_DAY, DAY_NIGHT_NIGHT)
     shutdown_regions_map = vertical_regions(args.width, args.height, args.invert_y, SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL)
     keypad_regions_map = keypad_regions(args.width, args.height)
     if args.show_touch_zones:
-        log_touch_regions("main menu", main_regions)
-        log_touch_regions("day/night", day_night_regions_map)
+        for menu_page in menu_pages:
+            log_touch_regions(f"menu page {menu_page.page_index + 1}", menu_touch_regions(menu_page, args.width, args.height))
         log_touch_regions("shutdown", shutdown_regions_map)
         log_touch_regions("keypad", keypad_regions_map)
-        main_menu_image = annotate_touch_regions(main_menu_image, main_regions, "Main menu zones")
-        selector_image = annotate_touch_regions(selector_image, day_night_regions_map, "Day/night zones")
         shutdown_image = annotate_touch_regions(shutdown_image, shutdown_regions_map, "Shutdown zones")
         keypad_image = annotate_touch_regions(keypad_image, keypad_regions_map, "Keypad zones")
-    blank_image = Image.new("RGB", (args.width, args.height), BACKGROUND_RGB)
-    save_preview(selector_image, args.output_selector)
+    shell_images = ShellImages(
+        menu_pages=tuple(menu_page.image for menu_page in menu_pages),
+        shutdown=shutdown_image,
+        keypad=keypad_image,
+        blank=Image.new("RGB", (args.width, args.height), BACKGROUND_RGB),
+    )
+    save_preview(menu_pages[0].image, args.output_selector)
 
     framebuffer = None
     if not args.no_framebuffer:
@@ -791,74 +1455,129 @@ def main() -> int:
         framebuffer.open()
 
     touch_reader = TouchReader(args.width, args.height)
+    child_manager = ChildAppManager(args.child_stop_grace_secs)
+    home_region = home_gesture_region(
+        args.width,
+        args.height,
+        args.home_gesture_corner_width,
+        args.home_gesture_corner_height,
+    )
     consecutive_pin_failures = 0
+    current_menu_page = 0
+    shell_state = SHELL_STATE_BOOT_GIF
     try:
         if not args.skip_gif:
             playback_gif(framebuffer, Path(args.gif), args.width, args.height, args.gif_speed, args.output_gif_first, args.output_gif_last)
+        shell_state = SHELL_STATE_MAIN_MENU
 
         if args.no_framebuffer:
             print("Skipping touch loop because --no-framebuffer was set.", flush=True)
             return 0
 
+        requested_mode = mode_store.consume_request()
+        if requested_mode is not None:
+            if requested_mode == SHELL_MODE_DASHBOARDS:
+                current_menu_page = app_registry[APP_ID_DASHBOARDS].menu_page
+            elif requested_mode == SHELL_MODE_PHOTOS:
+                current_menu_page = app_registry[APP_ID_PHOTOS].menu_page
+            shell_state = handle_mode_request(requested_mode, app_registry, night_app, child_manager)
+
         while not STOP_REQUESTED:
-            if framebuffer is not None:
-                framebuffer.write_image(main_menu_image)
-
-            main_action = wait_for_action(
-                touch_reader,
-                "main menu selection",
-                lambda screen_x, screen_y: resolve_main_menu_action(screen_x, screen_y, args.width, args.height),
-                args.touch_settle_secs,
-                args.touch_debounce_secs,
-            )
-            if main_action == MAIN_MENU_HOME:
-                if framebuffer is not None:
-                    framebuffer.write_image(selector_image)
-                day_night_action = wait_for_action(
+            if shell_state == SHELL_STATE_RUNNING_APP:
+                next_mode = wait_for_running_app_event(
+                    child_manager,
                     touch_reader,
-                    "day/night selection",
-                    lambda _screen_x, screen_y: resolve_day_night_action(screen_y, args.height, args.invert_y),
-                    args.touch_settle_secs,
-                    args.touch_debounce_secs,
+                    mode_store,
+                    home_region,
+                    args.home_gesture_hold_secs,
                 )
-                if day_night_action == DAY_NIGHT_DAY:
-                    return launch_service(args.day_service)
-                if day_night_action == DAY_NIGHT_NIGHT:
-                    return launch_service(args.night_service)
-                return 1 if STOP_REQUESTED else 0
-
-            if main_action == MAIN_MENU_INFO:
-                playback_gif(
-                    framebuffer,
-                    Path(args.info_gif),
-                    args.width,
-                    args.height,
-                    args.gif_speed,
-                    None,
-                    None,
-                    touch_reader=touch_reader,
-                    touch_settle_secs=args.touch_settle_secs,
-                    touch_debounce_secs=args.touch_debounce_secs,
-                    skip_action=INFO_SKIP_ACTION,
-                )
+                shell_state = handle_mode_request(next_mode, app_registry, night_app, child_manager)
                 continue
 
-            if main_action == MAIN_MENU_PADLOCK:
+            if shell_state == SHELL_STATE_MAIN_MENU:
+                if framebuffer is not None:
+                    framebuffer.write_image(shell_images.menu_pages[current_menu_page])
+                current_page = menu_pages[current_menu_page]
+                main_action, requested_mode = wait_for_shell_action_or_mode(
+                    touch_reader,
+                    f"app menu selection (page {current_menu_page + 1}/{len(menu_pages)})",
+                    lambda screen_x, screen_y: resolve_menu_action(current_page, screen_x, screen_y, args.width, args.height),
+                    args.touch_settle_secs,
+                    args.touch_debounce_secs,
+                    mode_store,
+                )
+                if requested_mode is not None:
+                    if requested_mode == SHELL_MODE_DASHBOARDS:
+                        current_menu_page = app_registry[APP_ID_DASHBOARDS].menu_page
+                    elif requested_mode == SHELL_MODE_PHOTOS:
+                        current_menu_page = app_registry[APP_ID_PHOTOS].menu_page
+                    shell_state = handle_mode_request(requested_mode, app_registry, night_app, child_manager)
+                    continue
+                if main_action == MENU_ACTION_PREV_PAGE:
+                    current_menu_page = (current_menu_page - 1) % len(menu_pages)
+                    continue
+                if main_action == MENU_ACTION_NEXT_PAGE:
+                    current_menu_page = (current_menu_page + 1) % len(menu_pages)
+                    continue
+                if main_action in {None, MENU_ACTION_NOOP}:
+                    continue
+                selected_app = app_registry.get(main_action)
+                if selected_app is None:
+                    continue
+                current_menu_page = selected_app.menu_page
+                if selected_app.id == APP_ID_DASHBOARDS:
+                    if child_manager.start_app(selected_app):
+                        shell_state = SHELL_STATE_RUNNING_APP
+                    continue
+                if selected_app.id == APP_ID_PHOTOS:
+                    if child_manager.start_app(selected_app):
+                        shell_state = SHELL_STATE_RUNNING_APP
+                    continue
+                if selected_app.id == APP_ID_INFO:
+                    playback_gif(
+                        framebuffer,
+                        Path(args.info_gif),
+                        args.width,
+                        args.height,
+                        args.gif_speed,
+                        None,
+                        None,
+                        touch_reader=touch_reader,
+                        touch_settle_secs=args.touch_settle_secs,
+                        touch_debounce_secs=args.touch_debounce_secs,
+                        skip_action=INFO_SKIP_ACTION,
+                    )
+                    shell_state = SHELL_STATE_MAIN_MENU
+                    continue
+                if selected_app.id == APP_ID_KEYPAD:
+                    shell_state = SHELL_STATE_KEYPAD
+                    continue
+                if selected_app.id == APP_ID_SHUTDOWN:
+                    shell_state = SHELL_STATE_SHUTDOWN_CONFIRM
+                    continue
+                continue
+
+            if shell_state == SHELL_STATE_KEYPAD:
                 entered_pin = ""
-                while not STOP_REQUESTED:
+                while not STOP_REQUESTED and shell_state == SHELL_STATE_KEYPAD:
                     if framebuffer is not None:
-                        framebuffer.write_image(keypad_image)
-                    keypad_action = wait_for_action(
+                        framebuffer.write_image(shell_images.keypad)
+                    keypad_action, requested_mode = wait_for_shell_action_or_mode(
                         touch_reader,
                         "keypad selection",
                         lambda screen_x, screen_y: resolve_keypad_action(screen_x, screen_y, args.width, args.height),
                         args.touch_settle_secs,
                         args.touch_debounce_secs,
+                        mode_store,
                     )
+                    if requested_mode is not None:
+                        shell_state = handle_mode_request(requested_mode, app_registry, night_app, child_manager)
+                        break
                     if keypad_action in KEYPAD_DIGITS:
                         entered_pin += keypad_action
                         continue
                     if keypad_action == KEYPAD_NO:
+                        shell_state = SHELL_STATE_MAIN_MENU
                         break
                     if keypad_action == KEYPAD_OK:
                         result, consecutive_pin_failures = evaluate_pin_entry(entered_pin, args.pin, consecutive_pin_failures)
@@ -873,7 +1592,9 @@ def main() -> int:
                                 None,
                                 None,
                             )
-                            return run_player(args.player_command)
+                            run_player(args.player_command)
+                            shell_state = SHELL_STATE_MAIN_MENU
+                            break
                         if result == "retry":
                             playback_gif(
                                 framebuffer,
@@ -884,6 +1605,7 @@ def main() -> int:
                                 None,
                                 None,
                             )
+                            shell_state = SHELL_STATE_MAIN_MENU
                             break
                         if result == "shutdown":
                             playback_gif(
@@ -895,31 +1617,42 @@ def main() -> int:
                                 None,
                                 None,
                             )
+                            child_manager.shutdown()
                             return run_shutdown(args.shutdown_command)
-                    return 1 if STOP_REQUESTED else 0
+                    if keypad_action is None:
+                        continue
+                    shell_state = SHELL_STATE_MAIN_MENU
                 continue
 
-            if main_action == MAIN_MENU_SHUTDOWN:
+            if shell_state == SHELL_STATE_SHUTDOWN_CONFIRM:
                 if framebuffer is not None:
-                    framebuffer.write_image(shutdown_image)
-                shutdown_action = wait_for_action(
+                    framebuffer.write_image(shell_images.shutdown)
+                shutdown_action, requested_mode = wait_for_shell_action_or_mode(
                     touch_reader,
                     "shutdown confirmation",
                     lambda _screen_x, screen_y: resolve_shutdown_action(screen_y, args.height, args.invert_y),
                     args.touch_settle_secs,
                     args.touch_debounce_secs,
+                    mode_store,
                 )
+                if requested_mode is not None:
+                    shell_state = handle_mode_request(requested_mode, app_registry, night_app, child_manager)
+                    continue
                 if shutdown_action == SHUTDOWN_CONFIRM:
+                    child_manager.shutdown()
                     if framebuffer is not None:
-                        framebuffer.write_image(blank_image)
+                        framebuffer.write_image(shell_images.blank)
                     return run_shutdown(args.shutdown_command)
                 if shutdown_action == SHUTDOWN_CANCEL:
+                    shell_state = SHELL_STATE_MAIN_MENU
                     continue
-                return 1 if STOP_REQUESTED else 0
+                shell_state = SHELL_STATE_MAIN_MENU
+                continue
 
-            return 1 if STOP_REQUESTED else 0
+            shell_state = SHELL_STATE_MAIN_MENU
         return 1 if STOP_REQUESTED else 0
     finally:
+        child_manager.shutdown()
         touch_reader.close()
         if framebuffer is not None:
             framebuffer.close()
