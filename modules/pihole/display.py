@@ -601,7 +601,7 @@ def _draw_stat_row(draw, *, y: int, label: str, value: str, label_column: Column
         fill=COL_TXT,
     )
     draw.text(
-        (aligned_text_x(value_column, value_font, value, "right"), centred_text_y(value_font, value, y)),
+        (aligned_text_x(value_column, value_font, value, "right") -5, centred_text_y(value_font, value, y)),
         value,
         font=value_font,
         fill=COL_TXT,

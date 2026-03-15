@@ -810,7 +810,7 @@ def render_image(
     if message:
         message = truncate_text(draw, message, font_message, LAYOUT_2_1.body.width)
         x = aligned_text_x(LAYOUT_2_1.body, font_message, message, "center")
-        y = centred_text_y(font_message, message, LAYOUT_2_1.row_centre_y(2) + CALENDASH_TEXT_Y_OFFSET)
+        y = centred_text_y(font_message, message, LAYOUT_2_1.row_centre_y(2) + 10)
         draw.text((x, y), message, fill=muted_fill, font=font_message)
     else:
         entries = list(events)
@@ -819,7 +819,7 @@ def render_image(
         hidden_count = max(0, len(entries) - len(visible_events))
 
         for idx, event in enumerate(visible_events):
-            row_centre = LAYOUT_2_1.row_centre_y(idx) + CALENDASH_TEXT_Y_OFFSET
+            row_centre = LAYOUT_2_1.row_centre_y(idx) + 10
             clipped_summary, clipped_date = truncate_pair(
                 event.summary,
                 event.display_date,
