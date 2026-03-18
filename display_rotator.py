@@ -7,6 +7,7 @@ Features:
   - tap left side  -> previous page
   - tap right side -> next page
   - double tap     -> screen off/on
+  - hold 3 seconds -> main menu
 """
 
 from __future__ import annotations
@@ -39,12 +40,16 @@ DEFAULT_FBDEV = "/dev/fb1"
 DEFAULT_WIDTH = 320
 DOUBLE_TAP_WINDOW_SECS = 0.25
 TAP_DEBOUNCE_SECS = 0.20
+HOLD_TO_SELECTOR_SECS = float(os.environ.get("ROTATOR_HOLD_TO_SELECTOR_SECS", "3.0"))
 DEFAULT_FB_BLANK_FAILURE_THRESHOLD = 3
 DEFAULT_POWER_SUMMARY_INTERVAL_SECS = 300
 DEFAULT_BACKOFF_STEPS = (10, 30, 60)
 DEFAULT_BACKOFF_MAX_SECS = 300
 DEFAULT_QUARANTINE_FAILURE_THRESHOLD = 3
 DEFAULT_QUARANTINE_CYCLES = 3
+BASE_DIR = Path(__file__).resolve().parent
+BOOT_SELECTOR_SCRIPT = BASE_DIR / "boot" / "boot_selector.py"
+BOOT_SELECTOR_SERVICE = os.environ.get("ROTATOR_BOOT_SELECTOR_SERVICE", "boot-selector.service").strip() or "boot-selector.service"
 
 DISCOVERY_CONFIG_DOCS = [
     {
@@ -717,6 +722,34 @@ def select_touch_device() -> str | None:
     return None
 
 
+def activate_boot_selector() -> int:
+    running_under_systemd = bool(os.environ.get("INVOCATION_ID", "").strip())
+    if running_under_systemd:
+        result = subprocess.run(["systemctl", "start", BOOT_SELECTOR_SERVICE], check=False, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"[rotator] Long press detected; started {BOOT_SELECTOR_SERVICE}.", flush=True)
+            return 0
+
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        print(f"[rotator] Failed to start {BOOT_SELECTOR_SERVICE}: {stderr}", file=sys.stderr, flush=True)
+        return result.returncode
+
+    if not BOOT_SELECTOR_SCRIPT.exists():
+        print(f"[rotator] Boot selector script not found: {BOOT_SELECTOR_SCRIPT}", file=sys.stderr, flush=True)
+        return 1
+
+    manual_env = os.environ.copy()
+    manual_env.pop("INVOCATION_ID", None)
+    subprocess.Popen(
+        [sys.executable, "-u", str(BOOT_SELECTOR_SCRIPT)],
+        cwd=str(BASE_DIR),
+        env=manual_env,
+        start_new_session=True,
+    )
+    print(f"[rotator] Long press detected; launched {BOOT_SELECTOR_SCRIPT} manually.", flush=True)
+    return 0
+
+
 def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_width: int, tap_debounce_secs: float) -> None:
     device = select_touch_device()
     if not device:
@@ -735,11 +768,18 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
     last_x = device_touch_min + (device_touch_width // 2)
     last_y = 0
     touch_down = False
+    touch_started_at = 0.0
     last_tap_ts = None
     last_emit = 0.0
 
-    def emit_tap(raw_x: int, raw_y: int, now: float) -> None:
+    def emit_touch(raw_x: int, raw_y: int, now: float) -> None:
         nonlocal last_tap_ts, last_emit
+        if (now - touch_started_at) >= HOLD_TO_SELECTOR_SECS:
+            cmd_q.put("MAIN_MENU")
+            last_tap_ts = None
+            last_emit = now
+            return
+
         if use_calibration:
             relative_x, _screen_y = touch_calibration.map_to_screen(raw_x, raw_y, width=touch_width, height=1)
         else:
@@ -781,15 +821,17 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
                 elif ev_type == EV_KEY and ev_code == BTN_TOUCH:
                     if ev_value == 1:
                         touch_down = True
+                        touch_started_at = time.monotonic()
                     elif ev_value == 0 and touch_down:
                         touch_down = False
-                        emit_tap(last_x, last_y, time.monotonic())
+                        emit_touch(last_x, last_y, time.monotonic())
                 elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
                     if ev_value == -1 and touch_down:
                         touch_down = False
-                        emit_tap(last_x, last_y, time.monotonic())
+                        emit_touch(last_x, last_y, time.monotonic())
                     elif ev_value >= 0:
                         touch_down = True
+                        touch_started_at = time.monotonic()
                 elif ev_type == EV_SYN:
                     continue
     except Exception as exc:
@@ -924,6 +966,10 @@ def main() -> int:
 
                     if command == "TOGGLE_SCREEN":
                         screen.toggle()
+                    elif command == "MAIN_MENU":
+                        stop_requested = True
+                        rotate_due = 0
+                        break
                     elif command == "NEXT":
                         next_index = (index + 1) % len(pages)
                         rotate_due = 0
@@ -945,6 +991,9 @@ def main() -> int:
 
             if command == "TOGGLE_SCREEN":
                 screen.toggle()
+            elif command == "MAIN_MENU":
+                stop_requested = True
+                break
             elif command == "NEXT":
                 next_index = (index + 1) % len(pages)
                 break
@@ -954,6 +1003,12 @@ def main() -> int:
 
         stop_child(active_child)
         active_child = None
+
+        if stop_requested:
+            launch_status = activate_boot_selector()
+            if launch_status != 0:
+                return launch_status
+            break
 
         if early_exit and (last_returncode is None or last_returncode != 0):
             state["consecutive_failures"] += 1
