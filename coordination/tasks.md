@@ -147,7 +147,7 @@ Agent: Forge
 Status: OPEN  
 
 Objective:
-Audit and harden service/runtime boundaries so refresh jobs do not depend on obsolete foreground-service assumptions and the service privilege model is explicit.
+Audit and harden service/runtime boundaries so refresh jobs do not depend on obsolete foreground-service assumptions, the service privilege model is explicit, and shell-facing integration follows the operator-selected stop/reclaim and request-file contracts.
 
 Allowed files:
 - `systemd/*`
@@ -170,6 +170,8 @@ Acceptance criteria:
 
 Dependencies:
 - `R-001`
+- `D-006`
+- `D-007`
 
 ---
 
@@ -237,6 +239,8 @@ Acceptance criteria:
 
 Dependencies:
 - `R-000`
+- `D-006`
+- `D-007`
 
 ---
 

@@ -137,7 +137,7 @@ Recording this ensures we keep the existing behavior (systemd vs manual start pa
 Implications:
 - Shell mode transitions must continue to use `launch_service` or the player/shutdown runners to keep behavior unchanged while future logic builds on top of them.
 - Because the shell now only regains control when those commands exit, any future Home gesture or watchdog logic must integrate with this same path rather than introducing a parallel start/stop mechanism.
-- Merlin should define how a running child is stopped gracefully (and when force-kill is acceptable) and how the long-press Home gesture will signal the shell to reclaim `/dev/fb1`, since no such mechanism exists today.
+- Stop and reclaim policy is now fixed by `D-006`, which defines graceful-then-kill behavior and exit-gated framebuffer reclaim for this rebuild.
 
 Supersedes:
 None
@@ -159,7 +159,80 @@ Task R-005 calls for documenting the interaction surface so Forge and other stre
 Implications:
 - Timers or systemd units must call into this interface (or whatever RPC/IPC layer backs it) rather than independently starting new services, to avoid competing for `/dev/fb1`.
 - The AppSpec registry described above is the single source that maps each `SHELL_MODE` to a launch command, preview assets, and `supports_home_gesture`.
-- Contract gap: nobody has implemented `handle_mode_request`, the concrete request schema, or how the shell receives requests yet. Merlin needs to define the request payload, how the request is delivered (e.g., systemd timer with `systemd-notify` or other IPC), and how transitions reconcile with the existing manual menu path.
+- Request transport is now fixed by `D-007`, which selects a request-file transport for this rebuild while leaving concrete implementation work to the appropriate stream.
+
+Supersedes:
+None
+
+---
+
+DECISION ID: D-006  
+Status: ACTIVE  
+
+Topic:
+Shell child stop and reclaim policy
+
+Decision:
+During this rebuild, shell reclaim behavior is implemented as graceful stop first, then force-kill if required.
+- The shell requests child shutdown via the canonical stop path.
+- Child apps are expected to exit on graceful termination within a short timeout.
+- If the child does not exit in time, force-kill is permitted.
+- The shell must not reclaim framebuffer control or redraw the menu until the child process is confirmed exited.
+
+Reason:
+The operator selected `Graceful then kill` to make reclaim behavior concrete and safe for the rebuild.
+
+Implications:
+- Home long-press and any reclaim flow must use this stop path.
+- Force-kill is an explicit fallback, not a parallel normal path.
+- Forge and Atlas should treat framebuffer ownership handoff as exit-gated.
+
+Supersedes:
+The open reclaim-policy ambiguity noted in `D-R-005-2`
+
+---
+
+DECISION ID: D-007  
+Status: ACTIVE  
+
+Topic:
+Mode-switch request transport
+
+Decision:
+During this rebuild, the shell mode-switch interface uses a simple request-file transport.
+- Timers and services request `menu`, `dashboards`, `photos`, or `night` by writing a mode request file consumed by the shell.
+- No heavier IPC mechanism is introduced in this rebuild unless the operator later supersedes this decision.
+
+Reason:
+The operator selected `Simple request file` as the mode-switch transport for the rebuild.
+
+Implications:
+- `handle_mode_request` should be designed around file-delivered requests.
+- systemd timers and services must target the request-file path instead of directly competing for foreground ownership.
+- Any request schema work should assume file serialization first.
+
+Supersedes:
+The open request-transport ambiguity noted in `D-R-005-3`
+
+---
+
+DECISION ID: D-008  
+Status: ACTIVE  
+
+Topic:
+Boot menu redesign scope
+
+Decision:
+The finalized boot menu redesign is not part of the required architecture-remediation rebuild scope.
+- It remains a separate follow-up slice unless a minimal compatibility change is required to support the shell contracts being rebuilt.
+
+Reason:
+The operator selected `Separate follow-up` to keep the rebuild focused on remediation and hardening.
+
+Implications:
+- Relay, Forge, Atlas, and Quill should not expand remediation tasks into full menu or UI redesign work.
+- Documentation may mention the redesign as future work, but not as a rebuild deliverable.
+- Any shell or menu changes in this rebuild must be narrowly justified by lifecycle or mode-switch contract needs.
 
 Supersedes:
 None

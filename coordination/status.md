@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-03-14
+Last updated: 2026-03-18
 
 ## Overall
 
@@ -27,6 +27,12 @@ Last updated: 2026-03-14
 - Error handling and exit-code normalization remain incomplete across modules.
 - systemd hardening remains incomplete and still needs explicit review for legacy service coupling.
 - README and operator docs still reflect the earlier migration emphasis more than the remediation roadmap.
+
+## Operator-Sealed Decisions
+
+- The operator selected graceful-then-kill reclaim behavior for shell child shutdown and framebuffer handoff.
+- The operator selected a request-file transport for shell mode switching.
+- The operator selected separate follow-up scope for the finalized boot menu redesign rather than making it a rebuild deliverable.
 
 ## Remediation Reset Summary
 
