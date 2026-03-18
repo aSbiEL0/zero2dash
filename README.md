@@ -11,22 +11,35 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 | Unit | Purpose | Entrypoint |
 | --- | --- | --- |
 | `boot-selector.service` | Primary shell runtime, paged app menu, child-app lifecycle owner | `boot/boot_selector.py` |
-| `display.service` | Manual compatibility path for Dashboards app | `display_rotator.py` |
-| `night.service` | Manual compatibility path for Night blackout app | `modules/blackout/blackout.py` |
-| `shell-mode-switch@.service` | Oneshot shell mode request bridge for timers and operators | `boot/boot_selector.py --request-mode <mode>` |
-| `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
+| `display.service` | Legacy/manual compatibility path for Dashboards | `display_rotator.py` |
+| `night.service` | Legacy/manual compatibility path for Night blackout | `modules/blackout/blackout.py` |
+| `shell-mode-switch@.service` | Shell mode request bridge for timers and operators | `boot/boot_selector.py --request-mode <mode>` |
+| `currency-update.service` | Independent refresh job for the GBP/PLN image | `modules/currency/currency-rate.py` |
 | `weather.service` | Independent refresh job for the weather image | `modules/weather/weather_refresh.py` |
-| `tram.service` | Refresh cached Firswood tram timetable | `modules/trams/tram_gtfs_refresh.py` |
-| `tram-alerts.service` | Refresh cached Bee Network tram alerts | `modules/trams/tram_alerts_refresh.py` |
+| `tram.service` | Independent refresh job for the cached Firswood tram timetable | `modules/trams/tram_gtfs_refresh.py` |
+| `tram-alerts.service` | Independent refresh job for the cached Bee Network tram alerts | `modules/trams/tram_alerts_refresh.py` |
+
+## Rebuild status
+
+- Active rebuild plan: `rebuild-plan.md`
+- Completed slices: `R-001` rotator extraction, `R-002` framebuffer consolidation, `R-003` service boundary hardening
+- `display_rotator.py` remains the supported Dashboards entrypoint
+- `framebuffer.py` and `rotator/` are the shared internal runtime helpers
+- Feature ideas live in `coordination/ideas.md` and remain out of scope unless promoted
 
 ## Repository structure
 
 ```text
 zero2dash/
+├── PLAN.md
+├── rebuild-plan.md
+├── coordination/
 ├── _config.py
 ├── display_rotator.py
+├── framebuffer.py
 ├── modules.txt
 ├── pihole-display-pre.sh
+├── rotator/
 ├── modules/
 │   ├── blackout/
 │   │   ├── blackout.py
@@ -82,7 +95,7 @@ zero2dash/
 - `modules/currency/` owns the currency display script, scheduled refresh script, and currency assets/output PNG.
 - `modules/photos/` owns the photo display script plus Drive sync and resize helpers for the photos workflow.
 - `modules/weather/` owns the weather renderer, cached weather data, and generated weather image.
-- Root-level files are shared runtime helpers used across modules and services.
+- Root-level files such as `_config.py`, `framebuffer.py`, and `rotator/` are shared runtime helpers used across modules and services.
 
 ## Requirements
 
@@ -162,6 +175,7 @@ The normal foreground runtime is now `boot-selector.service`.
 - Refresh jobs like `weather.service`, `currency-update.service`, `tram.service`, and `tram-alerts.service` run independently and do not depend on the foreground shell service being active.
 - `display.service` and `night.service` remain available as manual compatibility paths.
 - `day.timer` and `night.timer` now target `shell-mode-switch@.service` instead of starting competing foreground UI services.
+- The rebuild contract for mode switching is request-file based; the oneshot service is the bridge used by timers and operators.
 
 Shell modes:
 
@@ -371,43 +385,18 @@ journalctl -u tram.service -n 50 --no-pager
 journalctl -u tram-alerts.service -n 50 --no-pager
 ```
 
-## Validation commands
+## Validation matrix
 
-Configuration checks:
-
-```sh
-python3 boot/boot_selector.py --dump-contracts --no-framebuffer --skip-gif
-python3 modules/calendash/calendash-api.py --check-config
-python3 modules/photos/display.py --check-config
-python3 modules/photos/slideshow.py --check-config
-python3 modules/photos/drive-sync.py --check-config
-python3 modules/photos/photo-resize.py --check-config
-python3 modules/currency/currency-rate.py --check-config
-python3 modules/weather/weather_refresh.py --check-config
-python3 modules/pihole/display.py --check-config
-python3 modules/trams/tram_gtfs_refresh.py --check-config
-python3 modules/trams/tram_alerts_refresh.py --check-config
-```
-
-Useful dry-run or local-output checks:
-
-```sh
-python3 boot/boot_selector.py --no-framebuffer --skip-gif
-python3 modules/photos/display.py --test
-python3 modules/photos/slideshow.py --self-test
-python3 modules/photos/slideshow.py --no-framebuffer --output /tmp/photos-slideshow-test.png --max-frames 2
-python3 modules/currency/currency.py --self-test
-python3 modules/currency/currency-rate.py --self-test
-python3 modules/weather/display.py --self-test
-python3 modules/weather/weather_refresh.py --self-test
-python3 modules/pihole/display.py --output-image /tmp/pihole-test.png
-python3 modules/calendash/display.py --output /tmp/calendash-display.png --no-framebuffer
-python3 modules/weather/display.py --output /tmp/weather-display.png --no-framebuffer
-python3 modules/weather/weather_refresh.py --output /tmp/weather.png
-python3 modules/trams/tram_gtfs_refresh.py --self-test
-python3 modules/trams/tram_alerts_refresh.py --self-test
-python3 modules/trams/display.py --output /tmp/trams-display.png --no-framebuffer --frames 1
-```
+| Scope | Command | Notes |
+| --- | --- | --- |
+| Shell contracts | `python3 boot/boot_selector.py --dump-contracts --no-framebuffer --skip-gif` | Confirms the shell registry and mode surface stay intact. |
+| Rotator slice | `python3 -m unittest tests.test_display_rotator` | Covers the extracted touch and screen-power paths. |
+| Framebuffer slice | `python3 -m unittest tests.test_framebuffer` | Covers RGB565 conversion and framebuffer writes. |
+| Shell smoke | `python3 boot/boot_selector.py --no-framebuffer --skip-gif` | Verifies the shell boots without hardware writes. |
+| Module configs | `python3 modules/calendash/calendash-api.py --check-config` and the equivalent `--check-config` checks for photos, weather, Pi-hole, and trams refresh scripts | Confirms script-level config parsing before runtime. |
+| Module self-tests | `python3 modules/photos/slideshow.py --self-test` and `python3 modules/weather/weather_refresh.py --self-test` | Confirms long-running child and refresh helpers still behave. |
+| Pi-hole render | `python3 modules/pihole/display.py --output-image /tmp/pihole-test.png` | Checks a representative image-producing module. |
+| Trams render | `python3 modules/trams/display.py --output /tmp/trams-display.png --no-framebuffer --frames 1` | Checks framebuffer output without hardware writes. |
 
 ## Photos workflow with Drive sync
 
@@ -449,6 +438,12 @@ Manual runtime smoke checks on the Pi:
 - Confirm `weather.service` can run without `display.service` being active.
 - Verify `day.timer` switches to Dashboards and `night.timer` switches to Night without starting a competing foreground service.
 - Confirm `display.service` and `night.service` still work as manual compatibility paths when invoked directly.
+
+## Remaining Risks
+
+- Final Pi validation is still required for touch, framebuffer, and service behavior that cannot be proven on a non-hardware host.
+- `display.service` and `night.service` remain compatibility paths, not the primary runtime.
+- Feature ideas in `coordination/ideas.md` are backlog only until Merlin promotes them.
 
 ## Notes
 

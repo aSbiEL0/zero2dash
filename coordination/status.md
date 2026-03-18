@@ -20,14 +20,15 @@ Last updated: 2026-03-18
 - Shared framebuffer helpers now exist in `framebuffer.py`.
 - Rotator helper extraction exists in `rotator/config.py`, `rotator/backoff.py`, `rotator/discovery.py`, and `rotator/defaults.py`.
 - Touch handling and screen-power control now live in `rotator/touch.py` and `rotator/power.py`.
+- README and operator guidance now match the current rebuild state, including the completed R-001/R-002/R-003 slices and the current validation strategy.
 - Hardware-free tests for rotator helpers and framebuffer conversion were reported passing for the first remediation slice.
 
 ## Open Work
 
-- Rotator decomposition is incomplete: additional runner/refinement work may still be needed around `display_rotator.py`, but touch handling and screen power logic are now extracted.
+- Additional runner/refinement follow-up may still be needed around `display_rotator.py`, but touch handling and screen power logic are now extracted.
 - Error handling and exit-code normalization remain incomplete across modules.
 - systemd hardening remains incomplete and still needs explicit review for legacy service coupling.
-- README and operator docs still reflect the earlier migration emphasis more than the remediation roadmap.
+- Final Pi validation is still needed for hardware-dependent behavior and any follow-on defects.
 
 ## Operator-Sealed Decisions
 

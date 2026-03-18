@@ -177,7 +177,7 @@ Dependencies:
 
 TASK ID: R-004  
 Agent: Quill  
-Status: OPEN  
+Status: COMPLETE
 
 Objective:
 Bring the docs in line with the remediation rebuild by documenting the shell-first baseline, extracted rotator architecture, framebuffer layer, validation strategy, and remaining risks.
