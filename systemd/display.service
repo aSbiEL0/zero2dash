@@ -21,5 +21,5 @@ RestartSec=2
 StandardOutput=journal
 StandardError=journal
 
-# Manual compatibility foreground path during shell-first migration.
+# Manual compatibility foreground path retained for legacy Dashboards launches.
 

@@ -144,7 +144,7 @@ Dependencies:
 
 TASK ID: R-003  
 Agent: Forge  
-Status: OPEN  
+Status: COMPLETE
 
 Objective:
 Audit and harden service/runtime boundaries so refresh jobs do not depend on obsolete foreground-service assumptions, the service privilege model is explicit, and shell-facing integration follows the operator-selected stop/reclaim and request-file contracts.

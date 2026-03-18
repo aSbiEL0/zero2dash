@@ -15,7 +15,7 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 | `night.service` | Manual compatibility path for Night blackout app | `modules/blackout/blackout.py` |
 | `shell-mode-switch@.service` | Oneshot shell mode request bridge for timers and operators | `boot/boot_selector.py --request-mode <mode>` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
-| `weather.service` | Refresh weather image during day mode | `modules/weather/weather_refresh.py` |
+| `weather.service` | Independent refresh job for the weather image | `modules/weather/weather_refresh.py` |
 | `tram.service` | Refresh cached Firswood tram timetable | `modules/trams/tram_gtfs_refresh.py` |
 | `tram-alerts.service` | Refresh cached Bee Network tram alerts | `modules/trams/tram_alerts_refresh.py` |
 
@@ -159,6 +159,7 @@ The normal foreground runtime is now `boot-selector.service`.
 - The shell owns the framebuffer during normal operation.
 - Dashboards runs as a child app via `display_rotator.py`.
 - Photos runs as a child app via `modules/photos/slideshow.py`.
+- Refresh jobs like `weather.service`, `currency-update.service`, `tram.service`, and `tram-alerts.service` run independently and do not depend on the foreground shell service being active.
 - `display.service` and `night.service` remain available as manual compatibility paths.
 - `day.timer` and `night.timer` now target `shell-mode-switch@.service` instead of starting competing foreground UI services.
 
@@ -445,6 +446,7 @@ Manual runtime smoke checks on the Pi:
 - Launch Photos from the shell and verify automatic slide advance.
 - Hold the reserved Home corner and confirm the shell reclaims control.
 - Request shell modes explicitly with `python3 boot/boot_selector.py --request-mode dashboards`, `photos`, `night`, and `menu`.
+- Confirm `weather.service` can run without `display.service` being active.
 - Verify `day.timer` switches to Dashboards and `night.timer` switches to Night without starting a competing foreground service.
 - Confirm `display.service` and `night.service` still work as manual compatibility paths when invoked directly.
 
