@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import glob
-import mmap
 import os
 import queue
 import re
@@ -19,6 +18,7 @@ import time
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from framebuffer import FramebufferWriter
 
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
@@ -228,70 +228,6 @@ def activate_boot_selector() -> int:
     print(f"[blackout] Long press detected; launched {BOOT_SELECTOR_SCRIPT} manually.", flush=True)
     _STOP_REQUESTED = True
     return 0
-
-
-def rgb888_to_rgb565(image: Image.Image) -> bytes:
-    r, g, b = image.split()
-    r = r.point(lambda value: value >> 3)
-    g = g.point(lambda value: value >> 2)
-    b = b.point(lambda value: value >> 3)
-
-    rgb565 = bytearray()
-    rp, gp, bp = r.tobytes(), g.tobytes(), b.tobytes()
-    for idx in range(len(rp)):
-        value = ((rp[idx] & 0x1F) << 11) | ((gp[idx] & 0x3F) << 5) | (bp[idx] & 0x1F)
-        rgb565 += struct.pack("<H", value)
-    return bytes(rgb565)
-
-
-class FramebufferWriter:
-    def __init__(self, fbdev: str, width: int, height: int) -> None:
-        self.fbdev = fbdev
-        self.width = width
-        self.height = height
-        self.expected = width * height * 2
-        self._handle = None
-        self._mapping = None
-
-    def open(self) -> None:
-        handle = open(self.fbdev, "r+b", buffering=0)
-        mapping = mmap.mmap(handle.fileno(), self.expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
-        self._handle = handle
-        self._mapping = mapping
-
-    def clear(self) -> None:
-        if self._mapping is None:
-            raise RuntimeError("Framebuffer is not open")
-        self._mapping.seek(0)
-        self._mapping.write(b"\x00" * self.expected)
-
-    def write_region(self, image: Image.Image, left: int, top: int) -> None:
-        if self._mapping is None:
-            raise RuntimeError("Framebuffer is not open")
-
-        payload = rgb888_to_rgb565(image)
-        row_bytes = image.width * 2
-        for row in range(image.height):
-            start = row * row_bytes
-            end = start + row_bytes
-            offset = (((top + row) * self.width) + left) * 2
-            self._mapping.seek(offset)
-            self._mapping.write(payload[start:end])
-
-    def close(self) -> None:
-        if self._mapping is not None:
-            self._mapping.close()
-            self._mapping = None
-        if self._handle is not None:
-            self._handle.close()
-            self._handle = None
-
-    def __enter__(self) -> "FramebufferWriter":
-        self.open()
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
 
 
 def load_icon(icon_path: Path, width: int, height: int) -> Image.Image:

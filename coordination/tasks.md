@@ -78,7 +78,7 @@ Dependencies:
 
 TASK ID: R-001  
 Agent: Relay  
-Status: OPEN  
+Status: COMPLETE
 
 Objective:
 Continue decomposing `display_rotator.py` by extracting touch handling and screen-power control into internal rotator modules without changing the dashboards entrypoint contract.
@@ -112,7 +112,7 @@ Dependencies:
 
 TASK ID: R-002  
 Agent: Iris  
-Status: OPEN  
+Status: COMPLETE
 
 Objective:
 Finish consolidating framebuffer and RGB565 handling by migrating remaining image-producing paths to `framebuffer.py` and removing duplicate conversion helpers.

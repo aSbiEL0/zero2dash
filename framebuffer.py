@@ -32,7 +32,7 @@ def write_framebuffer(image: Any, fbdev: str, width: int, height: int) -> None:
     payload = framebuffer_payload(image, width, height)
     expected = width * height * 2
     with open(fbdev, "r+b", buffering=0) as framebuffer:
-        mapping = mmap.mmap(framebuffer.fileno(), expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
+        mapping = mmap.mmap(framebuffer.fileno(), expected, access=mmap.ACCESS_WRITE)
         try:
             mapping.seek(0)
             mapping.write(payload)
@@ -51,8 +51,13 @@ class FramebufferWriter:
 
     def open(self) -> None:
         handle = open(self.fbdev, "r+b", buffering=0)
+        try:
+            mapping = mmap.mmap(handle.fileno(), self.expected, access=mmap.ACCESS_WRITE)
+        except Exception:
+            handle.close()
+            raise
         self._handle = handle
-        self._mapping = mmap.mmap(handle.fileno(), self.expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
+        self._mapping = mapping
 
     def write_frame(self, image: Any) -> None:
         if self._mapping is None:
