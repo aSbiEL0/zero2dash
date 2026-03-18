@@ -41,6 +41,75 @@ Dependencies:
 
 ## Active Tasks
 
+TASK ID: R-007  
+Agent: Merlin  
+Status: OPEN  
+
+Objective:
+Audit and normalize failure semantics so genuine runtime and refresh failures return non-zero consistently without weakening existing rotator backoff or quarantine protection.
+
+Allowed files:
+- `display_rotator.py`
+- `modules/*`
+- relevant tests
+- `coordination/*`
+
+Forbidden files:
+- `boot/*`
+- menu/UI redesign files
+- unrelated assets
+
+Deliverables:
+- bounded task split for implementation agents
+- current failure-semantics gap summary
+- updated coordination state
+
+Acceptance criteria:
+- remaining failure-semantics work is explicitly scoped
+- active gaps are identified before more feature work starts
+- coordination files clearly separate completed rebuild slices from pending work
+
+Dependencies:
+- `R-001`
+- `R-002`
+- `R-003`
+- `R-004`
+- `R-005`
+
+---
+
+TASK ID: R-008  
+Agent: Merlin  
+Status: COMPLETE  
+
+Objective:
+Produce a concise current-state assessment of the software and the remaining areas that require Pi validation or technical review before the rebuild can be closed.
+
+Allowed files:
+- `coordination/status.md`
+- `coordination/tasks.md`
+- `rebuild-plan.md`
+
+Forbidden files:
+- runtime code
+- `boot/*`
+- `systemd/*`
+
+Deliverables:
+- current-state summary
+- explicit review/watch list
+- cleaned coordination references
+
+Acceptance criteria:
+- operator can see what is done, what is pending, and what needs checking next
+- completed rebuild tasks are not mixed into the active queue
+
+Dependencies:
+- `R-007`
+
+---
+
+## Completed Tasks
 TASK ID: R-000  
 Agent: Merlin  
 Status: COMPLETE  
@@ -74,8 +143,6 @@ Acceptance criteria:
 Dependencies:
 - none
 
----
-
 TASK ID: R-001  
 Agent: Relay  
 Status: COMPLETE
@@ -108,8 +175,6 @@ Acceptance criteria:
 Dependencies:
 - `616c169`
 
----
-
 TASK ID: R-002  
 Agent: Iris  
 Status: COMPLETE
@@ -139,8 +204,6 @@ Acceptance criteria:
 
 Dependencies:
 - `616c169`
-
----
 
 TASK ID: R-003  
 Agent: Forge  
@@ -173,8 +236,6 @@ Dependencies:
 - `D-006`
 - `D-007`
 
----
-
 TASK ID: R-004  
 Agent: Quill  
 Status: COMPLETE
@@ -206,8 +267,6 @@ Dependencies:
 - `R-001`
 - `R-002`
 - `R-003`
-
----
 
 TASK ID: R-005  
 Agent: Atlas  
@@ -242,43 +301,3 @@ Dependencies:
 - `D-006`
 - `D-007`
 
----
-
-TASK ID: R-006  
-Agent: Iris  
-Status: COMPLETE  
-
-Objective:
-Implement the operator-requested text layout tuning by increasing the global side margins, pushing each column text 10px inward, leaving the trams ticker untouched, and nudging the Calendash text block 15px downward so it sits further from the logo.
-
-Context
-- rebuild-plan Steps 3/4 (layout helpers and module rendering)
-- operator request for consistent spacing
-
-Allowed files:
-- `display_layout.py`
-- `modules/trams/display.py`
-- `modules/weather/weather_refresh.py`
-- `modules/pihole/display.py`
-- `modules/calendash/calendash-api.py`
-
-Forbidden files:
-- `modules/currency/*` (background still in flux)
-- `boot/*`
-- `systemd/*`
-- `modules/photos/*`
-
-Deliverables:
-- new `SIDE_MARGIN`/`TEXT_INSET` constants and updated `aligned_text_x` to honor the 20px border and 10px inset
-- adjusted module draw calls so left/right text respects the inset while the ticker strip remains aligned to `LAYOUT_2_1.body.left`
-- Calendash rendering offsets every text row/message 15px lower than before
-- summary of validations and any open questions
-
-Acceptance criteria:
-- horizontal margins expand to 20px and every text placement (aside from the trams ticker) shifts inward by 10px
-- trams departure/message text uses the new inset while the ticker strip keeps its previous alignment
-- Calendash text rows and messages draw 15px lower
-- only the allowed files are modified and the currency background assets remain untouched
-
-Dependencies:
-- `R-000`

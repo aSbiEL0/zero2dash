@@ -2,54 +2,46 @@
 
 Last updated: 2026-03-18
 
-## Overall
+## Current Software State
 
-- Active execution plan is `rebuild-plan.md`.
-- `PLAN.md` is retained as historical context for the shell-first migration that has already been implemented.
-- The current rebuild goal is architecture remediation and hardening on top of the shell-first baseline.
+- The active execution plan is `rebuild-plan.md`; `PLAN.md` is historical only.
+- The software baseline is shell-first:
+  - `boot/boot_selector.py` is the long-running shell
+  - `display_rotator.py` remains the dashboards entrypoint
+  - `modules/photos/slideshow.py` remains the Photos entrypoint
+- Shared framebuffer logic exists in `framebuffer.py`.
+- Rotator internals have been split out into `rotator/*`, including touch, power, config, backoff, discovery, and defaults.
+- Rebuild documentation and operator guidance have been refreshed to describe the remediation architecture rather than the older migration.
 
-## Baseline State
+## Rebuild Work Already Landed
 
-- Shell-first runtime exists in `boot/boot_selector.py`.
-- Dashboards remains the supported dashboards entrypoint in `display_rotator.py`.
-- Photos is split into a dedicated slideshow app in `modules/photos/slideshow.py`.
-- The first remediation slice has landed on branch `codex/architecture-remediation` as commit `616c169`.
+- `R-000` control-plane cleanup is complete.
+- `R-001` rotator touch and screen-power extraction is complete.
+- `R-002` framebuffer consolidation is complete.
+- `R-003` service-boundary hardening and documentation pass is complete.
+- `R-004` docs and validation guidance refresh is complete.
+- `R-005` shell contract documentation is complete.
 
-## Verified Work
+## What Still Needs Looking At
 
-- Shared framebuffer helpers now exist in `framebuffer.py`.
-- Rotator helper extraction exists in `rotator/config.py`, `rotator/backoff.py`, `rotator/discovery.py`, and `rotator/defaults.py`.
-- Touch handling and screen-power control now live in `rotator/touch.py` and `rotator/power.py`.
-- README and operator guidance now match the current rebuild state, including the completed R-001/R-002/R-003 slices and the current validation strategy.
-- Hardware-free tests for rotator helpers and framebuffer conversion were reported passing for the first remediation slice.
-
-## Open Work
-
-- Additional runner/refinement follow-up may still be needed around `display_rotator.py`, but touch handling and screen power logic are now extracted.
-- Error handling and exit-code normalization remain incomplete across modules.
-- systemd hardening remains incomplete and still needs explicit review for legacy service coupling.
-- Final Pi validation is still needed for hardware-dependent behavior and any follow-on defects.
+- Failure semantics are still not normalized across the runtime. Genuine render and refresh failures do not yet fail consistently enough.
+- Pi validation is still required for hardware-owned behavior:
+  - dashboard launch flow
+  - Photos touch navigation and exit behavior
+  - screen-power behavior
+  - service interaction under the real selector/menu baseline
+- The current selector/menu baseline needs explicit review so the operator can separate accepted baseline behavior from future redesign work.
+- Service/runtime coupling should be rechecked on hardware even after the documentation hardening pass.
+- Some test coverage still needs extending where the extracted logic now makes that practical.
 
 ## Operator-Sealed Decisions
 
-- The operator selected graceful-then-kill reclaim behavior for shell child shutdown and framebuffer handoff.
-- The operator selected a request-file transport for shell mode switching.
-- The operator selected separate follow-up scope for the finalized boot menu redesign rather than making it a rebuild deliverable.
+- Shell child reclaim is graceful-then-kill, with framebuffer reclaim only after child exit.
+- Shell mode switching uses a request-file transport.
+- Full boot menu redesign is separate follow-up scope, not an implicit rebuild deliverable.
 
-## Remediation Reset Summary
+## Scope Discipline
 
-- The earlier shell/app-split delivery plan solved a product migration goal but did not address the main engineering debt.
-- The active problem statement is now:
-  - monolithic `display_rotator.py`
-  - duplicated framebuffer and RGB565 logic
-  - inconsistent failure semantics and exit codes
-  - weak privilege and service boundaries
-  - fragmented tests
-  - incomplete architecture documentation
-- The rebuild is now being executed as small remediation slices rather than feature streams.
-
-## Integration Readiness
-
-- The repo is not yet at final rebuild acceptance.
-- The correct next work is remediation and hardening, not more feature expansion.
-- Feature ideas remain tracked in `coordination/ideas.md` and are out of scope unless explicitly promoted.
+- The rebuild is still a remediation and hardening pass, not feature expansion.
+- Feature ideas remain tracked in `coordination/ideas.md`.
+- New UI or selector redesign work should only start when explicitly promoted into its own task slice.

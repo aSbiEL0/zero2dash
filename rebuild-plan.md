@@ -6,6 +6,23 @@ The shell-first runtime is now the baseline, not the target. This rebuild focuse
 
 The rebuild must proceed in small, merge-safe slices. Prefer behavior-preserving refactors first. Do not use this rebuild to add new user-facing features.
 
+## Current Rebuild State
+
+Completed:
+- control-plane cleanup is done
+- the accepted baseline remediation slice (`616c169`) is in place
+- rotator touch and screen-power internals have been extracted
+- framebuffer helpers have been consolidated into `framebuffer.py`
+- service-boundary documentation and refresh-service hardening have landed
+- rebuild docs and validation guidance have been refreshed
+- shell registry, lifecycle, and mode-switch contracts have been recorded
+
+Still required:
+- normalize failure semantics and exit codes across the runtime
+- review remaining service/runtime coupling on real hardware
+- run final Pi validation against the intended selector/menu behavior
+- keep menu redesign and other feature ideas out of scope unless explicitly promoted
+
 ## Goals
 
 - decompose `display_rotator.py` into clearer internal modules
@@ -71,55 +88,27 @@ Scope:
 
 Owns coordination, sequencing, task slicing, and review.
 
-## Step-by-Step Delivery
-
-### Step 1. Reset the control plane
-
-- replace stale stream-completion status with a live remediation status
-- replace stale task board entries with remediation tasks
-- mark `PLAN.md` historical and make `rebuild-plan.md` active
-- keep feature ideas in `coordination/ideas.md`, but out of scope
-
-### Step 2. Accept the first remediation slice
-
-- use branch `codex/architecture-remediation` and commit `616c169` as the starting point
-- treat `framebuffer.py` and `rotator/*` as real baseline code, not scratch work
-- preserve `display_rotator.py` as the public dashboards entrypoint
-
-### Step 3. Finish rotator decomposition
-
-- extract touch handling from `display_rotator.py`
-- extract screen-power control from `display_rotator.py`
-- keep entrypoint behavior and dashboard flow stable
-- move control-path status output toward structured logging at the runner boundary
-
-### Step 4. Finish framebuffer consolidation
-
-- migrate remaining modules away from duplicate RGB565/framebuffer helpers
-- remove duplicate conversion logic where practical
-- keep hardware output behavior stable
-
-### Step 5. Normalize failure semantics
+## Remaining Delivery
+### Step 1. Normalize failure semantics
 
 - return non-zero for genuine render or refresh failures
 - ensure self-tests fail loudly on real errors
 - preserve rotator backoff and quarantine protections
 
-### Step 6. Harden services and privilege boundaries
+### Step 2. Confirm service and privilege boundaries on hardware
 
-- remove hidden dependence on obsolete foreground services
-- ensure refresh/update jobs remain independent
-- make service-user and device-access expectations explicit
-- keep foreground ownership of the framebuffer non-competing
+- confirm refresh/update jobs remain independent on the Pi
+- verify service-user and device-access expectations are correct in deployment
+- verify foreground framebuffer ownership stays non-competing in practice
 
-### Step 7. Expand tests
+### Step 3. Expand tests where extracted logic now allows it
 
 - add deterministic tests for extracted rotator components
 - add or extend framebuffer conversion tests
 - add tests around failure semantics where logic is now isolated
 - reserve Pi-only checks for final integration validation
 
-### Step 8. Final docs and validation
+### Step 4. Final docs and validation closeout
 
 - document the real current architecture, not the old migration intent
 - add operator guidance for runtime checks, service checks, and rollback paths
@@ -127,17 +116,16 @@ Owns coordination, sequencing, task slicing, and review.
 
 ## Merge Order
 
-1. Control-plane cleanup
-2. Relay and Iris in parallel on disjoint internals
-3. Atlas compatibility review
-4. Forge systemd hardening
-5. Quill final docs and validation pass
+1. Failure-semantics slice
+2. Hardware validation and service verification
+3. Targeted test expansion
+4. Final docs closeout
 
 ## Acceptance Criteria
 
-- `display_rotator.py` is materially smaller in responsibility even if it remains the entrypoint
+- `display_rotator.py` remains an entrypoint, not a monolith for touch/power internals
 - framebuffer conversion and write logic is single-source for supported module paths
 - module and service failures signal failure consistently
 - refresh/update services no longer depend on obsolete foreground-runtime assumptions
-- hardware-free tests cover the extracted logic
+- hardware-free tests cover the extracted logic that was actually isolated
 - docs and coordination files describe the actual rebuild state accurately
