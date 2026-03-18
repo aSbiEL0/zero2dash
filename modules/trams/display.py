@@ -266,12 +266,23 @@ def _fit_font(text: str, *, width_limit: int, initial_size: int, min_size: int, 
 def _ellipsize_text(text: str, font: ImageFont.ImageFont | ImageFont.FreeTypeFont, width_limit: int) -> str:
     return ellipsize_text(text, font, width_limit)
 
+
 def _cache_status(cache: dict[str, Any] | None) -> str:
     if cache is None:
         return "missing"
     if not isinstance(cache.get("departures"), list) or not isinstance(cache.get("service_calendar"), dict):
         return "invalid"
     return "ok"
+
+
+def _departure_message(status: str, departures: list[Departure]) -> str | None:
+    if status != "ok":
+        return "Timetable unavailable"
+    if not departures:
+        return "No more trams today"
+    if departures[0].minutes > 60:
+        return "No departures"
+    return None
 
 
 def _alert_texts_from_cache(alerts_cache: dict[str, Any] | None) -> list[str] | None:
@@ -310,16 +321,14 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
     white = (245, 245, 245)
-    departures = compute_upcoming_departures(cache or {}, now, limit=3) if _cache_status(cache) == "ok" else []
+    status = _cache_status(cache)
+    departures = compute_upcoming_departures(cache or {}, now, limit=3) if status == "ok" else []
     body_font = _fit_font("Rochdale Town Centre", width_limit=LAYOUT_2_1.left.width, initial_size=22, min_size=22)
     mins_font = _fit_font("27min", width_limit=LAYOUT_2_1.right.width, initial_size=22, min_size=22)
     message_font = _fit_font("Timetable unavailable", width_limit=LAYOUT_2_1.body.width, initial_size=22, min_size=22)
-    status = _cache_status(cache)
-    if status != "ok":
-        message = _ellipsize_text("Timetable unavailable", message_font, LAYOUT_2_1.body.width)
-        draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
-    elif not departures:
-        message = _ellipsize_text("No more trams today", message_font, LAYOUT_2_1.body.width)
+    message = _departure_message(status, departures)
+    if message is not None:
+        message = _ellipsize_text(message, message_font, LAYOUT_2_1.body.width)
         draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
     else:
         for index, departure in enumerate(departures):
@@ -412,6 +421,18 @@ def run_self_tests() -> int:
     upcoming = compute_upcoming_departures(cache, now, limit=4)
     if [item.headsign for item in upcoming] != ["Victoria", "Rochdale Town Centre"]:
         raise AssertionError("departures should be ordered chronologically")
+    if _departure_message("ok", upcoming) is not None:
+        raise AssertionError("departures within 60 minutes should render normally")
+    boundary_departures = [Departure(headsign="Victoria", departure_time="09:00:00", departure_dt=now + timedelta(minutes=60), minutes=60)]
+    if _departure_message("ok", boundary_departures) is not None:
+        raise AssertionError("a departure exactly 60 minutes away should still render")
+    delayed_departures = [Departure(headsign="Victoria", departure_time="09:01:00", departure_dt=now + timedelta(minutes=61), minutes=61)]
+    if _departure_message("ok", delayed_departures) != "No departures":
+        raise AssertionError("a departure beyond 60 minutes should report no departures")
+    if _departure_message("ok", []) != "No more trams today":
+        raise AssertionError("empty departure list should report no more trams today")
+    if _departure_message("invalid", upcoming) != "Timetable unavailable":
+        raise AssertionError("invalid cache should report timetable unavailable")
     if ticker_text_from_alerts(None) != "Alerts unavailable":
         raise AssertionError("missing cache should report alerts unavailable")
     if ticker_text_from_alerts({"items": []}) != "No current tram alerts":
