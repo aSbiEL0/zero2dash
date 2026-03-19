@@ -85,7 +85,7 @@ Dependencies:
 
 TASK ID: R-013
 Agent: Curator
-Status: IN_PROGRESS
+Status: COMPLETE
 
 Objective:
 Update repo-facing documentation and the GitHub wiki so they reflect the now-landed shell repair and asset-backed menu rebuild accurately.

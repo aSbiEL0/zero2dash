@@ -18,6 +18,11 @@ import time
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from framebuffer import FramebufferWriter
 
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
@@ -35,7 +40,6 @@ HOLD_TO_SELECTOR_SECS = float(os.environ.get("BLACKOUT_HOLD_TO_SELECTOR_SECS", "
 TIME_TEXT_RGB = (64, 64, 64)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 _STOP_REQUESTED = False
-BASE_DIR = Path(__file__).resolve().parents[2]
 BOOT_SELECTOR_SCRIPT = BASE_DIR / "boot" / "boot_selector.py"
 BOOT_SELECTOR_SERVICE = os.environ.get("BLACKOUT_BOOT_SELECTOR_SERVICE", "boot-selector.service").strip() or "boot-selector.service"
 PARENT_SHELL_MODE_REQUEST_PATH = os.environ.get("BOOT_SELECTOR_MODE_REQUEST_PATH", "").strip()

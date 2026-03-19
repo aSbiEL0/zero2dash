@@ -46,6 +46,10 @@ Last updated: 2026-03-19
 - Pi smoke testing is now in progress for touch hardware, framebuffer ownership, and real service interaction.
 - Current Pi note: the shell now boots to the themed main menu on device.
 - Latest repo note: the touch-remediation slice is now implemented locally. It adds reusable touch calibration, routes root Dashboards through `dashboards_menu`, closes the shell reader while Dashboard/Night own touch, and teaches shell/rotator/blackout to consume ADS7846 `ABS_X/ABS_Y + EV_SYN` gestures.
+- Latest Pi runtime note: ADS7846 touch selection now reaches `dashboards_menu`, but Pi smoke exposed two child-app crashes instead of touch freezes:
+  - `display_rotator.py` called its local `discover_pages()` wrapper with an unsupported `resolve_path=` keyword
+  - `modules/blackout/blackout.py` failed to import `framebuffer` when launched as a child by path from the repo root
+- Latest repo fix note: Mouser patched both child launch regressions and added a regression test for the rotator `parse_pages()` path.
 - Latest validation note: hardware-free Python test execution is still blocked in this shell by a local interpreter wrapper issue, so the next meaningful gate is Pi retest with the updated branch.
 - Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
 

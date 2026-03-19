@@ -57,7 +57,7 @@ def parse_pages(base_dir: Path, list_pages: bool = False) -> list[str]:
     raw = os.environ.get("ROTATOR_PAGES", "").strip()
     if raw:
         return [entry.strip() for entry in raw.split(",") if entry.strip()]
-    return discover_pages(base_dir, list_pages=list_pages, resolve_path=lambda raw_path, root: _resolve_path(raw_path, base_dir=root))
+    return discover_pages(base_dir, list_pages=list_pages)
 
 
 def resolve_page_specs(page_entries: list[str], base_dir: Path, default_dwell_secs: int) -> list[tuple[str, int]]:

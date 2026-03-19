@@ -118,6 +118,10 @@ Latest Pi probe:
 - selected `/dev/input/event0`
 - name `ADS7846 Touchscreen`
 - `BTN_TOUCH=no`
+Latest Pi crash evidence:
+- `display_rotator.py` exited with `TypeError: discover_pages() got an unexpected keyword argument 'resolve_path'`
+- `modules/blackout/blackout.py` exited with `ModuleNotFoundError: No module named 'framebuffer'`
 Latest repo note:
 - the remediation code is now in place locally
+- the child-app crash fixes are now in place locally and await Pi retest
 - local Python test execution is currently blocked in this shell by a wrapper/interpreter issue, so Pi validation is the next gate

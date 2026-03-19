@@ -101,6 +101,17 @@ class DisplayRotatorTests(unittest.TestCase):
                 ],
             )
 
+    def test_parse_pages_uses_discovery_without_manual_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            self._write_module(base_dir, "pihole")
+            (base_dir / "modules.txt").write_text("pihole\n", encoding="utf-8")
+
+            with patch.dict(os.environ, {}, clear=False):
+                pages = display_rotator.parse_pages(base_dir)
+
+            self.assertEqual(pages, ["modules/pihole/display.py"])
+
     def test_discover_pages_skips_photos_from_fallback_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             base_dir = Path(temp_dir)
