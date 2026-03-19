@@ -50,6 +50,8 @@ Last updated: 2026-03-19
   - `display_rotator.py` called its local `discover_pages()` wrapper with an unsupported `resolve_path=` keyword
   - `modules/blackout/blackout.py` failed to import `framebuffer` when launched as a child by path from the repo root
 - Latest repo fix note: Mouser patched both child launch regressions and added a regression test for the rotator `parse_pages()` path.
+- Latest Pi keypad note: Dashboard now runs on device, but the shell keypad still used the wrong logical layout. The actual `keypad.png` asset is a 4x3 grid (`1 2 3 tick` / `4 5 6 0` / `7 8 9 red X`), so the selector's old 3x4 phone-style hit map sent keypad taps to the wrong actions.
+- Latest repo keypad fix note: Mouser updated the keypad resolver and selector tests to match the real asset contract so red X cancels and the green tick submits.
 - Latest validation note: hardware-free Python test execution is still blocked in this shell by a local interpreter wrapper issue, so the next meaningful gate is Pi retest with the updated branch.
 - Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
 

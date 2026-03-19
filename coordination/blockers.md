@@ -121,7 +121,11 @@ Latest Pi probe:
 Latest Pi crash evidence:
 - `display_rotator.py` exited with `TypeError: discover_pages() got an unexpected keyword argument 'resolve_path'`
 - `modules/blackout/blackout.py` exited with `ModuleNotFoundError: No module named 'framebuffer'`
+Latest Pi keypad evidence:
+- Dashboard child now launches successfully
+- `pin_keypad` still misroutes taps because the current selector logic assumes a 3x4 keypad with bottom-row cancel/0/ok, but the real asset is a 4x3 grid with `ok` top-right, `0` middle-right, and `cancel` bottom-right
 Latest repo note:
 - the remediation code is now in place locally
 - the child-app crash fixes are now in place locally and await Pi retest
+- the keypad layout fix is now in place locally and awaits Pi retest
 - local Python test execution is currently blocked in this shell by a wrapper/interpreter issue, so Pi validation is the next gate

@@ -674,9 +674,9 @@ def resolve_theme_picker_action(screen_x: int, screen_y: int, screen_width: int,
 
 
 def resolve_keypad_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str | None:
-    column = min(2, max(0, screen_x // max(1, screen_width // 3)))
-    row = min(3, max(0, screen_y // max(1, screen_height // 4)))
-    keypad = (("1", "2", "3"), ("4", "5", "6"), ("7", "8", "9"), ("cancel", "0", "ok"))
+    column = min(3, max(0, screen_x // max(1, screen_width // 4)))
+    row = min(2, max(0, screen_y // max(1, screen_height // 3)))
+    keypad = (("1", "2", "3", "ok"), ("4", "5", "6", "0"), ("7", "8", "9", "cancel"))
     return keypad[row][column]
 
 

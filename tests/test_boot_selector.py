@@ -201,10 +201,11 @@ class BootSelectorTests(unittest.TestCase):
         w = 320
         h = 240
         self.assertEqual(boot_selector.resolve_keypad_action(5, 5, w, h), "1")
-        self.assertEqual(boot_selector.resolve_keypad_action(160, 70, w, h), "5")
-        self.assertEqual(boot_selector.resolve_keypad_action(300, 190, w, h), "ok")
-        self.assertEqual(boot_selector.resolve_keypad_action(5, 190, w, h), "cancel")
-        self.assertEqual(boot_selector.resolve_keypad_action(160, 190, w, h), "0")
+        self.assertEqual(boot_selector.resolve_keypad_action(120, 100, w, h), "5")
+        self.assertEqual(boot_selector.resolve_keypad_action(300, 20, w, h), "ok")
+        self.assertEqual(boot_selector.resolve_keypad_action(300, 100, w, h), "0")
+        self.assertEqual(boot_selector.resolve_keypad_action(300, 190, w, h), "cancel")
+        self.assertEqual(boot_selector.resolve_keypad_action(160, 190, w, h), "8")
 
         self.assertEqual(boot_selector.evaluate_pin_entry("1234", "1234", 2), ("success", 0))
         self.assertEqual(boot_selector.evaluate_pin_entry("1111", "1234", 0), ("retry", 1))
