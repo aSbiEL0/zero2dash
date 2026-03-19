@@ -124,8 +124,10 @@ Latest Pi crash evidence:
 Latest Pi keypad evidence:
 - Dashboard child now launches successfully
 - `pin_keypad` still misroutes taps because the current selector logic assumes a 3x4 keypad with bottom-row cancel/0/ok, but the real asset is a 4x3 grid with `ok` top-right, `0` middle-right, and `cancel` bottom-right
+- failed PIN streaks were also persisting across unrelated menu navigation, which made the third-failure shutdown trigger after non-consecutive attempts
 Latest repo note:
 - the remediation code is now in place locally
 - the child-app crash fixes are now in place locally and await Pi retest
 - the keypad layout fix is now in place locally and awaits Pi retest
+- the PIN streak reset fix is now in place locally and awaits Pi retest
 - local Python test execution is currently blocked in this shell by a wrapper/interpreter issue, so Pi validation is the next gate

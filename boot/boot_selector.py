@@ -815,6 +815,28 @@ def evaluate_pin_entry(entered_pin: str, expected_pin: str, consecutive_failures
     return ("shutdown", consecutive_failures) if consecutive_failures >= 3 else ("retry", consecutive_failures)
 
 
+def should_reset_pin_failures(screen_name: str, action: str | None, requested_mode: str | None = None) -> bool:
+    if requested_mode is not None:
+        return True
+    if action is None:
+        return False
+    if screen_name == ROOT_MENU_1:
+        return action != APP_ID_LOCKED_CONTENT
+    if screen_name == PIN_KEYPAD:
+        return action == "cancel"
+    return screen_name in {
+        ROOT_MENU_2,
+        DASHBOARDS_MENU,
+        SETTINGS_MENU,
+        SHUTDOWN_CONFIRM,
+        THEMES_MENU,
+        NETWORK_STATUS,
+        PI_STATS_STATUS,
+        LOGS_STATUS,
+        ISS_PLACEHOLDER,
+    }
+
+
 def run_shutdown(command_text: str) -> int:
     command = shutdown_command_args(command_text)
     if not command:
@@ -1205,6 +1227,10 @@ def run_main_screen_shell(
             args.touch_debounce_secs,
             mode_store,
         )
+        if should_reset_pin_failures(current_screen, action, requested_mode):
+            consecutive_pin_failures = 0
+            pending_pin_shutdown = False
+            entered_pin = ""
         if requested_mode is not None:
             if requested_mode == SHELL_MODE_MENU:
                 child_manager.stop_current(reason="menu mode request")

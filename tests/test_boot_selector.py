@@ -211,6 +211,14 @@ class BootSelectorTests(unittest.TestCase):
         self.assertEqual(boot_selector.evaluate_pin_entry("1111", "1234", 0), ("retry", 1))
         self.assertEqual(boot_selector.evaluate_pin_entry("1111", "1234", 2), ("shutdown", 3))
 
+    def test_pin_failures_only_persist_for_immediate_locked_content_retries(self) -> None:
+        self.assertFalse(boot_selector.should_reset_pin_failures(boot_selector.ROOT_MENU_1, boot_selector.APP_ID_LOCKED_CONTENT))
+        self.assertTrue(boot_selector.should_reset_pin_failures(boot_selector.ROOT_MENU_1, "photos"))
+        self.assertTrue(boot_selector.should_reset_pin_failures(boot_selector.PIN_KEYPAD, "cancel"))
+        self.assertFalse(boot_selector.should_reset_pin_failures(boot_selector.PIN_KEYPAD, "ok"))
+        self.assertTrue(boot_selector.should_reset_pin_failures(boot_selector.ROOT_MENU_2, "themes"))
+        self.assertTrue(boot_selector.should_reset_pin_failures(boot_selector.DASHBOARDS_MENU, None, boot_selector.SHELL_MODE_DASHBOARDS))
+
     def test_app_registry_and_mode_request_handling(self) -> None:
         args = types.SimpleNamespace(day_service="display.service", night_service="night.service", mode_request_path="/tmp/shell-mode")
         registry = boot_selector.build_app_registry(args)
