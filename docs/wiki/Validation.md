@@ -7,6 +7,7 @@
 - Theme persistence
 - Mode request handling
 - Tram render smoke tests
+- Pi-side shell validation is complete enough to hand off to app-specific debugging
 
 ## Commands
 
@@ -18,6 +19,5 @@ python3 modules/trams/display.py --self-test
 
 ## Remaining Manual Checks
 
-- Touch hardware on the Pi
-- Framebuffer ownership handoff
-- Service interactions under `systemd`
+- App-specific debugging and validation
+- Any app-level Pi smoke checks that sit outside the shell baseline

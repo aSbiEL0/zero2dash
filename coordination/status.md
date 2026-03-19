@@ -24,7 +24,7 @@ Last updated: 2026-03-19
 ## Active Workstreams
 
 - `R-013` Curator: complete.
-- `R-014` Mouser: in progress.
+- `R-014` Mouser: complete.
 - `R-009` Mouser: coordination reset, dependency tracking, merge control.
 - `R-010` Rotor: complete.
 - `R-011` Switchboard: complete.
@@ -43,18 +43,11 @@ Last updated: 2026-03-19
 - Rotator import/runtime validation passed after merge-conflict cleanup and long-press restoration.
 - Boot selector smoke checks passed for `py_compile` and `--dump-contracts --skip-gif --no-framebuffer`.
 - Hardware-free selector and rotator regression suites now pass.
-- Pi smoke testing is now in progress for touch hardware, framebuffer ownership, and real service interaction.
-- Current Pi note: the shell now boots to the themed main menu on device.
+- The Pi shell baseline is now usable and the remaining work has moved to app-specific debugging.
+- Current Pi note: the shell now boots to the themed main menu on device and the real keypad contract is working.
 - Latest repo note: the touch-remediation slice is now implemented locally. It adds reusable touch calibration, routes root Dashboards through `dashboards_menu`, closes the shell reader while Dashboard/Night own touch, and teaches shell/rotator/blackout to consume ADS7846 `ABS_X/ABS_Y + EV_SYN` gestures.
-- Latest Pi runtime note: ADS7846 touch selection now reaches `dashboards_menu`, but Pi smoke exposed two child-app crashes instead of touch freezes:
-  - `display_rotator.py` called its local `discover_pages()` wrapper with an unsupported `resolve_path=` keyword
-  - `modules/blackout/blackout.py` failed to import `framebuffer` when launched as a child by path from the repo root
-- Latest repo fix note: Mouser patched both child launch regressions and added a regression test for the rotator `parse_pages()` path.
-- Latest Pi keypad note: Dashboard now runs on device, but the shell keypad still used the wrong logical layout. The actual `keypad.png` asset is a 4x3 grid (`1 2 3 tick` / `4 5 6 0` / `7 8 9 red X`), so the selector's old 3x4 phone-style hit map sent keypad taps to the wrong actions.
-- Latest repo keypad fix note: Mouser updated the keypad resolver and selector tests to match the real asset contract so red X cancels and the green tick submits.
-- Latest PIN-state note: the shell was also carrying failed PIN attempts across unrelated menu navigation. Mouser narrowed the contract so only immediate locked-content retries count toward the third-failure shutdown; canceling or navigating to other screens now clears the failure streak.
-- Latest validation note: hardware-free Python test execution is still blocked in this shell by a local interpreter wrapper issue, so the next meaningful gate is Pi retest with the updated branch.
-- Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
+- Latest repo note: the child launch regressions and keypad/PIN-state issues have been fixed, including the real 4x3 `keypad.png` layout and the consecutive-failure shutdown rule.
+- Repo docs are updated and the shell validation handoff is complete; remaining validation belongs to app-specific streams.
 
 ## Archive Note
 

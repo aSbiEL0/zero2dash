@@ -27,6 +27,7 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 - The shell uses real assets from `themes/default`, `themes/comic`, and `themes/steele`
 - Theme selection is persisted only; root-page return state is session-only
 - `rotator/touch.py` restores long-press `MAIN_MENU` return behavior
+- The shell baseline is usable on the Pi, including ADS7846 touch fallback handling, Dashboard/Night launch recovery, and keypad routing
 - Hardware-free tests cover the repaired rotator path and the rebuilt selector/router
 
 ## Asset Contract
@@ -51,6 +52,12 @@ Each theme directory must provide:
 - `keypad.png`
 - `granted.gif`
 - `denied.gif`
+
+`keypad.png` uses a 4x3 layout:
+
+- `1 2 3 tick`
+- `4 5 6 0`
+- `7 8 9 red X`
 
 Shared non-theme assets remain under `boot/`:
 
@@ -79,7 +86,7 @@ Shared non-theme assets remain under `boot/`:
 
 ## Remaining Risks
 
-- Pi-side validation is still required for touch hardware, framebuffer ownership, and service interaction.
+- App-specific debugging still remains, but the shell baseline is now past Pi-side validation.
 - `display.service` and `night.service` remain compatibility paths, not the primary runtime.
 
 ## Repo Map
@@ -108,4 +115,5 @@ zero2dash/
 - `modules/photos/slideshow.py` is the long-running Photos app.
 - `display_rotator.py` is the supported Dashboards entrypoint.
 - The shell’s menu contract is theme-backed, not the old paged tile UI.
+- `pin_keypad` follows the real keypad asset: green tick submits, red X cancels, and only uninterrupted failed keypad submissions count toward shutdown.
 - Touch calibration is env-driven. Use `TOUCH_SWAP_AXES`, `TOUCH_RAW_X_MIN`, `TOUCH_RAW_X_MAX`, `TOUCH_RAW_Y_MIN`, and `TOUCH_RAW_Y_MAX` after capturing values with `--calibrate-touch`.

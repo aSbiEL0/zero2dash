@@ -45,7 +45,7 @@ Dependencies:
 
 TASK ID: R-014
 Agent: Mouser
-Status: IN_PROGRESS
+Status: COMPLETE
 
 Objective:
 Repair the remaining Pi interaction defects by fixing touch calibration, Dashboard routing, child touch ownership, and ADS7846 event handling across the shell and child apps.

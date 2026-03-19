@@ -81,7 +81,7 @@ Remote publication is no longer blocked by access. It is intentionally held unti
 
 BLOCKER ID: B-003
 Raised by: Mouser
-Status: OPEN
+Status: RESOLVED
 
 Problem:
 Pi smoke testing has cleared the shell startup blockers, but the remaining live interaction defects still block sign-off: root-menu touch mapping is wrong, Dashboard freezes touch, Dashboard/Night child readers still miss ADS7846 events, and keypad confirm/cancel hit testing is not aligned to the asset.
@@ -113,21 +113,14 @@ Then repair the runtime contract so:
 - use `python3 boot/boot_selector.py --calibrate-touch` on the Pi if zone mapping is still wrong after the runtime fix
 
 Notes:
-This remains the active Pi validation blocker. The shell itself boots to the main menu successfully after the startup fixes, but runtime interaction is still not trustworthy enough to close the slice.
-Latest Pi probe:
-- selected `/dev/input/event0`
-- name `ADS7846 Touchscreen`
-- `BTN_TOUCH=no`
-Latest Pi crash evidence:
-- `display_rotator.py` exited with `TypeError: discover_pages() got an unexpected keyword argument 'resolve_path'`
-- `modules/blackout/blackout.py` exited with `ModuleNotFoundError: No module named 'framebuffer'`
-Latest Pi keypad evidence:
-- Dashboard child now launches successfully
-- `pin_keypad` still misroutes taps because the current selector logic assumes a 3x4 keypad with bottom-row cancel/0/ok, but the real asset is a 4x3 grid with `ok` top-right, `0` middle-right, and `cancel` bottom-right
-- failed PIN streaks were also persisting across unrelated menu navigation, which made the third-failure shutdown trigger after non-consecutive attempts
+Resolved after the Pi confirmed the shell baseline is usable and the remaining issues are app-specific rather than shell-blocking.
+
+Latest Pi note:
+- ADS7846 touch fallback works
+- Dashboard and Night launch regressions are fixed
+- the real 4x3 keypad layout is now respected
+- third-failure shutdown only applies to uninterrupted failed keypad submissions
+
 Latest repo note:
-- the remediation code is now in place locally
-- the child-app crash fixes are now in place locally and await Pi retest
-- the keypad layout fix is now in place locally and awaits Pi retest
-- the PIN streak reset fix is now in place locally and awaits Pi retest
-- local Python test execution is currently blocked in this shell by a wrapper/interpreter issue, so Pi validation is the next gate
+- the shell baseline is complete and documentation has been updated to match it
+- remaining work now belongs to app-specific debugging streams
