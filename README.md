@@ -117,3 +117,20 @@ zero2dash/
 - The shell’s menu contract is theme-backed, not the old paged tile UI.
 - `pin_keypad` follows the real keypad asset: green tick submits, red X cancels, and only uninterrupted failed keypad submissions count toward shutdown.
 - Touch calibration is env-driven. Use `TOUCH_SWAP_AXES`, `TOUCH_RAW_X_MIN`, `TOUCH_RAW_X_MAX`, `TOUCH_RAW_Y_MIN`, and `TOUCH_RAW_Y_MAX` after capturing values with `--calibrate-touch`.
+
+## NASA App
+
+The standalone ISS app lives in `nasa-app/app.py`.
+
+Current behavior:
+- Cycles map, details, and crew pages every 10 seconds.
+- Refreshes ISS location/details while running and fetches crew on launch.
+- Uses separate JSON caches for location and crew data.
+- Shows `Visibility` on the details page and a factual crew-derived `Expedition Reason` instead of a flyover prediction.
+- Reuses `WEATHER_LAT` and `WEATHER_LON` from `.env` for observer coordinates.
+
+NASA validation:
+- `C:\ISS\.venv\Scripts\python.exe nasa-app\app.py --self-test`
+- `C:\ISS\.venv\Scripts\python.exe -m unittest tests.test_nasa_app`
+- `C:\ISS\.venv\Scripts\python.exe nasa-app\app.py --page details --no-framebuffer --output tmp-nasa-details.png`
+

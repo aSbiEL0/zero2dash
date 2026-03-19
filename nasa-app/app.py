@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 import json
 import mmap
 import os
@@ -22,7 +23,12 @@ import urllib.parse
 import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv(*_args: Any, **_kwargs: Any) -> bool:
+        return False
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
@@ -44,10 +50,10 @@ LOCATION_CACHE_PATH = SCRIPT_DIR / "location_cache.json"
 CREW_CACHE_PATH = SCRIPT_DIR / "crew_cache.json"
 WORLD_MAP_PATH = ASSETS_DIR / "world-map.png"
 LEGACY_ERROR_ASSET_PATH = ASSETS_DIR / "nasa_error.png"
-MAP_TEMPLATE_PATH = ASSETS_DIR / "location.png"
+MAP_TEMPLATE_PATH = ASSETS_DIR / "iss-background.png"
 MAP_STALE_TEMPLATE_PATH = ASSETS_DIR / "location-error.png"
-DETAILS_TEMPLATE_PATH = ASSETS_DIR / "details.png"
-CREW_TEMPLATE_PATH = ASSETS_DIR / "people.png"
+DETAILS_TEMPLATE_PATH = ASSETS_DIR / "iss-background.png"
+CREW_TEMPLATE_PATH = ASSETS_DIR / "people-background.png"
 CREW_STALE_TEMPLATE_PATH = ASSETS_DIR / "people-error.png"
 ERROR_TEMPLATE_PATH = ASSETS_DIR / "error-background.png"
 
@@ -76,7 +82,8 @@ WTIA_POSITIONS_URL = "https://api.wheretheiss.at/v1/satellites/25544/positions"
 OPEN_NOTIFY_ISS_URL = "http://api.open-notify.org/iss-now.json"
 CORQUAID_CREW_URL = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json"
 OPEN_NOTIFY_CREW_URL = "http://api.open-notify.org/astros.json"
-USER_AGENT = "zero2dash-nasa/1.0"
+USER_AGENT = 'zero2dash-nasa/1.0'
+DETAILS_TITLE_FONT_NAME = 'Stay On The Ground Distressed.ttf'
 
 _STOP_REQUESTED = False
 
@@ -116,10 +123,9 @@ class LocationSnapshot:
     country_code: str
     country_name: str
     location_label: str
+    visibility: str
     trail: list[OrbitPoint]
     details_timestamp: int
-    flyover_status: str
-    flyover_label: str
 
 
 @dataclass(frozen=True)
@@ -139,6 +145,8 @@ class CrewSnapshot:
     source: str
     fetched_at: int
     crew: list[CrewMember]
+    expedition: str
+    expedition_reason: str
 
 
 @dataclass(frozen=True)
@@ -220,14 +228,20 @@ def ensure_local_fonts() -> None:
                     continue
 
 
-def load_font(size: int, *, bold: bool = False):
+@lru_cache(maxsize=64)
+def load_font(size: int, *, bold: bool = False, name: str | None = None):
     ensure_directories()
     ensure_local_fonts()
-    candidates = [
-        FONTS_DIR / ("NotoSans-Bold.ttf" if bold else "NotoSans-Regular.ttf"),
-        FONTS_DIR / ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"),
-        FONTS_DIR / ("LiberationSans-Bold.ttf" if bold else "LiberationSans-Regular.ttf"),
-    ]
+    candidates: list[Path] = []
+    if name:
+        candidates.append(FONTS_DIR / name)
+    candidates.extend(
+        [
+            FONTS_DIR / ("NotoSans-Bold.ttf" if bold else "NotoSans-Regular.ttf"),
+            FONTS_DIR / ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"),
+            FONTS_DIR / ("LiberationSans-Bold.ttf" if bold else "LiberationSans-Regular.ttf"),
+        ]
+    )
     for candidate in candidates:
         if candidate.exists():
             try:
@@ -235,7 +249,6 @@ def load_font(size: int, *, bold: bool = False):
             except Exception:
                 continue
     return ImageFont.load_default()
-
 
 def _continent(points: list[tuple[int, int]], width: int, height: int) -> list[tuple[int, int]]:
     return [(int(width * x / 320), int(height * y / 240)) for x, y in points]
@@ -629,10 +642,9 @@ def deserialize_location(payload: dict[str, Any]) -> LocationSnapshot | None:
             country_code=str(payload.get("country_code", "")),
             country_name=str(payload.get("country_name", "")),
             location_label=str(payload.get("location_label", "")),
+            visibility=str(payload.get("visibility", payload.get("flyover_status", "TBA"))).strip() or "TBA",
             trail=trail,
             details_timestamp=int(payload.get("details_timestamp", payload["position_timestamp"])),
-            flyover_status=str(payload.get("flyover_status", "unavailable")),
-            flyover_label=str(payload.get("flyover_label", "Next flyover unavailable")),
         )
     except Exception:
         return None
@@ -662,14 +674,25 @@ def deserialize_crew(payload: dict[str, Any]) -> CrewSnapshot | None:
                     secondary=str(item.get("secondary", "")),
                 )
             )
-        return CrewSnapshot(source=str(payload["source"]), fetched_at=int(payload["fetched_at"]), crew=crew_list)
+        return CrewSnapshot(
+            source=str(payload["source"]),
+            fetched_at=int(payload["fetched_at"]),
+            crew=crew_list,
+            expedition=str(payload.get("expedition", "")),
+            expedition_reason=str(payload.get("expedition_reason", "")),
+        )
     except Exception:
         return None
 
 
 def serialize_crew(snapshot: CrewSnapshot) -> dict[str, Any]:
-    return {"source": snapshot.source, "fetched_at": snapshot.fetched_at, "crew": [asdict(item) for item in snapshot.crew]}
-
+    return {
+        "source": snapshot.source,
+        "fetched_at": snapshot.fetched_at,
+        "crew": [asdict(item) for item in snapshot.crew],
+        "expedition": snapshot.expedition,
+        "expedition_reason": snapshot.expedition_reason,
+    }
 
 def current_unix_time() -> int:
     return int(time.time())
@@ -726,6 +749,7 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
     timestamp_value = safe_int(sat_payload.get("timestamp")) or now_ts
     altitude_km = safe_float(sat_payload.get("altitude"))
     velocity_kmh = safe_float(sat_payload.get("velocity"))
+    visibility = str(sat_payload.get("visibility", "")).strip().title()
     if latitude is None or longitude is None:
         raise ValueError("live location payload is missing latitude/longitude")
 
@@ -734,6 +758,18 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
     details_timestamp = timestamp_value
     map_stale = False
     details_stale = False
+    if altitude_km is None and cached is not None and cached.altitude_km is not None:
+        altitude_km = cached.altitude_km
+        details_stale = True
+    if velocity_kmh is None and cached is not None and cached.velocity_kmh is not None:
+        velocity_kmh = cached.velocity_kmh
+        details_stale = True
+    if not visibility and cached is not None and cached.visibility:
+        visibility = cached.visibility
+        details_stale = True
+    if not visibility:
+        visibility = "TBA"
+
     try:
         geocode = fetch_json(WTIA_COORDS_URL.format(lat=latitude, lon=longitude))
         country_code = str(geocode.get("country_code", "")).upper()
@@ -749,6 +785,8 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
         trail = fetch_trail(timestamp_value)
     except Exception:
         trail = cached.trail if cached is not None else []
+        if trail:
+            map_stale = True
 
     location_label = country_name or ("International Waters" if not country_code else country_code)
     if not country_name and not country_code:
@@ -760,15 +798,14 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
         position_timestamp=timestamp_value,
         latitude=latitude,
         longitude=longitude,
-        altitude_km=altitude_km if altitude_km is not None else (cached.altitude_km if cached is not None else None),
-        velocity_kmh=velocity_kmh if velocity_kmh is not None else (cached.velocity_kmh if cached is not None else None),
+        altitude_km=altitude_km,
+        velocity_kmh=velocity_kmh,
         country_code=country_code,
         country_name=country_name,
         location_label=location_label,
+        visibility=visibility,
         trail=trail,
         details_timestamp=details_timestamp,
-        flyover_status="unavailable",
-        flyover_label="Next flyover unavailable",
     )
     return snapshot, map_stale, details_stale
 
@@ -792,12 +829,11 @@ def build_fallback_location(cached: LocationSnapshot | None) -> tuple[LocationSn
         country_code=cached.country_code if cached is not None else "",
         country_name=cached.country_name if cached is not None else "",
         location_label=cached.location_label if cached is not None else "International Waters",
+        visibility=cached.visibility if cached is not None and cached.visibility else "TBA",
         trail=cached.trail if cached is not None else [],
         details_timestamp=cached.details_timestamp if cached is not None else timestamp_value,
-        flyover_status="unavailable",
-        flyover_label="Next flyover unavailable",
     )
-    return snapshot, False, cached is not None
+    return snapshot, bool(cached is not None and cached.trail), True
 
 
 def resolve_location(country_map: dict[str, str], cache_path: Path, offline: bool) -> tuple[LocationSnapshot | None, bool, bool, bool]:
@@ -819,7 +855,6 @@ def resolve_location(country_map: dict[str, str], cache_path: Path, offline: boo
     if cached is not None:
         return cached, True, True, True
     return None, False, True, True
-
 
 def _parse_launch_epoch(value: Any) -> int | None:
     epoch = safe_int(value)
@@ -850,35 +885,87 @@ def build_secondary(role: str, spacecraft: str, agency: str, days_current: int |
     return role or "ISS crew"
 
 
-def parse_corquaid_crew(payload: dict[str, Any]) -> list[CrewMember]:
+def compact_text(value: Any, limit: int = 56) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    text = re.split(r"(?<=[.!?])\s+", text)[0]
+    return text if len(text) <= limit else f"{text[: limit - 3].rstrip()}..."
+
+
+def normalise_expedition(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.lower().startswith("expedition"):
+        return raw
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    return f"Expedition {digits}" if digits else raw
+
+
+def mission_text_from_payload(payload: dict[str, Any], entries: list[dict[str, Any]]) -> str:
+    for key in ("expedition_reason", "mission", "summary", "description", "title"):
+        value = compact_text(payload.get(key))
+        if value:
+            return value
+    for item in entries:
+        for key in ("mission", "summary", "description", "short_bio", "bio", "title"):
+            value = compact_text(item.get(key))
+            if value:
+                return value
+    return ""
+
+
+def build_expedition_reason(expedition: str, mission_text: str, crew: list[CrewMember]) -> str:
+    if mission_text:
+        return mission_text
+    if expedition and crew:
+        return compact_text(f"{expedition} | {crew[0].role or crew[0].spacecraft or 'ISS crew'}")
+    if expedition:
+        return expedition
+    if crew:
+        lead = crew[0]
+        return compact_text(lead.role or lead.secondary or lead.spacecraft or "ISS crew")
+    return "TBA"
+
+
+def parse_corquaid_crew(payload: dict[str, Any]) -> tuple[list[CrewMember], str, str]:
     entries = payload.get("people", payload.get("crew", payload.get("data", [])))
     if not isinstance(entries, list):
         raise ValueError("crew payload is missing list data")
     now_ts = current_unix_time()
     crew: list[CrewMember] = []
+    iss_entries: list[dict[str, Any]] = []
+    expedition = normalise_expedition(payload.get("iss_expedition") or payload.get("expedition") or payload.get("expedition_number"))
     for item in entries:
         if not isinstance(item, dict):
             continue
-        if not bool(item.get("iss")):
+        craft_name = str(item.get("craft", item.get("spacecraft", ""))).strip().upper()
+        if not bool(item.get("iss")) and craft_name != "ISS":
             continue
+        iss_entries.append(item)
         name = str(item.get("name", "")).strip()
         if not name:
             continue
         role = str(item.get("position", "") or item.get("role", "")).strip()
-        spacecraft = str(item.get("spacecraft", "")).strip()
+        spacecraft = str(item.get("spacecraft", "")).strip() or "ISS"
         agency = str(item.get("agency", "")).strip()
         launched = _parse_launch_epoch(item.get("launched"))
         days_prior = safe_int(item.get("days_in_space"))
         days_current = days_prior
         if launched is not None and days_prior is not None:
             days_current = days_prior + max(0, (now_ts - launched) // 86400)
+        item_expedition = normalise_expedition(item.get("expedition") or item.get("expedition_number"))
+        if not expedition and item_expedition:
+            expedition = item_expedition
         crew.append(CrewMember(name=name, role=role or "Crew", spacecraft=spacecraft, agency=agency, launched=launched, days_in_space_prior=days_prior, days_in_space_current=days_current, secondary=build_secondary(role, spacecraft, agency, days_current)))
     if not crew:
         raise ValueError("crew payload did not include ISS members")
-    return crew
+    mission_text = mission_text_from_payload(payload, iss_entries)
+    return crew, expedition, build_expedition_reason(expedition, mission_text, crew)
 
 
-def parse_open_notify_crew(payload: dict[str, Any]) -> list[CrewMember]:
+def parse_open_notify_crew(payload: dict[str, Any]) -> tuple[list[CrewMember], str, str]:
     entries = payload.get("people", [])
     if not isinstance(entries, list):
         raise ValueError("open-notify crew payload is missing list data")
@@ -894,7 +981,7 @@ def parse_open_notify_crew(payload: dict[str, Any]) -> list[CrewMember]:
         crew.append(CrewMember(name=name, role="Astronaut", spacecraft="ISS", agency="", launched=None, days_in_space_prior=None, days_in_space_current=None, secondary="Astronaut | ISS"))
     if not crew:
         raise ValueError("open-notify did not include ISS crew")
-    return crew
+    return crew, "", build_expedition_reason("", "", crew)
 
 
 def resolve_crew(cache_path: Path, offline: bool) -> tuple[CrewSnapshot | None, bool]:
@@ -902,19 +989,20 @@ def resolve_crew(cache_path: Path, offline: bool) -> tuple[CrewSnapshot | None, 
     if offline:
         return cached, cached is not None
     try:
-        live = CrewSnapshot(source="corquaid", fetched_at=current_unix_time(), crew=retry_call(lambda: parse_corquaid_crew(fetch_json(CORQUAID_CREW_URL))))
+        crew, expedition, expedition_reason = retry_call(lambda: parse_corquaid_crew(fetch_json(CORQUAID_CREW_URL)))
+        live = CrewSnapshot(source="corquaid", fetched_at=current_unix_time(), crew=crew, expedition=expedition, expedition_reason=expedition_reason)
         write_json_file(cache_path, serialize_crew(live))
         return live, False
     except Exception:
         pass
     try:
-        fallback = CrewSnapshot(source="open-notify", fetched_at=current_unix_time(), crew=retry_call(lambda: parse_open_notify_crew(fetch_json(OPEN_NOTIFY_CREW_URL))))
+        crew, expedition, expedition_reason = retry_call(lambda: parse_open_notify_crew(fetch_json(OPEN_NOTIFY_CREW_URL)))
+        fallback = CrewSnapshot(source="open-notify", fetched_at=current_unix_time(), crew=crew, expedition=expedition, expedition_reason=expedition_reason)
         write_json_file(cache_path, serialize_crew(fallback))
         return fallback, False
     except Exception:
         pass
     return cached, cached is not None
-
 
 def format_timestamp(timestamp_value: int | None) -> str:
     if timestamp_value is None:
@@ -927,20 +1015,24 @@ def paginate_crew(crew: list[CrewMember], page_size: int = 3) -> list[list[CrewM
         return [[]]
     return [crew[index : index + page_size] for index in range(0, len(crew), page_size)]
 
-
-def load_asset(path: Path) -> Image.Image:
+def _load_asset_cached(path: Path) -> Image.Image:
     if path.exists():
         with Image.open(path) as image:
             return image.convert("RGB").resize((CANVAS_WIDTH, CANVAS_HEIGHT), RESAMPLING_LANCZOS)
     return Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), BACKGROUND_RGB)
 
 
+@lru_cache(maxsize=32)
+def load_asset(path: Path) -> Image.Image:
+    return _load_asset_cached(path)
+
+
+@lru_cache(maxsize=16)
 def load_asset_candidates(*paths: Path) -> Image.Image:
     for path in paths:
         if path.exists():
-            return load_asset(path)
+            return load_asset(path).copy()
     return Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), BACKGROUND_RGB)
-
 
 def rounded_panel_mask(width: int, height: int, radius: int) -> Image.Image:
     mask = Image.new("L", (width, height), 0)
@@ -990,40 +1082,80 @@ def render_map_page(location: LocationSnapshot, *, stale: bool) -> Image.Image:
     draw.text((16, CANVAS_HEIGHT - 20), timestamp_text, font=meta_font, fill=(225, 225, 230))
     return image
 
-
-def render_details_page(location: LocationSnapshot, observer: ObserverConfig, *, stale: bool) -> Image.Image:
+def render_details_page(location: LocationSnapshot, observer: ObserverConfig, expedition_reason: str, *, stale: bool) -> Image.Image:
+    _ = observer
     image = load_asset_candidates(DETAILS_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    label_font = load_font(11, bold=True)
-    value_font = load_font(12, bold=False)
-    small_font = load_font(10, bold=False)
-    if stale:
-        draw.text((23, 217), "API error - displaying cached data", font=small_font, fill=(255, 198, 148))
+    label_font = load_font(11, bold=True, name=DETAILS_TITLE_FONT_NAME)
+    value_font = load_font(11, bold=False)
+    reason_font = load_font(9, bold=False)
+    footer_font = load_font(10, bold=False)
 
-    def draw_label_value(label: str, value: str, label_box: tuple[int, int, int, int], value_box: tuple[int, int, int, int]) -> None:
-        label_x = label_box[0]
-        label_y = centred_text_y(label_font, label, (label_box[1] + label_box[3]) // 2)
-        value_x = value_box[0]
-        value_y = centred_text_y(value_font, value, (value_box[1] + value_box[3]) // 2)
-        draw.text((label_x, label_y), label, font=label_font, fill=TEXT_RGB)
-        draw.text((value_x, value_y), ellipsize_text(value, value_font, value_box[2] - value_box[0]), font=value_font, fill=TEXT_RGB)
+    label_right = 148
+    value_left = 154
+    value_right = 303
+    row_centres = {
+        "lonlat": 58,
+        "over": 87,
+        "visibility": 116,
+        "velocity": 145,
+        "altitude": 174,
+    }
 
-    draw_label_value("Longitude:", f"{location.longitude:.5f}", (35, 44, 155, 64), (182, 44, 297, 64))
-    draw_label_value("Latitude:", f"{location.latitude:.5f}", (40, 70, 145, 90), (176, 70, 297, 90))
+    def draw_row(label: str, value: str, centre_y: int) -> None:
+        label_y = centred_text_y(label_font, label, centre_y)
+        value_text = ellipsize_text(value, value_font, value_right - value_left)
+        value_y = centred_text_y(value_font, value_text, centre_y)
+        label_width = draw.textbbox((0, 0), label, font=label_font)[2]
+        draw.text((label_right - label_width, label_y), label, font=label_font, fill=TEXT_RGB)
+        draw.text((value_left, value_y), value_text, font=value_font, fill=TEXT_RGB)
+
     country_value = location.country_name or location.location_label or "International Waters"
-    country_left, country_right = truncate_pair("Currently", country_value, left_font=label_font, right_font=value_font, left_width_limit=112, right_width_limit=118)
-    draw.text((36, 96), country_left, font=label_font, fill=TEXT_RGB)
-    draw.text((36, 114), "over:", font=label_font, fill=TEXT_RGB)
-    draw.text((166, 104), country_right, font=value_font, fill=TEXT_RGB)
-    draw_label_value("Velocity", f"{location.velocity_kmh:.0f}km/h" if location.velocity_kmh is not None else "Unknown", (38, 132, 154, 166), (172, 138, 297, 160))
-    draw.text((38, 152), "(km/h):", font=label_font, fill=TEXT_RGB)
-    draw_label_value("Altitude:", f"{location.altitude_km:.0f}km" if location.altitude_km is not None else "Unknown", (36, 178, 150, 198), (194, 178, 297, 198))
-    flyover_label = location.flyover_label
-    if observer.lat is None or observer.lon is None:
-        flyover_label = "Next flyover unavailable"
-    draw.text((20, 204), "Next flyover:", font=label_font, fill=TEXT_RGB)
-    draw.text((173, 204), ellipsize_text(flyover_label, value_font, 120), font=value_font, fill=TEXT_RGB)
-    draw.text((20, 220), ellipsize_text(format_timestamp(location.position_timestamp), small_font, CANVAS_WIDTH - 40), font=small_font, fill=MUTED_RGB)
+    lonlat_value = f"{location.longitude:.5f}, {location.latitude:.5f}"
+    visibility_value = location.visibility or "TBA"
+    velocity_value = f"{location.velocity_kmh:,.0f}km/h" if location.velocity_kmh is not None else "Unknown"
+    altitude_value = f"{location.altitude_km:.0f}km" if location.altitude_km is not None else "Unknown"
+
+    draw_row("Lon/Lat:", lonlat_value, row_centres["lonlat"])
+    draw_row("Currently over:", country_value, row_centres["over"])
+    draw_row("Visibility:", visibility_value, row_centres["visibility"])
+    draw_row("Velocity(km/h):", velocity_value, row_centres["velocity"])
+    draw_row("Altitude:", altitude_value, row_centres["altitude"])
+
+    reason_label = "Expedition Reason:"
+    reason_label_width = draw.textbbox((0, 0), reason_label, font=label_font)[2]
+    reason_label_x = max(LEFT_STRIP_WIDTH + 8, (CANVAS_WIDTH - reason_label_width) // 2)
+    draw.text((reason_label_x, centred_text_y(label_font, reason_label, 197)), reason_label, font=label_font, fill=TEXT_RGB)
+
+    reason_text = (expedition_reason or "TBA").strip() or "TBA"
+    words = reason_text.split()
+    reason_lines: list[str] = []
+    current = ""
+    for word in words:
+        trial = word if not current else f"{current} {word}"
+        width = draw.textbbox((0, 0), trial, font=reason_font)[2]
+        if width <= 255 or not current:
+            current = trial
+            continue
+        reason_lines.append(current)
+        current = word
+        if len(reason_lines) == 2:
+            break
+    if len(reason_lines) < 2 and current:
+        reason_lines.append(current)
+    if reason_lines:
+        reason_lines[-1] = ellipsize_text(reason_lines[-1], reason_font, 255)
+    reason_y = 209
+    for line in reason_lines[:2]:
+        line_width = draw.textbbox((0, 0), line, font=reason_font)[2]
+        line_x = max(LEFT_STRIP_WIDTH + 4, (CANVAS_WIDTH - line_width) // 2)
+        draw.text((line_x, reason_y), line, font=reason_font, fill=(220, 220, 226))
+        reason_y += 12
+
+    footer_text = "API error - displaying cached data" if stale else format_timestamp(location.position_timestamp)
+    footer_fill = (255, 198, 148) if stale else MUTED_RGB
+    footer_x = LEFT_STRIP_WIDTH + 2 if stale else LEFT_STRIP_WIDTH + 12
+    draw.text((footer_x, 226), ellipsize_text(footer_text, footer_font, CANVAS_WIDTH - footer_x - 8), font=footer_font, fill=footer_fill)
     return image
 
 
@@ -1076,7 +1208,7 @@ def build_pages(location: LocationSnapshot | None, crew_snapshot: CrewSnapshot |
     total_crew_pages = max(1, len(crew_pages))
     pages = [
         PageState(image=render_map_page(location, stale=map_stale), kind="map", stale=map_stale),
-        PageState(image=render_details_page(location, observer, stale=details_stale), kind="details", stale=details_stale),
+        PageState(image=render_details_page(location, observer, crew_snapshot.expedition_reason if crew_snapshot is not None else "TBA", stale=details_stale), kind="details", stale=details_stale),
     ]
     for index, crew_page in enumerate(crew_pages, start=1):
         pages.append(PageState(image=render_crew_page(crew_page, index, total_crew_pages, stale=crew_stale), kind="crew", stale=crew_stale))
@@ -1098,7 +1230,6 @@ def validate_args(args: argparse.Namespace) -> int | None:
         return 1
     return None
 
-
 def run_self_test() -> int:
     ensure_directories()
     ensure_local_fonts()
@@ -1114,10 +1245,9 @@ def run_self_test() -> int:
         country_code="GB",
         country_name="United Kingdom",
         location_label="United Kingdom",
+        visibility="Daylight",
         trail=[OrbitPoint(timestamp=1699999500, latitude=48.0, longitude=-22.0), OrbitPoint(timestamp=1700000000, latitude=51.5, longitude=-0.12), OrbitPoint(timestamp=1700000500, latitude=56.0, longitude=18.0)],
         details_timestamp=1700000000,
-        flyover_status="unavailable",
-        flyover_label="Next flyover unavailable",
     )
     sample_crew = CrewSnapshot(
         source="self-test",
@@ -1128,6 +1258,8 @@ def run_self_test() -> int:
             CrewMember("Chen Example", "Flight Engineer", "ISS", "JAXA", 1691000000, 40, 50, "Flight Engineer | 50d in space"),
             CrewMember("Dina Example", "Mission Specialist", "ISS", "CSA", None, None, None, "Mission Specialist | ISS"),
         ],
+        expedition="Expedition 72",
+        expedition_reason="Expedition 72 | Commander",
     )
     pages = build_pages(sample_location, sample_crew, ObserverConfig(lat=53.0, lon=-2.0), map_stale=False, details_stale=True, crew_stale=False)
     if len(pages) != 4:
@@ -1141,6 +1273,7 @@ def run_self_test() -> int:
         return 1
     print("[nasa] self-test passed", flush=True)
     return 0
+
 
 def run_preview(args: argparse.Namespace, observer: ObserverConfig, country_map: dict[str, str]) -> int:
     location_path = expand_path(args.location_cache)
@@ -1255,3 +1388,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
