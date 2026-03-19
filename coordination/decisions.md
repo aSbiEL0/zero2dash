@@ -1,7 +1,9 @@
 # Architecture Decisions
 
-This file records current-run implementation decisions and clarifications.
-`PLAN.md` is the only execution source of truth. This file must not override it.
+Archive status: CLOSED on 2026-03-19.
+
+This file records archived implementation decisions from the completed shell-repair run.
+These decisions remain useful history, but they are not automatically binding on the next plan.
 
 Rules:
 - Mouser or the operator records decisions.
@@ -34,7 +36,7 @@ Supersedes:
 
 ---
 
-## Current-Run Decisions
+## Archived Decisions
 
 DECISION ID: D-001
 Status: ACTIVE
@@ -237,4 +239,4 @@ None
 ## Archive Note
 
 - Previous-team decision logs are archive material only.
-- They may explain how the repo got here, but they are not authoritative for this run.
+- This completed run is archive material as well. A future plan may retain, revise, or supersede any decision here.

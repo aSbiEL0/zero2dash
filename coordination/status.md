@@ -2,9 +2,12 @@
 
 Last updated: 2026-03-19
 
-`PLAN.md` is the only execution source of truth. This file is a current-run status summary only.
+Archive status: CLOSED on 2026-03-19.
 
-## Current Execution State
+This file is now an archive summary for the completed shell-repair run.
+It is not the live status board for the next planning cycle.
+
+## Archived Execution State
 
 - The active execution plan is `PLAN.md`.
 - `boot/boot_selector.py` remains the parent shell.
@@ -21,7 +24,7 @@ Last updated: 2026-03-19
 - `rotator/touch.py` again emits `MAIN_MENU` on long press.
 - `boot/boot_selector.py` now discovers themes from `themes/*`, persists only the selected theme, and routes through explicit screen states instead of the old paged tile UI.
 
-## Active Workstreams
+## Archived Workstreams
 
 - `R-013` Curator: complete.
 - `R-014` Mouser: complete.
@@ -52,4 +55,4 @@ Last updated: 2026-03-19
 ## Archive Note
 
 - Older coordination entries from the previous agent team are historical only.
-- If any archive text conflicts with `PLAN.md`, `PLAN.md` wins without exception.
+- This completed run is historical as well. A new plan should establish the next live status source.

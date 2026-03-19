@@ -1,7 +1,9 @@
 # Blockers
 
-This file tracks issues preventing progress in the current run.
-`PLAN.md` remains the only execution source of truth.
+Archive status: CLOSED on 2026-03-19.
+
+This file now records archived blockers from the completed shell-repair run.
+There are no active blockers in this archive state.
 
 Rules:
 - Any agent may log a blocker.
@@ -35,7 +37,7 @@ Notes:
 
 ---
 
-## Active Blockers
+## Archived Blockers
 
 BLOCKER ID: B-001
 Raised by: Mouser
@@ -124,3 +126,8 @@ Latest Pi note:
 Latest repo note:
 - the shell baseline is complete and documentation has been updated to match it
 - remaining work now belongs to app-specific debugging streams
+
+## Current State
+
+- No active blockers are recorded for the archived shell-repair run.
+- New blockers should be logged against the next plan instead of being appended to this archive.

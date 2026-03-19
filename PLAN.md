@@ -1,4 +1,20 @@
-# Shell Repair + Asset-Backed Menu Rebuild
+# PLAN Archive: Shell Repair + Asset-Backed Menu Rebuild
+
+Status: COMPLETE
+Archived: 2026-03-19
+
+This plan is complete and retained as an archive record for the finished shell-repair slice.
+It is no longer the active execution plan for new work. The next plan should replace this file
+or clearly supersede it before additional implementation starts.
+
+## Completion Summary
+
+- The shell baseline was repaired and the selector was rebuilt against the real theme asset tree.
+- `boot/boot_selector.py` remained the parent shell.
+- `display_rotator.py` remained the Dashboards child entrypoint.
+- `modules/photos/slideshow.py` remained the Photos child entrypoint.
+- ADS7846 touch fallback, child launch regressions, keypad routing, and consecutive PIN-failure behavior were fixed to a usable Pi baseline.
+- Coordination, README, and wiki docs were updated to match the landed runtime.
 
 ## Summary
 

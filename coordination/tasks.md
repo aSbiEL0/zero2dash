@@ -1,7 +1,9 @@
 # Tasks
 
-This file tracks active work assignments for the shell repair and asset-backed menu rebuild.
-`PLAN.md` is the only execution source of truth. This file is a progress ledger for the current run only.
+Archive status: CLOSED on 2026-03-19.
+
+This file is now an archive ledger for the completed shell repair and asset-backed menu rebuild run.
+There are no active tasks in this archive state. Do not resume these entries as live work without a new plan.
 
 Rules:
 - Mouser assigns and re-sequences tasks.
@@ -41,7 +43,7 @@ Dependencies:
 
 ---
 
-## Active Tasks
+## Archived Tasks
 
 TASK ID: R-014
 Agent: Mouser
@@ -259,3 +261,4 @@ Dependencies:
 
 - Previous-team task records are archive material only.
 - They do not define scope, contracts, or acceptance criteria for this run.
+- This completed run is now archive material as well until a new plan reopens coordination.
