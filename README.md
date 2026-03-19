@@ -10,7 +10,7 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 
 | Unit | Purpose | Entrypoint |
 | --- | --- | --- |
-| `boot-selector.service` | Boot GIF, 4-quadrant menu, and day/night selector | `boot/boot_selector.py` |
+| `boot-selector.service` | Boot GIF, paged menu, and day/night selector | `boot/boot_selector.py` |
 | `display.service` | Daytime page rotator | `display_rotator.py` |
 | `night.service` | Night blackout screen | `modules/blackout/blackout.py` |
 | `currency-update.service` | Refresh GBP/PLN image | `modules/currency/currency-rate.py` |
@@ -25,6 +25,13 @@ zero2dash/
 ├── _config.py
 ├── display_rotator.py
 ├── modules.txt
+├── nasa-app/
+│   ├── app.py
+│   ├── assets/
+│   ├── crew_cache.json
+│   ├── fonts/
+│   ├── location_cache.json
+│   └── country_codes.json
 ├── pihole-display-pre.sh
 ├── modules/
 │   ├── blackout/
@@ -82,6 +89,7 @@ zero2dash/
 - `modules/photos/` owns the photo display script plus Drive sync and resize helpers for the photos workflow.
 - `modules/weather/` owns the weather renderer, cached weather data, and generated weather image.
 - Root-level files are shared runtime helpers used across modules and services.
+- `nasa-app/` owns the standalone NASA/ISS app, its local assets/fonts, and its JSON caches.
 
 ## Requirements
 
@@ -149,6 +157,16 @@ Common environment variables:
 - `FB_HEIGHT` default: `240`
 - `ACTIVE_HOURS` for day/night timer control
 - `BOOT_SELECTOR_SHUTDOWN_COMMAND` optional safe shutdown command override
+- `BOOT_SELECTOR_MAIN_MENU_PAGE2_IMAGE` optional page 2 menu artwork override
+- `BOOT_SELECTOR_NASA_COMMAND` optional standalone NASA app launch command override
+
+### Boot selector menu
+
+- The main selector now uses two menu pages.
+- On menu page 1, the bottom-left tile launches the standalone NASA/ISS app.
+- On menu page 2, the bottom-left tile opens Photos.
+- The left strip changes selector pages while you are on the main menu.
+- Outside the main menu, the left strip remains the shared back or exit gesture.
 
 ### Pi-hole page
 
@@ -215,6 +233,26 @@ Google Photos notes:
 - Loopback OAuth must complete on the same machine, or through SSH port forwarding.
 - Personal/shared albums are unreliable for unattended use; `LOCAL_PHOTOS_DIR` is the practical primary source.
 - Bundled fallback assets stay in `modules/photos/` by default.
+
+### NASA / ISS app
+
+The NASA app is standalone and is not part of the dashboard rotator.
+
+- App root: `nasa-app/`
+- Entrypoint: `nasa-app/app.py`
+- Local caches:
+  - `nasa-app/location_cache.json`
+  - `nasa-app/crew_cache.json`
+- Local fonts and assets are loaded from `nasa-app/fonts/` and `nasa-app/assets/`
+- Observer coordinates for flyover fallback text reuse `WEATHER_LAT` and `WEATHER_LON`
+
+Safe validation examples:
+
+```sh
+python3 nasa-app/app.py --self-test
+python3 nasa-app/app.py --no-framebuffer --output /tmp/nasa-map.png --page map
+python3 boot/boot_selector.py --no-framebuffer --skip-gif --show-touch-zones --output-main-menu /tmp/main-menu.png --output-selector /tmp/day-night.png
+```
 
 ### Currency
 

@@ -7,7 +7,7 @@ Features:
   - tap left side  -> previous page
   - tap right side -> next page
   - double tap     -> screen off/on
-  - hold 3 seconds -> main menu
+  - hold 2 seconds -> main menu
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ DEFAULT_FBDEV = "/dev/fb1"
 DEFAULT_WIDTH = 320
 DOUBLE_TAP_WINDOW_SECS = 0.25
 TAP_DEBOUNCE_SECS = 0.20
-HOLD_TO_SELECTOR_SECS = float(os.environ.get("ROTATOR_HOLD_TO_SELECTOR_SECS", "3.0"))
+HOLD_TO_SELECTOR_SECS = float(os.environ.get("ROTATOR_HOLD_TO_SELECTOR_SECS", "2.0"))
 DEFAULT_FB_BLANK_FAILURE_THRESHOLD = 3
 DEFAULT_POWER_SUMMARY_INTERVAL_SECS = 300
 DEFAULT_BACKOFF_STEPS = (10, 30, 60)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boot-time framebuffer selector with a 4-quadrant touch menu."""
+"""Boot-time framebuffer selector with a paged touch menu."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 DEFAULT_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", "boot/startup.gif")
 DEFAULT_MAIN_MENU_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_MAIN_MENU_IMAGE", "boot/mainmenu.png")
+DEFAULT_MAIN_MENU_PAGE2_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_MAIN_MENU_PAGE2_IMAGE", "boot/mainmenu-page2.png")
 DEFAULT_SELECTOR_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_DAY_NIGHT_IMAGE", os.environ.get("BOOT_SELECTOR_IMAGE_PATH", "boot/day-night.png"))
 DEFAULT_SHUTDOWN_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_SHUTDOWN_IMAGE", "boot/yes-no.png")
 DEFAULT_KEYPAD_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_KEYPAD_IMAGE", "boot/keypad.png")
@@ -35,6 +36,7 @@ DEFAULT_GRANTED_GIF_PATH = os.environ.get("BOOT_SELECTOR_GRANTED_GIF", "boot/gra
 DEFAULT_DENIED_GIF_PATH = os.environ.get("BOOT_SELECTOR_DENIED_GIF", "boot/denied.gif")
 DEFAULT_SHUTDOWN_COMMAND = os.environ.get("BOOT_SELECTOR_SHUTDOWN_COMMAND", "systemctl poweroff")
 DEFAULT_PLAYER_COMMAND = "/home/pihole/zero2dash/player.sh"
+DEFAULT_NASA_COMMAND = os.environ.get("BOOT_SELECTOR_NASA_COMMAND", "python3 -u /home/pihole/zero2dash/nasa-app/app.py")
 DEFAULT_PIN = os.environ.get("BOOT_SELECTOR_PIN", "")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
 DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.service")
@@ -56,6 +58,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import touch_calibration
+import nasa_menu
 
 DIRECT_MODE_COMMANDS = {
     "display.service": [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")],
@@ -64,6 +67,8 @@ DIRECT_MODE_COMMANDS = {
 MAIN_MENU_HOME = "home"
 MAIN_MENU_INFO = "info"
 MAIN_MENU_PADLOCK = "padlock"
+MAIN_MENU_NASA = "nasa"
+MAIN_MENU_PAGE_TOGGLE = "menu_toggle"
 MAIN_MENU_SHUTDOWN = "shutdown"
 DAY_NIGHT_DAY = "day"
 DAY_NIGHT_NIGHT = "night"
@@ -130,7 +135,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=WIDTH_DEFAULT, help=f"Framebuffer width (default: {WIDTH_DEFAULT})")
     parser.add_argument("--height", type=int, default=HEIGHT_DEFAULT, help=f"Framebuffer height (default: {HEIGHT_DEFAULT})")
     parser.add_argument("--gif", default=DEFAULT_GIF_PATH, help=f"Startup GIF path (default: {DEFAULT_GIF_PATH})")
-    parser.add_argument("--main-menu-image", default=DEFAULT_MAIN_MENU_IMAGE_PATH, help=f"Main menu image path (default: {DEFAULT_MAIN_MENU_IMAGE_PATH})")
+    parser.add_argument("--main-menu-image", default=DEFAULT_MAIN_MENU_IMAGE_PATH, help=f"Main menu page 1 image path (default: {DEFAULT_MAIN_MENU_IMAGE_PATH})")
+    parser.add_argument("--main-menu-page2-image", default=DEFAULT_MAIN_MENU_PAGE2_IMAGE_PATH, help=f"Main menu page 2 image path (default: {DEFAULT_MAIN_MENU_PAGE2_IMAGE_PATH})")
     parser.add_argument("--selector-image", default=DEFAULT_SELECTOR_IMAGE_PATH, help=f"Day/night selector image path (default: {DEFAULT_SELECTOR_IMAGE_PATH})")
     parser.add_argument("--shutdown-image", default=DEFAULT_SHUTDOWN_IMAGE_PATH, help=f"Shutdown confirmation image path (default: {DEFAULT_SHUTDOWN_IMAGE_PATH})")
     parser.add_argument("--keypad-image", default=DEFAULT_KEYPAD_IMAGE_PATH, help=f"Keypad image path (default: {DEFAULT_KEYPAD_IMAGE_PATH})")
@@ -141,6 +147,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--invert-y", action="store_true", default=DEFAULT_TOUCH_INVERT_Y, help="Invert the touch Y axis when deciding top/bottom selection.")
     parser.add_argument("--no-invert-y", action="store_false", dest="invert_y", help="Disable Y-axis inversion for top/bottom selection.")
     parser.add_argument("--output-selector", help="Optional output path for the rendered day/night selector screen.")
+    parser.add_argument("--output-main-menu", help="Optional output path for the rendered main menu page 1.")
     parser.add_argument("--output-gif-first", help="Optional output path for the first rendered startup GIF frame.")
     parser.add_argument("--output-gif-last", help="Optional output path for the last rendered startup GIF frame.")
     parser.add_argument("--no-framebuffer", action="store_true", help="Skip framebuffer writes for local verification.")
@@ -152,6 +159,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--night-service", default=DEFAULT_NIGHT_SERVICE, help=f"systemd unit to start for night mode (default: {DEFAULT_NIGHT_SERVICE})")
     parser.add_argument("--shutdown-command", default=DEFAULT_SHUTDOWN_COMMAND, help=f"Command used for safe shutdown (default: {DEFAULT_SHUTDOWN_COMMAND})")
     parser.add_argument("--player-command", default=DEFAULT_PLAYER_COMMAND, help=f"Command used after entering the correct PIN (default: {DEFAULT_PLAYER_COMMAND}).")
+    parser.add_argument("--nasa-command", default=DEFAULT_NASA_COMMAND, help=f"Command used to launch the NASA app (default: {DEFAULT_NASA_COMMAND}).")
     parser.add_argument("--pin", default=DEFAULT_PIN, help="PIN required by the padlock keypad.")
     parser.add_argument("--show-touch-zones", action="store_true", default=DEFAULT_SHOW_TOUCH_ZONES, help="Draw touch zone overlays on selector screens.")
     return parser.parse_args()
@@ -180,6 +188,9 @@ def validate_args(args: argparse.Namespace) -> int | None:
         return 1
     if not player_command_args(args.player_command):
         print("Player command cannot be empty.", file=sys.stderr)
+        return 1
+    if not player_command_args(args.nasa_command):
+        print("NASA command cannot be empty.", file=sys.stderr)
         return 1
     return None
 
@@ -400,6 +411,10 @@ def load_selector_image(image_path: Path, width: int, height: int) -> Image.Imag
     return Image.new("RGB", (width, height), BACKGROUND_RGB)
 
 
+def load_main_menu_image(image_path: Path, width: int, height: int, page: int) -> Image.Image:
+    return nasa_menu.render_menu_page(page, width, height, str(image_path))
+
+
 def load_gif_frames(gif_path: Path, width: int, height: int, speed: float) -> list[tuple[Image.Image, float]]:
     with Image.open(gif_path) as gif:
         frames: list[tuple[Image.Image, float]] = []
@@ -423,14 +438,10 @@ def _make_region(action: str, left: int, top: int, right: int, bottom: int) -> T
     return TouchRegion(action=action, left=left, top=top, right=right, bottom=bottom)
 
 
-def main_menu_regions(screen_width: int, screen_height: int) -> list[TouchRegion]:
-    mid_x = screen_width // 2
-    mid_y = screen_height // 2
+def main_menu_regions(screen_width: int, screen_height: int, page: int = 0) -> list[TouchRegion]:
     return [
-        _make_region(MAIN_MENU_HOME, 0, 0, max(0, mid_x - 1), max(0, mid_y - 1)),
-        _make_region(MAIN_MENU_INFO, mid_x, 0, max(0, screen_width - 1), max(0, mid_y - 1)),
-        _make_region(MAIN_MENU_PADLOCK, 0, mid_y, max(0, mid_x - 1), max(0, screen_height - 1)),
-        _make_region(MAIN_MENU_SHUTDOWN, mid_x, mid_y, max(0, screen_width - 1), max(0, screen_height - 1)),
+        _make_region(action, left, top, right, bottom)
+        for action, left, top, right, bottom in nasa_menu.menu_specs(page, screen_width, screen_height)
     ]
 
 
@@ -494,8 +505,8 @@ def log_touch_regions(label: str, regions: list[TouchRegion]) -> None:
         )
 
 
-def resolve_main_menu_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str:
-    return resolve_touch_region(screen_x, screen_y, main_menu_regions(screen_width, screen_height), "main menu")
+def resolve_main_menu_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int, page: int = 0) -> str:
+    return resolve_touch_region(screen_x, screen_y, main_menu_regions(screen_width, screen_height, page=page), "main menu")
 
 
 def _resolve_vertical_zone(screen_y: int, screen_height: int, invert_y: bool, top_action: str, bottom_action: str) -> str:
@@ -750,6 +761,21 @@ def run_player(command_text: str) -> int:
     print(f"[boot-selector] Player command failed: {stderr}", file=sys.stderr, flush=True)
     return result.returncode
 
+def run_nasa(command_text: str) -> int:
+    command = player_command_args(command_text)
+    if not command:
+        print("[boot-selector] NASA command is empty.", file=sys.stderr, flush=True)
+        return 1
+    print(f"[boot-selector] Running NASA command: {command}", flush=True)
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode == 0:
+        print("[boot-selector] NASA command completed successfully.", flush=True)
+        return 0
+    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+    print(f"[boot-selector] NASA command failed: {stderr}", file=sys.stderr, flush=True)
+    return result.returncode
+
+
 def main() -> int:
     args = parse_args()
     validation_error = validate_args(args)
@@ -762,24 +788,33 @@ def main() -> int:
     if args.probe_touch:
         return run_touch_probe(args.width, args.height)
 
-    main_menu_image = load_selector_image(Path(args.main_menu_image), args.width, args.height)
+    main_menu_images = [
+        load_main_menu_image(Path(args.main_menu_image), args.width, args.height, 0),
+        load_main_menu_image(Path(args.main_menu_page2_image), args.width, args.height, 1),
+    ]
     selector_image = load_selector_image(Path(args.selector_image), args.width, args.height)
     shutdown_image = load_selector_image(Path(args.shutdown_image), args.width, args.height)
     keypad_image = load_selector_image(Path(args.keypad_image), args.width, args.height)
-    main_regions = main_menu_regions(args.width, args.height)
+    main_region_maps = [
+        main_menu_regions(args.width, args.height, page=0),
+        main_menu_regions(args.width, args.height, page=1),
+    ]
     day_night_regions_map = vertical_regions(args.width, args.height, args.invert_y, DAY_NIGHT_DAY, DAY_NIGHT_NIGHT)
     shutdown_regions_map = vertical_regions(args.width, args.height, args.invert_y, SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL)
     keypad_regions_map = keypad_regions(args.width, args.height)
     if args.show_touch_zones:
-        log_touch_regions("main menu", main_regions)
+        log_touch_regions("main menu page 1", main_region_maps[0])
+        log_touch_regions("main menu page 2", main_region_maps[1])
         log_touch_regions("day/night", day_night_regions_map)
         log_touch_regions("shutdown", shutdown_regions_map)
         log_touch_regions("keypad", keypad_regions_map)
-        main_menu_image = annotate_touch_regions(main_menu_image, main_regions, "Main menu zones")
+        main_menu_images[0] = annotate_touch_regions(main_menu_images[0], main_region_maps[0], "Main menu page 1 zones")
+        main_menu_images[1] = annotate_touch_regions(main_menu_images[1], main_region_maps[1], "Main menu page 2 zones")
         selector_image = annotate_touch_regions(selector_image, day_night_regions_map, "Day/night zones")
         shutdown_image = annotate_touch_regions(shutdown_image, shutdown_regions_map, "Shutdown zones")
         keypad_image = annotate_touch_regions(keypad_image, keypad_regions_map, "Keypad zones")
     blank_image = Image.new("RGB", (args.width, args.height), BACKGROUND_RGB)
+    save_preview(main_menu_images[0], args.output_main_menu)
     save_preview(selector_image, args.output_selector)
 
     framebuffer = None
@@ -792,6 +827,7 @@ def main() -> int:
 
     touch_reader = TouchReader(args.width, args.height)
     consecutive_pin_failures = 0
+    main_menu_page = 0
     try:
         if not args.skip_gif:
             playback_gif(framebuffer, Path(args.gif), args.width, args.height, args.gif_speed, args.output_gif_first, args.output_gif_last)
@@ -801,16 +837,21 @@ def main() -> int:
             return 0
 
         while not STOP_REQUESTED:
+            main_menu_image = main_menu_images[main_menu_page]
             if framebuffer is not None:
                 framebuffer.write_image(main_menu_image)
 
             main_action = wait_for_action(
                 touch_reader,
                 "main menu selection",
-                lambda screen_x, screen_y: resolve_main_menu_action(screen_x, screen_y, args.width, args.height),
+                lambda screen_x, screen_y: resolve_main_menu_action(screen_x, screen_y, args.width, args.height, page=main_menu_page),
                 args.touch_settle_secs,
                 args.touch_debounce_secs,
             )
+            if main_action == MAIN_MENU_PAGE_TOGGLE:
+                main_menu_page = (main_menu_page + 1) % len(main_menu_images)
+                continue
+
             if main_action == MAIN_MENU_HOME:
                 if framebuffer is not None:
                     framebuffer.write_image(selector_image)
@@ -841,6 +882,10 @@ def main() -> int:
                     touch_debounce_secs=args.touch_debounce_secs,
                     skip_action=INFO_SKIP_ACTION,
                 )
+                continue
+
+            if main_action == MAIN_MENU_NASA:
+                run_nasa(args.nasa_command)
                 continue
 
             if main_action == MAIN_MENU_PADLOCK:
@@ -927,3 +972,15 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+
+
+
+
+
+
