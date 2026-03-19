@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the shell-first runtime intact. The shell continues to own menus, settings screens, theme selection, and child launch flow in `boot/boot_selector.py`; Photos remains a child app with its own slideshow runtime under `modules/photos/`; Dashboard is not rebuilt and only receives narrow layout guidance through the existing layout constants and script-local offsets.
 
-**Tech Stack:** Python 3.13, argparse-based shell/module CLIs, Pillow image composition, framebuffer-safe render paths, pytest/unittest regression coverage.
+**Tech Stack:** Python 3.13, argparse-based shell/module CLIs, Pillow image composition, framebuffer-safe render paths, `unittest` regression coverage, and `py_compile` sanity checks.
 
 ---
 
@@ -16,8 +16,8 @@
 
 - **Mouser**: orchestration, dependency control, coordination updates, merge order, and cross-boundary approval.
 - **Pathfinder**: read-only asset and path verification for themes, status assets, and touch-zone assumptions.
-- **Switchboard**: shell/runtime changes in `boot/boot_selector.py`, including Settings and Themes behavior.
-- **Photos Worker**: Mouser-approved narrow worker for `modules/photos/*` and the Photos launch/return contract.
+- **Switchboard**: shell/runtime changes in `boot/boot_selector.py`, including the Photos launch/gesture handoff, Settings behavior, Themes behavior, and shell-local layout knobs.
+- **Photos Worker**: Mouser-approved narrow worker for `modules/photos/*` only, implementing child-side Photos behavior without taking ownership of `boot/boot_selector.py`.
 - **Sentinel**: regression tests for selector routing, theme mapping, and Photos touch behavior.
 - **Curator**: documentation and operator guidance after behavior is stable.
 
@@ -25,6 +25,7 @@
 
 - Pathfinder can run in parallel with Mouser’s coordination reset.
 - Photos Worker can run in parallel with Switchboard after Pathfinder confirms current asset and touch assumptions.
+- Switchboard retains every `boot/boot_selector.py` edit even when the end-user behavior belongs to Photos.
 - Sentinel starts after the first implementation seam exists, then continues in parallel with the remaining implementation work.
 - Curator starts only after Switchboard + Photos Worker + Sentinel are merged and behavior is stable.
 
@@ -33,17 +34,20 @@
 1. Mouser coordination reset
 2. Pathfinder contract scan
 3. Photos Worker stream
-4. Switchboard Settings + Themes stream
+4. Switchboard shell stream
 5. Sentinel regression stream
 6. Mouser integration pass
 7. Curator documentation pass
 
 ---
 
+Task 1 is already complete in the planning commits that opened this branch. Remaining implementation work starts at Task 2.
+
 ### Task 1: Reopen the control plane
 
 **Owner:** Mouser  
 **Dependencies:** none
+**Status:** COMPLETE
 
 **Files:**
 - Modify: `PLAN.md`
@@ -135,14 +139,13 @@ git commit -m "docs: record verified asset and touch contracts"
 
 ---
 
-### Task 3: Document and tighten layout knobs without rebuilding Dashboard
+### Task 3: Tighten shell-local layout knobs without rebuilding Dashboard
 
-**Owner:** Switchboard  
+**Owner:** Switchboard
 **Dependencies:** Task 2
 
 **Files:**
 - Modify: `boot/boot_selector.py`
-- Modify: `README.md`
 - Test: `tests/test_boot_selector.py`
 
 **Step 1: Isolate shell status text offsets**
@@ -169,12 +172,9 @@ ROW_HEIGHT
 RIGHT_EXTRA_INSET
 ```
 
-**Step 3: Document the existing per-script layout knobs**
+**Step 3: Keep this stream code-only**
 
-Add a short README note listing the current script-local margin/offset controls:
-- `modules/calendash/calendash-api.py` → `CALENDASH_TEXT_Y_OFFSET`
-- `modules/currency/currency-rate.py` → `CONTENT_COLUMN_WIDTH`
-- `modules/photos/display.py` → `LOGO_PADDING_RATIO`
+Do not edit `README.md` here. Curator documents the tuning surface after behavior stabilizes so the shell stream stays within the repo ownership rules.
 
 **Step 4: Add a narrow regression if constants are extracted**
 
@@ -183,13 +183,13 @@ Add or update a test that confirms `draw_status_screen()` still renders without 
 **Step 5: Commit**
 
 ```bash
-git add boot/boot_selector.py README.md tests/test_boot_selector.py
+git add boot/boot_selector.py tests/test_boot_selector.py
 git commit -m "refactor: name shell layout knobs for status screens"
 ```
 
 ---
 
-### Task 4: Give Photos dashboard-parity touch behavior
+### Task 4: Give Photos child-owned dashboard-parity touch behavior
 
 **Owner:** Photos Worker  
 **Dependencies:** Task 2
@@ -197,9 +197,7 @@ git commit -m "refactor: name shell layout knobs for status screens"
 **Files:**
 - Modify: `modules/photos/slideshow.py`
 - Modify: `modules/photos/display.py`
-- Modify: `boot/boot_selector.py`
 - Test: `tests/test_photos.py`
-- Test: `tests/test_boot_selector.py`
 
 **Step 1: Write the failing Photos touch tests**
 
@@ -207,7 +205,6 @@ Cover:
 - tap left advances to previous image
 - tap right advances to next image
 - hold exits back to the shell
-- Photos does not require the shell to own the gesture while the child is active
 
 Example target behaviors:
 
@@ -222,7 +219,7 @@ def test_slideshow_hold_requests_menu_exit(): ...
 Run:
 
 ```bash
-python -m pytest tests/test_photos.py -q
+python -m unittest tests.test_photos
 ```
 
 Expected: failing assertions or missing behavior around touch routing.
@@ -238,30 +235,90 @@ Keep the entrypoint contract intact:
 - `modules/photos/slideshow.py` remains the runtime entrypoint
 - `modules/photos/display.py` remains compatible with existing render helpers
 
-**Step 4: Narrow the shell-side launch contract**
+**Step 4: Reuse the existing menu-request contract for exit**
 
-Adjust `boot/boot_selector.py` only as needed so the shell does not compete for gesture ownership while Photos is the foreground child.
+Keep the shell/runtime boundary intact by having the Photos child request `menu` through the existing shell mode-request path on hold-to-exit. Any required `boot/boot_selector.py` change belongs to Task 5, not this stream.
 
 **Step 5: Re-run focused tests**
 
 Run:
 
 ```bash
-python -m pytest tests/test_photos.py tests/test_boot_selector.py -q
+python -m unittest tests.test_photos
 ```
 
-Expected: Photos navigation and exit tests pass.
+Expected: Photos navigation and exit tests pass hardware-free.
 
 **Step 6: Commit**
 
 ```bash
-git add modules/photos/slideshow.py modules/photos/display.py boot/boot_selector.py tests/test_photos.py tests/test_boot_selector.py
+git add modules/photos/slideshow.py modules/photos/display.py tests/test_photos.py
 git commit -m "feat: add dashboard-style touch controls to photos"
 ```
 
 ---
 
-### Task 5: Replace Settings placeholders with operator-summary content
+### Task 5: Move Photos gesture ownership to the shell boundary seam
+
+**Owner:** Switchboard
+**Dependencies:** Task 2
+
+**Files:**
+- Modify: `boot/boot_selector.py`
+- Test: `tests/test_boot_selector.py`
+
+**Step 1: Write failing shell-ownership tests**
+
+Cover:
+- Photos does not leave the shell consuming the same home/gesture path while the child is active
+- the existing request-file return contract still works for child apps
+- `draw_status_screen()` still renders after the shell-local layout constants are extracted
+
+Example target behaviors:
+
+```python
+def test_photos_child_runtime_is_not_shell_gesture_owned(): ...
+def test_handle_mode_request_still_supports_photos_return_contract(): ...
+def test_draw_status_screen_renders_with_named_layout_constants(): ...
+```
+
+**Step 2: Run the focused test file**
+
+Run:
+
+```bash
+python -m unittest tests.test_boot_selector
+```
+
+Expected: failures around Photos shell ownership or missing named layout constants.
+
+**Step 3: Implement the shell-side Photos handoff and extract the layout knobs**
+
+Inside `boot/boot_selector.py`:
+- move Photos to the agreed child-owned gesture path while preserving the existing mode-request transport
+- keep Dashboard/Night ownership unchanged
+- replace inline status-screen coordinates with named shell-local constants
+
+**Step 4: Re-run the focused tests**
+
+Run:
+
+```bash
+python -m unittest tests.test_boot_selector
+```
+
+Expected: Photos shell handoff and layout-constant tests pass hardware-free.
+
+**Step 5: Commit**
+
+```bash
+git add boot/boot_selector.py tests/test_boot_selector.py
+git commit -m "refactor: align photos shell handoff with child-owned touch"
+```
+
+---
+
+### Task 6: Replace Settings placeholders with operator-summary content
 
 **Owner:** Switchboard  
 **Dependencies:** Task 2
@@ -290,7 +347,7 @@ def test_logs_status_reads_shell_stack_services_with_fallback(): ...
 Run:
 
 ```bash
-python -m pytest tests/test_boot_selector.py -q
+python -m unittest tests.test_boot_selector
 ```
 
 Expected: missing content, placeholder-only assertions, or failing render expectations.
@@ -316,7 +373,7 @@ Replace placeholder text with concise operator-summary text blocks. Preserve str
 Run:
 
 ```bash
-python -m pytest tests/test_boot_selector.py -q
+python -m unittest tests.test_boot_selector
 ```
 
 Expected: Settings screen tests pass hardware-free.
@@ -330,7 +387,7 @@ git commit -m "feat: render operator summary content on settings screens"
 
 ---
 
-### Task 6: Turn Themes into a generated picker that scales to 6 themes
+### Task 7: Turn Themes into a generated picker that scales to 6 themes
 
 **Owner:** Switchboard  
 **Dependencies:** Task 2
@@ -359,7 +416,7 @@ def test_theme_selection_persists_and_stays_on_themes_screen(): ...
 Run:
 
 ```bash
-python -m pytest tests/test_boot_selector.py -q
+python -m unittest tests.test_boot_selector
 ```
 
 Expected: failures around hardcoded three-column behavior.
@@ -385,7 +442,7 @@ Constraints:
 Run:
 
 ```bash
-python -m pytest tests/test_boot_selector.py -q
+python -m unittest tests.test_boot_selector
 ```
 
 Expected: unique mapping and persistence tests pass.
@@ -399,10 +456,10 @@ git commit -m "feat: generate a six-slot theme picker from discovered themes"
 
 ---
 
-### Task 7: Harden regression coverage across Photos, Settings, and Themes
+### Task 8: Harden regression coverage across Photos, Settings, and Themes
 
 **Owner:** Sentinel  
-**Dependencies:** Tasks 4, 5, 6
+**Dependencies:** Tasks 4, 5, 6, 7
 
 **Files:**
 - Modify: `tests/test_boot_selector.py`
@@ -434,7 +491,7 @@ Assert:
 Run:
 
 ```bash
-python -m pytest tests/test_boot_selector.py tests/test_photos.py -q
+python -m unittest tests.test_boot_selector tests.test_photos
 ```
 
 Expected: full pass.
@@ -448,10 +505,10 @@ git commit -m "test: cover photos settings and theme picker regressions"
 
 ---
 
-### Task 8: Run hardware-free integration verification
+### Task 9: Run hardware-free integration verification
 
 **Owner:** Mouser  
-**Dependencies:** Tasks 4, 5, 6, 7
+**Dependencies:** Tasks 4, 5, 6, 7, 8
 
 **Files:**
 - Modify: `coordination/status.md`
@@ -462,7 +519,7 @@ git commit -m "test: cover photos settings and theme picker regressions"
 Run:
 
 ```bash
-python -m pytest tests/test_boot_selector.py tests/test_photos.py -q
+python -m unittest tests.test_boot_selector tests.test_photos
 ```
 
 Expected: PASS.
@@ -472,7 +529,7 @@ Expected: PASS.
 Run:
 
 ```bash
-python -m pytest tests/test_display_rotator.py -q
+python -m unittest tests.test_display_rotator
 python -m py_compile boot/boot_selector.py modules/photos/slideshow.py modules/photos/display.py
 ```
 
@@ -494,10 +551,10 @@ git commit -m "docs: record integration verification for shell-owned app fixes"
 
 ---
 
-### Task 9: Update operator-facing docs after behavior stabilizes
+### Task 10: Update operator-facing docs after behavior stabilizes
 
 **Owner:** Curator  
-**Dependencies:** Task 8
+**Dependencies:** Task 9
 
 **Files:**
 - Modify: `README.md`

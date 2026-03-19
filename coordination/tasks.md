@@ -45,7 +45,7 @@ Dependencies:
 
 TASK ID: R-016
 Agent: Pathfinder
-Status: OPEN
+Status: COMPLETE
 
 Objective:
 Verify the live asset, theme, and Photos touch contracts before implementation starts.
@@ -83,31 +83,30 @@ Agent: Photos Worker
 Status: OPEN
 
 Objective:
-Implement dashboard-parity touch behavior for Photos while preserving the existing child entrypoint contract.
+Implement child-owned dashboard-parity touch behavior for Photos while preserving the existing child entrypoint and menu-request contracts.
 
 Allowed files:
 - `modules/photos/slideshow.py`
 - `modules/photos/display.py`
-- `boot/boot_selector.py`
 - `tests/test_photos.py`
-- `tests/test_boot_selector.py`
 - `coordination/status.md`
 
 Forbidden files:
+- `boot/boot_selector.py`
 - `display_rotator.py`
 - `systemd/*`
 - unrelated module trees
 
 Deliverables:
 - left/right/hold touch behavior in Photos
-- shell-child ownership compatibility update if required
+- menu-request exit path from the child runtime
 - focused regression tests
 
 Acceptance criteria:
 - tap left selects previous photo
 - tap right selects next photo
-- hold exits to menu
-- shell does not compete for the same gesture path while Photos is active
+- hold requests menu exit
+- shell-boundary changes remain in `R-018`
 
 Dependencies:
 - `R-016`
@@ -119,11 +118,10 @@ Agent: Switchboard
 Status: OPEN
 
 Objective:
-Implement operator-summary Settings content, generated Themes mapping for up to 6 themes, and named shell layout knobs for status screens.
+Implement the shell-side Photos handoff, operator-summary Settings content, generated Themes mapping for up to 6 themes, and named shell layout knobs for status screens.
 
 Allowed files:
 - `boot/boot_selector.py`
-- `README.md`
 - `tests/test_boot_selector.py`
 - `coordination/status.md`
 
@@ -133,11 +131,13 @@ Forbidden files:
 - unrelated module trees
 
 Deliverables:
+- shell-side Photos ownership handoff
 - real Settings summaries
 - generated theme picker mapping
 - named shell status layout constants
 
 Acceptance criteria:
+- Photos no longer leaves the parent shell consuming the same gesture path while the child is active
 - Network, Pi Stats, and Logs screens render fallback-safe summaries
 - theme picker derives touch mapping from discovered themes
 - up to 6 themes fit on one screen without paging

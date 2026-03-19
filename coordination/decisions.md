@@ -112,3 +112,47 @@ Implications:
 
 Supersedes:
 None
+
+---
+
+DECISION ID: D-020
+Status: ACTIVE
+
+Topic:
+Photos remediation ownership boundary
+
+Decision:
+Keep `modules/photos/*` changes in the Photos Worker stream and keep every `boot/boot_selector.py` change in the Switchboard stream, including the Photos launch/gesture handoff.
+
+Reason:
+The root repo rules assign `boot/boot_selector.py` to Switchboard, and the current shell-side gesture ownership for Photos is implemented there rather than in the Photos child.
+
+Implications:
+- child-side Photos work should use the existing menu-request contract instead of editing shell routing directly
+- shell-side gesture ownership changes must stay merge-safe inside the Switchboard stream
+- plan and task files must not ask the Photos Worker to edit `boot/boot_selector.py`
+
+Supersedes:
+None
+
+---
+
+DECISION ID: D-021
+Status: ACTIVE
+
+Topic:
+Regression runner baseline for this slice
+
+Decision:
+Use the existing `unittest` modules and `py_compile` sanity checks as the hardware-free validation baseline for the shell-owned apps slice.
+
+Reason:
+The current repo test surfaces for selector, Photos, and rotator are `unittest` modules, and `pytest` is not part of the declared runtime dependency set in `requirements.txt`.
+
+Implications:
+- plan commands should use `python -m unittest tests.test_boot_selector`, `tests.test_photos`, and `tests.test_display_rotator`
+- new regression coverage should fit the current test modules instead of assuming a new test runner
+- validation remains grounded in repo reality for later execution sessions
+
+Supersedes:
+None

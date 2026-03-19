@@ -27,6 +27,7 @@ The active execution plan is:
   - global layout knobs live in `display_layout.py`
   - shell status text layout lives in `boot/boot_selector.py`
   - script-local offsets remain in the individual module files that already define them
+- Existing hardware-free validation stays grounded in the current `unittest` modules plus compile/import sanity.
 
 ## Non-Goals
 
@@ -38,8 +39,8 @@ The active execution plan is:
 ## Execution Model
 
 - Mouser owns sequencing, delegation, coordination hygiene, and merge order.
-- Switchboard owns shell changes in `boot/boot_selector.py`.
+- Switchboard owns all shell changes in `boot/boot_selector.py`, including the Photos launch/gesture handoff, Settings, Themes, and shell layout knobs.
 - Sentinel owns regression coverage.
 - Pathfinder stays read-only and verifies asset/path contracts.
 - A narrow Photos worker may be assigned to `modules/photos/*` by Mouser because no standing role currently owns that slice.
-- Curator follows after behavior is stable.
+- Curator owns README/operator-facing docs after behavior is stable.
