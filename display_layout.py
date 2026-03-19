@@ -14,7 +14,7 @@ ROW_HEIGHT = 32
 BODY_ROWS = 5
 SIDE_MARGIN = 15
 BODY_WIDTH = CANVAS_WIDTH - (SIDE_MARGIN * 2)
-RIGHT_EXTRA_INSET = 10
+RIGHT_EXTRA_INSET = 0
 
 
 @dataclass(frozen=True)
@@ -72,13 +72,20 @@ def centred_text_y(font, text: str, centre_y: int) -> int:
     return centre_y - ((top + bottom) // 2)
 
 
+def _inner_bounds(column: Column) -> tuple[int, int]:
+    inner_width = max(0, column.width - (RIGHT_EXTRA_INSET * 2))
+    inner_left = column.left + RIGHT_EXTRA_INSET
+    return inner_left, inner_left + inner_width
+
+
 def aligned_text_x(column: Column, font, text: str, align: CanvasAlign) -> int:
-    width = text_width(font, text)
+    left, _, right, _ = text_bbox(font, text)
+    inner_left, _inner_right = _inner_bounds(column)
     if align == "left":
-        return column.left
+        return inner_left - left
     if align == "right":
-        return column.right - width - RIGHT_EXTRA_INSET
-    return column.centre_x - (width // 2)
+        return column.right - right - RIGHT_EXTRA_INSET
+    return column.centre_x - ((left + right) // 2)
 
 
 def fit_font(text: str, *, width_limit: int, preferred_size: int, min_size: int, loader, **loader_kwargs):

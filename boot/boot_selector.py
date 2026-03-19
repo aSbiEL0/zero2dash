@@ -1,106 +1,170 @@
 #!/usr/bin/env python3
-"""Boot-time framebuffer selector with a paged touch menu."""
+"""Boot-time framebuffer shell with a theme-backed touch menu."""
 
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-import fcntl
-import glob
-import mmap
+import json
 import os
-import re
 import select
 import shlex
+import shutil
 import signal
-import struct
+import socket
 import subprocess
 import sys
+import tempfile
+import textwrap
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-from PIL import Image, ImageDraw, ImageSequence
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+from PIL import Image, ImageDraw, ImageFont, ImageSequence
+
+import touch_calibration
+from framebuffer import FramebufferWriter
+from rotator.touch import (
+    ABS_MT_POSITION_X,
+    ABS_MT_POSITION_Y,
+    ABS_MT_TRACKING_ID,
+    ABS_X,
+    ABS_Y,
+    BTN_TOUCH,
+    EV_ABS,
+    EV_KEY,
+    EV_SYN,
+    INPUT_EVENT_STRUCT,
+    detect_touch_width,
+    touch_probe,
+)
 
 
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
-DEFAULT_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", "boot/startup.gif")
-DEFAULT_MAIN_MENU_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_MAIN_MENU_IMAGE", "boot/mainmenu.png")
-DEFAULT_MAIN_MENU_PAGE2_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_MAIN_MENU_PAGE2_IMAGE", "boot/mainmenu-page2.png")
-DEFAULT_SELECTOR_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_DAY_NIGHT_IMAGE", os.environ.get("BOOT_SELECTOR_IMAGE_PATH", "boot/day-night.png"))
-DEFAULT_SHUTDOWN_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_SHUTDOWN_IMAGE", "boot/yes-no.png")
-DEFAULT_KEYPAD_IMAGE_PATH = os.environ.get("BOOT_SELECTOR_KEYPAD_IMAGE", "boot/keypad.png")
-DEFAULT_INFO_GIF_PATH = os.environ.get("BOOT_SELECTOR_INFO_GIF", "boot/credits.gif")
-DEFAULT_GRANTED_GIF_PATH = os.environ.get("BOOT_SELECTOR_GRANTED_GIF", "boot/granted.gif")
-DEFAULT_DENIED_GIF_PATH = os.environ.get("BOOT_SELECTOR_DENIED_GIF", "boot/denied.gif")
+BOOT_DIR = BASE_DIR / "boot"
+THEMES_DIR = BASE_DIR / "themes"
+
+DEFAULT_STARTUP_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", str(BOOT_DIR / "startup.gif"))
+DEFAULT_CREDITS_GIF_PATH = os.environ.get("BOOT_SELECTOR_INFO_GIF", str(BOOT_DIR / "credits.gif"))
 DEFAULT_SHUTDOWN_COMMAND = os.environ.get("BOOT_SELECTOR_SHUTDOWN_COMMAND", "systemctl poweroff")
-DEFAULT_PLAYER_COMMAND = "/home/pihole/zero2dash/player.sh"
+DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", "/home/pihole/zero2dash/player.sh")
 DEFAULT_NASA_COMMAND = os.environ.get("BOOT_SELECTOR_NASA_COMMAND", "python3 -u /home/pihole/zero2dash/nasa-app/app.py")
 DEFAULT_PIN = os.environ.get("BOOT_SELECTOR_PIN", "")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
 DEFAULT_NIGHT_SERVICE = os.environ.get("BOOT_SELECTOR_NIGHT_SERVICE", "night.service")
-DEFAULT_MAIN_MENU_REGIONS = os.environ.get("BOOT_SELECTOR_MAIN_MENU_REGIONS", "")
-DEFAULT_DAY_NIGHT_REGIONS = os.environ.get("BOOT_SELECTOR_DAY_NIGHT_REGIONS", "")
-DEFAULT_SHUTDOWN_REGIONS = os.environ.get("BOOT_SELECTOR_SHUTDOWN_REGIONS", "")
-DEFAULT_KEYPAD_REGIONS = os.environ.get("BOOT_SELECTOR_KEYPAD_REGIONS", "")
 DEFAULT_TOUCH_SETTLE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_SETTLE_SECS", "0.35"))
 DEFAULT_TOUCH_DEBOUNCE_SECS = float(os.environ.get("BOOT_SELECTOR_TOUCH_DEBOUNCE_SECS", "0.35"))
 DEFAULT_GIF_SPEED = float(os.environ.get("BOOT_SELECTOR_GIF_SPEED", "0.5"))
 DEFAULT_TOUCH_INVERT_Y = os.environ.get("BOOT_SELECTOR_TOUCH_INVERT_Y", "0").strip().lower() not in {"0", "false", "no", "off"}
+DEFAULT_CHILD_STOP_GRACE_SECS = float(os.environ.get("BOOT_SELECTOR_CHILD_STOP_GRACE_SECS", "3.0"))
+DEFAULT_HOME_GESTURE_HOLD_SECS = float(os.environ.get("BOOT_SELECTOR_HOME_GESTURE_HOLD_SECS", "2.0"))
+DEFAULT_HOME_GESTURE_CORNER_WIDTH = int(os.environ.get("BOOT_SELECTOR_HOME_GESTURE_CORNER_WIDTH", "64"))
+DEFAULT_HOME_GESTURE_CORNER_HEIGHT = int(os.environ.get("BOOT_SELECTOR_HOME_GESTURE_CORNER_HEIGHT", "48"))
+DEFAULT_MODE_REQUEST_PATH = os.environ.get("BOOT_SELECTOR_MODE_REQUEST_PATH", str(Path(tempfile.gettempdir()) / "zero2dash-shell-mode-request"))
+DEFAULT_THEME_ROOT = Path(os.environ.get("BOOT_SELECTOR_THEME_ROOT", str(THEMES_DIR)))
+DEFAULT_THEME_ID = os.environ.get("BOOT_SELECTOR_DEFAULT_THEME", "default")
 DEFAULT_SHOW_TOUCH_ZONES = os.environ.get("BOOT_SELECTOR_SHOW_TOUCH_ZONES", "0").strip().lower() not in {"0", "false", "no", "off"}
-DEFAULT_GIF_FRAME_MS = 100
-BACKGROUND_RGB = (0, 0, 0)
-RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
-STOP_REQUESTED = False
-BASE_DIR = Path(__file__).resolve().parent.parent
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
 
-import touch_calibration
-import nasa_menu
+POLL_TIMEOUT_SECS = 0.2
+MENU_STRIP_WIDTH = 20
+MAX_THEME_PICKER_ITEMS = 6
+THEME_PICKER_MAX_COLUMNS = 3
+STATUS_TITLE_X = 20
+STATUS_TITLE_Y = 18
+STATUS_BODY_X = 20
+STATUS_BODY_Y = 54
+STATUS_LINE_SPACING = 14
+STATUS_WRAP_WIDTH = 38
 
-DIRECT_MODE_COMMANDS = {
-    "display.service": [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")],
-    "night.service": [sys.executable, "-u", str(BASE_DIR / "modules" / "blackout" / "blackout.py")],
+ROOT_MENU_1 = "main_menu_1"
+ROOT_MENU_2 = "main_menu_2"
+DASHBOARDS_MENU = "dashboards_menu"
+SETTINGS_MENU = "settings_menu"
+SHUTDOWN_CONFIRM = "shutdown_confirm"
+PIN_KEYPAD = "pin_keypad"
+THEMES_MENU = "themes_menu"
+NETWORK_STATUS = "network_status"
+PI_STATS_STATUS = "pi_stats_status"
+LOGS_STATUS = "logs_status"
+ISS_PLACEHOLDER = "iss_placeholder"
+CREDITS_SCREEN = "credits"
+ACCESS_GRANTED = "access_granted"
+ACCESS_DENIED = "access_denied"
+RUNNING_APP = "running_app"
+
+SHELL_MODE_MENU = "menu"
+SHELL_MODE_DASHBOARDS = "dashboards"
+SHELL_MODE_PHOTOS = "photos"
+SHELL_MODE_NIGHT = "night"
+SHELL_MODES = (SHELL_MODE_MENU, SHELL_MODE_DASHBOARDS, SHELL_MODE_PHOTOS, SHELL_MODE_NIGHT)
+
+APP_KIND_CHILD_PROCESS = "child_process"
+APP_KIND_SHELL_SCREEN = "shell_screen"
+APP_ID_DASHBOARDS = "dashboards"
+APP_ID_PHOTOS = "photos"
+APP_ID_NIGHT = "night"
+APP_ID_CREDITS = "credits"
+APP_ID_THEMES = "themes"
+APP_ID_SETTINGS = "settings"
+APP_ID_SHUTDOWN = "shutdown"
+APP_ID_LOCKED_CONTENT = "locked_content"
+APP_ID_NETWORK = "network"
+APP_ID_PI_STATS = "pi_stats"
+APP_ID_LOGS = "logs"
+APP_ID_ISS = "iss"
+
+THEME_IMAGE_FILES = {
+    ROOT_MENU_1: "mainmenu1.png",
+    ROOT_MENU_2: "mainmenu2.png",
+    DASHBOARDS_MENU: "day-night.png",
+    SETTINGS_MENU: "settings.png",
+    SHUTDOWN_CONFIRM: "yes-no.png",
+    PIN_KEYPAD: "keypad.png",
+    THEMES_MENU: "themes.png",
+    NETWORK_STATUS: "stats.png",
+    PI_STATS_STATUS: "stats.png",
+    LOGS_STATUS: "stats.png",
+    ISS_PLACEHOLDER: "stats.png",
 }
-MAIN_MENU_HOME = "home"
-MAIN_MENU_INFO = "info"
-MAIN_MENU_PADLOCK = "padlock"
-MAIN_MENU_NASA = "nasa"
-MAIN_MENU_PAGE_TOGGLE = "menu_toggle"
-MAIN_MENU_SHUTDOWN = "shutdown"
-DAY_NIGHT_DAY = "day"
-DAY_NIGHT_NIGHT = "night"
-SHUTDOWN_CONFIRM = "confirm"
-SHUTDOWN_CANCEL = "cancel"
-INFO_SKIP_ACTION = "menu"
-KEYPAD_OK = "ok"
-KEYPAD_NO = "no"
-KEYPAD_DIGITS = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"}
-MAX_PIN_FAILURES = 3
+THEME_REQUIRED_FILES = set(THEME_IMAGE_FILES.values()) | {"granted.gif", "denied.gif"}
 
-EV_SYN = 0x00
-EV_KEY = 0x01
-EV_ABS = 0x03
-ABS_X = 0x00
-ABS_Y = 0x01
-ABS_MT_POSITION_X = 0x35
-ABS_MT_POSITION_Y = 0x36
-ABS_MT_TRACKING_ID = 0x39
-BTN_TOUCH = 0x14A
-INPUT_EVENT_STRUCT = struct.Struct("llHHI")
-INPUT_ABSINFO_STRUCT = struct.Struct("iiiiii")
+FG = (244, 247, 250)
+ACCENT = (90, 180, 255)
+WARN = (244, 198, 0)
+BG = (0, 0, 0)
+STOP_REQUESTED = False
+RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+STATUS_TITLE_MAP = {
+    NETWORK_STATUS: "Network",
+    PI_STATS_STATUS: "Pi Stats",
+    LOGS_STATUS: "Logs",
+    ISS_PLACEHOLDER: "NASA ISS",
+}
+STATUS_DEFAULT_MAP = {
+    NETWORK_STATUS: "Host: unavailable\nIP: unavailable",
+    PI_STATS_STATUS: "Uptime: unavailable\nLoad: unavailable\nTemp: unavailable\nMem: unavailable\nDisk: unavailable",
+    LOGS_STATUS: "Logs unavailable",
+    ISS_PLACEHOLDER: "Placeholder only",
+}
 
-IOC_NRBITS = 8
-IOC_TYPEBITS = 8
-IOC_SIZEBITS = 14
-IOC_DIRBITS = 2
-IOC_NRSHIFT = 0
-IOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS
-IOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS
-IOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS
-IOC_READ = 2
+
+def _default_theme_state_path() -> Path:
+    override = os.environ.get("BOOT_SELECTOR_THEME_STATE_PATH")
+    if override:
+        return Path(override)
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home) / "zero2dash" / "shell-theme"
+    return Path.home() / ".cache" / "zero2dash" / "shell-theme"
+
+
+DEFAULT_THEME_STATE_PATH = _default_theme_state_path()
 
 
 @dataclass(frozen=True)
@@ -115,54 +179,364 @@ class TouchRegion:
         return self.left <= screen_x <= self.right and self.top <= screen_y <= self.bottom
 
 
+@dataclass(frozen=True)
+class ThemeAssets:
+    theme_id: str
+    root: Path
+    assets: dict[str, Path]
+
+    def asset(self, asset_name: str) -> Path:
+        return self.assets[asset_name]
+
+
+@dataclass(frozen=True)
+class AppSpec:
+    id: str
+    label: str
+    kind: str
+    launch_command: tuple[str, ...]
+    preview_asset: str
+    supports_home_gesture: bool = False
+    parent_screen: str | None = None
+    shell_handles_home_gesture: bool = False
+    env_overrides: tuple[tuple[str, str], ...] = ()
+
+    def to_contract_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "kind": self.kind,
+            "launch_command": list(self.launch_command),
+            "preview_asset": self.preview_asset,
+            "supports_home_gesture": self.supports_home_gesture,
+            "parent_screen": self.parent_screen,
+            "shell_handles_home_gesture": self.shell_handles_home_gesture,
+        }
+
+
+@dataclass(frozen=True)
+class ShellImages:
+    screens: dict[str, Image.Image]
+    status_base: Image.Image
+    granted_gif: Path
+    denied_gif: Path
+
+
+@dataclass
+class RunningChildApp:
+    app: AppSpec
+    process: subprocess.Popen[bytes] | subprocess.Popen[str]
+    started_at: float
+
+
+class ModeSwitchRequestStore:
+    def __init__(self, path_like: str | Path) -> None:
+        self.path = Path(path_like)
+
+    def write_request(self, mode: str) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_suffix(f"{self.path.suffix}.tmp")
+        tmp_path.write_text(f"{mode}\n", encoding="utf-8")
+        os.replace(tmp_path, self.path)
+
+    def consume_request(self) -> str | None:
+        try:
+            payload = self.path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            print(f"[boot-selector] Failed to read mode request {self.path}: {exc}", file=sys.stderr, flush=True)
+            return None
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"[boot-selector] Failed to clear mode request {self.path}: {exc}", file=sys.stderr, flush=True)
+        if payload not in SHELL_MODES:
+            print(f"[boot-selector] Ignoring invalid shell mode request: {payload!r}", file=sys.stderr, flush=True)
+            return None
+        print(f"[boot-selector] Consumed shell mode request: {payload}", flush=True)
+        return payload
+
+
+class ThemeStateStore:
+    def __init__(self, path_like: str | Path) -> None:
+        self.path = Path(path_like)
+
+    def read_theme_id(self) -> str | None:
+        try:
+            payload = self.path.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            print(f"[boot-selector] Failed to read theme state {self.path}: {exc}", file=sys.stderr, flush=True)
+            return None
+        return payload or None
+
+    def write_theme_id(self, theme_id: str) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_suffix(f"{self.path.suffix}.{os.getpid()}.tmp")
+        try:
+            tmp_path.write_text(f"{theme_id}\n", encoding="utf-8")
+            os.replace(tmp_path, self.path)
+        except OSError as exc:
+            print(f"[boot-selector] Failed to persist theme state {self.path}: {exc}", file=sys.stderr, flush=True)
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
+
+
+class ChildAppManager:
+    def __init__(self, stop_grace_secs: float) -> None:
+        self.stop_grace_secs = stop_grace_secs
+        self._running: RunningChildApp | None = None
+
+    def running_app(self) -> RunningChildApp | None:
+        if self._running is None:
+            return None
+        if self._running.process.poll() is None:
+            return self._running
+        print(f"[boot-selector] Child app {self._running.app.id} exited with code {self._running.process.returncode}. Returning control to shell.", flush=True)
+        self._running = None
+        return None
+
+    def start_app(self, app: AppSpec) -> bool:
+        if app.kind != APP_KIND_CHILD_PROCESS:
+            print(f"[boot-selector] App {app.id} is shell-owned and cannot be launched as a child process.", file=sys.stderr, flush=True)
+            return False
+        if not app.launch_command:
+            print(f"[boot-selector] App {app.id} does not define a launch command.", file=sys.stderr, flush=True)
+            return False
+        current = self.running_app()
+        if current is not None and current.app.id == app.id:
+            print(f"[boot-selector] Child app {app.id} is already running.", flush=True)
+            return True
+        if current is not None:
+            self.stop_current(reason=f"switching from {current.app.id} to {app.id}")
+        print(f"[boot-selector] Starting child app {app.id}: {list(app.launch_command)}", flush=True)
+        try:
+            child_env = os.environ.copy()
+            child_env.update(dict(app.env_overrides))
+            process = subprocess.Popen(list(app.launch_command), cwd=str(BASE_DIR), env=child_env)
+        except OSError as exc:
+            print(f"[boot-selector] Failed to start child app {app.id}: {exc}", file=sys.stderr, flush=True)
+            return False
+        self._running = RunningChildApp(app=app, process=process, started_at=time.monotonic())
+        return True
+
+    def stop_current(self, reason: str) -> bool:
+        running = self.running_app()
+        if running is None:
+            return False
+        print(f"[boot-selector] Stopping child app {running.app.id}: {reason}", flush=True)
+        try:
+            running.process.terminate()
+        except ProcessLookupError:
+            self._running = None
+            return True
+        try:
+            running.process.wait(timeout=self.stop_grace_secs)
+        except subprocess.TimeoutExpired:
+            print(f"[boot-selector] Child app {running.app.id} did not exit after SIGTERM; forcing termination.", flush=True)
+            running.process.kill()
+            running.process.wait(timeout=2.0)
+        self._running = None
+        return True
+
+    def shutdown(self) -> None:
+        self.stop_current(reason="shell shutdown")
+
+
+class TouchReader:
+    def __init__(self, screen_width: int, screen_height: int) -> None:
+        self.screen_width = screen_width
+        self.screen_height = screen_height
+        self.device, self.reason = touch_probe()
+        self._fd = None
+        self._touch_width = screen_width
+        self._touch_min_x = 0
+        self._use_calibration = bool(self.device and touch_calibration.applies_to(self.device))
+        if self.device and not self._use_calibration:
+            self._touch_width, self._touch_min_x = detect_touch_width(self.device, screen_width)
+
+    def is_available(self) -> bool:
+        return self.device is not None
+
+    def describe(self) -> str:
+        if not self.device:
+            return "no touch device"
+        return f"{self.device} ({self.reason})"
+
+    def close(self) -> None:
+        if self._fd is not None:
+            try:
+                self._fd.close()
+            finally:
+                self._fd = None
+
+    def _ensure_open(self):
+        if self.device is None:
+            return None
+        if self._fd is None:
+            self._fd = open(self.device, "rb", buffering=0)
+        return self._fd
+
+    def _map_coordinates(self, raw_x: int, raw_y: int) -> tuple[int, int]:
+        if self._use_calibration:
+            return touch_calibration.map_to_screen(raw_x, raw_y, width=self.screen_width, height=self.screen_height)
+        x = raw_x - self._touch_min_x
+        if x < 0:
+            x = 0
+        elif x >= self._touch_width:
+            x = self._touch_width - 1
+        return min(self.screen_width - 1, max(0, x)), min(self.screen_height - 1, max(0, raw_y))
+
+    def read_action(
+        self,
+        resolver: Callable[[int, int], str | None],
+        ready_after: float,
+        touch_debounce_secs: float,
+        timeout_secs: float | None = None,
+    ) -> str | None:
+        if not self.is_available():
+            return None
+        fd = self._ensure_open()
+        if fd is None:
+            return None
+        last_x = self.screen_width // 2
+        last_y = self.screen_height // 2
+        touch_down = False
+        last_emit = 0.0
+        saw_explicit_touch_state = False
+        pending_abs_sample = False
+        deadline = None if timeout_secs is None else time.monotonic() + timeout_secs
+        while not STOP_REQUESTED:
+            wait_secs = 0.2 if deadline is None else max(0.0, min(0.2, deadline - time.monotonic()))
+            if deadline is not None and wait_secs <= 0:
+                return None
+            readable, _, _ = select.select([fd], [], [], wait_secs)
+            if not readable:
+                if deadline is not None and time.monotonic() >= deadline:
+                    return None
+                continue
+            raw = fd.read(INPUT_EVENT_STRUCT.size)
+            if len(raw) != INPUT_EVENT_STRUCT.size:
+                continue
+            _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
+            if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
+                last_x = ev_value
+                pending_abs_sample = True
+                continue
+            if ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
+                last_y = ev_value
+                pending_abs_sample = True
+                continue
+            if ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                saw_explicit_touch_state = True
+                if ev_value == 1:
+                    touch_down = True
+                elif ev_value == 0 and touch_down:
+                    touch_down = False
+                    now = time.monotonic()
+                    if now < ready_after or (now - last_emit) < touch_debounce_secs:
+                        continue
+                    action = resolver(*self._map_coordinates(last_x, last_y))
+                    if action is not None:
+                        last_emit = now
+                        return action
+                continue
+            if ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                saw_explicit_touch_state = True
+                if ev_value >= 0:
+                    touch_down = True
+                elif touch_down:
+                    touch_down = False
+                    now = time.monotonic()
+                    if now < ready_after or (now - last_emit) < touch_debounce_secs:
+                        continue
+                    action = resolver(*self._map_coordinates(last_x, last_y))
+                    if action is not None:
+                        last_emit = now
+                        return action
+                continue
+            if ev_type == EV_SYN and pending_abs_sample and not saw_explicit_touch_state:
+                pending_abs_sample = False
+                now = time.monotonic()
+                if now < ready_after or (now - last_emit) < touch_debounce_secs:
+                    continue
+                action = resolver(*self._map_coordinates(last_x, last_y))
+                if action is not None:
+                    last_emit = now
+                    return action
+        return None
+
+    def wait_for_home_gesture(self, region: TouchRegion, hold_secs: float, poll_timeout_secs: float) -> bool:
+        if not self.is_available():
+            return False
+        fd = self._ensure_open()
+        if fd is None:
+            return False
+        touch_down = False
+        touch_started_at = 0.0
+        last_x = self.screen_width // 2
+        last_y = self.screen_height // 2
+        saw_explicit_touch_state = False
+        pending_abs_sample = False
+        last_synthetic_sample_at = 0.0
+        synthetic_touch_timeout_secs = max(0.35, poll_timeout_secs * 2)
+        while not STOP_REQUESTED:
+            readable, _, _ = select.select([fd], [], [], poll_timeout_secs)
+            now = time.monotonic()
+            if not readable:
+                if touch_down and not saw_explicit_touch_state and last_synthetic_sample_at and (now - last_synthetic_sample_at) >= synthetic_touch_timeout_secs:
+                    touch_down = False
+                mapped_x, mapped_y = self._map_coordinates(last_x, last_y)
+                if touch_down and region.contains(mapped_x, mapped_y) and (now - touch_started_at) >= hold_secs:
+                    return True
+                continue
+            raw = fd.read(INPUT_EVENT_STRUCT.size)
+            if len(raw) != INPUT_EVENT_STRUCT.size:
+                continue
+            _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
+            if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
+                last_x = ev_value
+                pending_abs_sample = True
+                continue
+            if ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
+                last_y = ev_value
+                pending_abs_sample = True
+                continue
+            if ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                saw_explicit_touch_state = True
+                if ev_value == 1:
+                    touch_down = True
+                    touch_started_at = now
+                elif ev_value == 0:
+                    touch_down = False
+                continue
+            if ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                saw_explicit_touch_state = True
+                if ev_value >= 0:
+                    touch_down = True
+                    touch_started_at = now
+                elif ev_value == -1:
+                    touch_down = False
+                continue
+            if ev_type == EV_SYN and pending_abs_sample and not saw_explicit_touch_state:
+                pending_abs_sample = False
+                if not touch_down:
+                    touch_down = True
+                    touch_started_at = now
+                last_synthetic_sample_at = now
+        return False
+
 
 def request_stop(_signum: int, _frame: object) -> None:
     global STOP_REQUESTED
     STOP_REQUESTED = True
-
-
-def _ioc(direction: int, ioc_type: int, number: int, size: int) -> int:
-    return (direction << IOC_DIRSHIFT) | (ioc_type << IOC_TYPESHIFT) | (number << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)
-
-
-def eviocgabs(axis: int) -> int:
-    return _ioc(IOC_READ, ord("E"), 0x40 + axis, INPUT_ABSINFO_STRUCT.size)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Play a boot GIF once, then show a touch selector menu.")
-    parser.add_argument("--fbdev", default=FBDEV_DEFAULT, help=f"Framebuffer device path (default: {FBDEV_DEFAULT})")
-    parser.add_argument("--width", type=int, default=WIDTH_DEFAULT, help=f"Framebuffer width (default: {WIDTH_DEFAULT})")
-    parser.add_argument("--height", type=int, default=HEIGHT_DEFAULT, help=f"Framebuffer height (default: {HEIGHT_DEFAULT})")
-    parser.add_argument("--gif", default=DEFAULT_GIF_PATH, help=f"Startup GIF path (default: {DEFAULT_GIF_PATH})")
-    parser.add_argument("--main-menu-image", default=DEFAULT_MAIN_MENU_IMAGE_PATH, help=f"Main menu page 1 image path (default: {DEFAULT_MAIN_MENU_IMAGE_PATH})")
-    parser.add_argument("--main-menu-page2-image", default=DEFAULT_MAIN_MENU_PAGE2_IMAGE_PATH, help=f"Main menu page 2 image path (default: {DEFAULT_MAIN_MENU_PAGE2_IMAGE_PATH})")
-    parser.add_argument("--selector-image", default=DEFAULT_SELECTOR_IMAGE_PATH, help=f"Day/night selector image path (default: {DEFAULT_SELECTOR_IMAGE_PATH})")
-    parser.add_argument("--shutdown-image", default=DEFAULT_SHUTDOWN_IMAGE_PATH, help=f"Shutdown confirmation image path (default: {DEFAULT_SHUTDOWN_IMAGE_PATH})")
-    parser.add_argument("--keypad-image", default=DEFAULT_KEYPAD_IMAGE_PATH, help=f"Keypad image path (default: {DEFAULT_KEYPAD_IMAGE_PATH})")
-    parser.add_argument("--info-gif", default=DEFAULT_INFO_GIF_PATH, help=f"Info GIF path (default: {DEFAULT_INFO_GIF_PATH})")
-    parser.add_argument("--granted-gif", default=DEFAULT_GRANTED_GIF_PATH, help=f"Granted GIF path (default: {DEFAULT_GRANTED_GIF_PATH})")
-    parser.add_argument("--denied-gif", default=DEFAULT_DENIED_GIF_PATH, help=f"Denied GIF path (default: {DEFAULT_DENIED_GIF_PATH})")
-    parser.add_argument("--gif-speed", type=float, default=DEFAULT_GIF_SPEED, help=f"GIF playback speed multiplier (default: {DEFAULT_GIF_SPEED})")
-    parser.add_argument("--invert-y", action="store_true", default=DEFAULT_TOUCH_INVERT_Y, help="Invert the touch Y axis when deciding top/bottom selection.")
-    parser.add_argument("--no-invert-y", action="store_false", dest="invert_y", help="Disable Y-axis inversion for top/bottom selection.")
-    parser.add_argument("--output-selector", help="Optional output path for the rendered day/night selector screen.")
-    parser.add_argument("--output-main-menu", help="Optional output path for the rendered main menu page 1.")
-    parser.add_argument("--output-gif-first", help="Optional output path for the first rendered startup GIF frame.")
-    parser.add_argument("--output-gif-last", help="Optional output path for the last rendered startup GIF frame.")
-    parser.add_argument("--no-framebuffer", action="store_true", help="Skip framebuffer writes for local verification.")
-    parser.add_argument("--skip-gif", action="store_true", help="Skip startup GIF playback and show the menu immediately.")
-    parser.add_argument("--probe-touch", action="store_true", help="Probe touch device selection and exit.")
-    parser.add_argument("--touch-settle-secs", type=float, default=DEFAULT_TOUCH_SETTLE_SECS, help=f"Ignore touches briefly after each screen draw (default: {DEFAULT_TOUCH_SETTLE_SECS})")
-    parser.add_argument("--touch-debounce-secs", type=float, default=DEFAULT_TOUCH_DEBOUNCE_SECS, help=f"Minimum interval between accepted taps (default: {DEFAULT_TOUCH_DEBOUNCE_SECS})")
-    parser.add_argument("--day-service", default=DEFAULT_DAY_SERVICE, help=f"systemd unit to start for day mode (default: {DEFAULT_DAY_SERVICE})")
-    parser.add_argument("--night-service", default=DEFAULT_NIGHT_SERVICE, help=f"systemd unit to start for night mode (default: {DEFAULT_NIGHT_SERVICE})")
-    parser.add_argument("--shutdown-command", default=DEFAULT_SHUTDOWN_COMMAND, help=f"Command used for safe shutdown (default: {DEFAULT_SHUTDOWN_COMMAND})")
-    parser.add_argument("--player-command", default=DEFAULT_PLAYER_COMMAND, help=f"Command used after entering the correct PIN (default: {DEFAULT_PLAYER_COMMAND}).")
-    parser.add_argument("--nasa-command", default=DEFAULT_NASA_COMMAND, help=f"Command used to launch the NASA app (default: {DEFAULT_NASA_COMMAND}).")
-    parser.add_argument("--pin", default=DEFAULT_PIN, help="PIN required by the padlock keypad.")
-    parser.add_argument("--show-touch-zones", action="store_true", default=DEFAULT_SHOW_TOUCH_ZONES, help="Draw touch zone overlays on selector screens.")
-    return parser.parse_args()
 
 
 def shutdown_command_args(command_text: str) -> list[str]:
@@ -173,12 +547,555 @@ def player_command_args(command_text: str) -> list[str]:
     return shlex.split(command_text)
 
 
+def _command_for_service(service_name: str, fallback_command: list[str]) -> tuple[str, ...]:
+    command_map = {
+        "display.service": [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")],
+        "night.service": [sys.executable, "-u", str(BASE_DIR / "modules" / "blackout" / "blackout.py")],
+    }
+    command = command_map.get(service_name)
+    if command is None:
+        print(f"[boot-selector] No direct mapping is defined for {service_name}; using shell-owned fallback command {fallback_command}.", file=sys.stderr, flush=True)
+        command = fallback_command
+    return tuple(command)
+
+
+def _shell_child_env_overrides(mode_request_path: str | Path) -> tuple[tuple[str, str], ...]:
+    return (
+        ("ZERO2DASH_PARENT_SHELL", "1"),
+        ("BOOT_SELECTOR_MODE_REQUEST_PATH", str(mode_request_path)),
+    )
+
+
+def build_app_registry(args: argparse.Namespace) -> dict[str, AppSpec]:
+    day_command = _command_for_service(args.day_service, [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")])
+    night_command = _command_for_service(args.night_service, [sys.executable, "-u", str(BASE_DIR / "modules" / "blackout" / "blackout.py")])
+    nasa_command = tuple(player_command_args(args.nasa_command))
+    child_env = _shell_child_env_overrides(getattr(args, "mode_request_path", DEFAULT_MODE_REQUEST_PATH))
+    return {
+        APP_ID_DASHBOARDS: AppSpec(APP_ID_DASHBOARDS, "Dashboards", APP_KIND_CHILD_PROCESS, day_command, "day-night.png", True, ROOT_MENU_1, False, child_env),
+        APP_ID_PHOTOS: AppSpec(APP_ID_PHOTOS, "Photos", APP_KIND_CHILD_PROCESS, (sys.executable, "-u", str(BASE_DIR / "modules" / "photos" / "slideshow.py")), "mainmenu1.png", True, ROOT_MENU_1, False, child_env),
+        APP_ID_NIGHT: AppSpec(APP_ID_NIGHT, "Night", APP_KIND_CHILD_PROCESS, night_command, "day-night.png", True, DASHBOARDS_MENU, False, child_env),
+        APP_ID_CREDITS: AppSpec(APP_ID_CREDITS, "Credits", APP_KIND_SHELL_SCREEN, (), "credits.gif", False, ROOT_MENU_2),
+        APP_ID_THEMES: AppSpec(APP_ID_THEMES, "Themes", APP_KIND_SHELL_SCREEN, (), "themes.png", False, ROOT_MENU_2),
+        APP_ID_SETTINGS: AppSpec(APP_ID_SETTINGS, "Settings", APP_KIND_SHELL_SCREEN, (), "settings.png", False, ROOT_MENU_2),
+        APP_ID_SHUTDOWN: AppSpec(APP_ID_SHUTDOWN, "Shutdown", APP_KIND_SHELL_SCREEN, (), "yes-no.png", False, ROOT_MENU_2),
+        APP_ID_LOCKED_CONTENT: AppSpec(APP_ID_LOCKED_CONTENT, "Locked Content", APP_KIND_SHELL_SCREEN, (), "keypad.png", False, ROOT_MENU_1),
+        APP_ID_NETWORK: AppSpec(APP_ID_NETWORK, "Network", APP_KIND_SHELL_SCREEN, (), "stats.png", False, SETTINGS_MENU),
+        APP_ID_PI_STATS: AppSpec(APP_ID_PI_STATS, "Pi Stats", APP_KIND_SHELL_SCREEN, (), "stats.png", False, SETTINGS_MENU),
+        APP_ID_LOGS: AppSpec(APP_ID_LOGS, "Logs", APP_KIND_SHELL_SCREEN, (), "stats.png", False, SETTINGS_MENU),
+        APP_ID_ISS: AppSpec(APP_ID_ISS, "NASA ISS", APP_KIND_CHILD_PROCESS, nasa_command, "stats.png", True, ROOT_MENU_1, False, child_env),
+    }
+
+
+def load_theme_catalog(theme_root: Path) -> dict[str, ThemeAssets]:
+    if not theme_root.exists():
+        raise RuntimeError(f"Theme root not found: {theme_root}")
+    required_asset_names = sorted(THEME_REQUIRED_FILES)
+    catalog: dict[str, ThemeAssets] = {}
+    for theme_dir in sorted(path for path in theme_root.iterdir() if path.is_dir()):
+        missing = [asset_name for asset_name in required_asset_names if not (theme_dir / asset_name).exists()]
+        if missing:
+            print(f"[boot-selector] Skipping theme {theme_dir.name}; missing assets: {', '.join(missing)}", file=sys.stderr, flush=True)
+            continue
+        catalog[theme_dir.name] = ThemeAssets(theme_dir.name, theme_dir, {asset_name: theme_dir / asset_name for asset_name in required_asset_names})
+    if not catalog:
+        raise RuntimeError(f"No valid themes found under {theme_root}")
+    return catalog
+
+
+def validate_theme_selection(theme_id: str, catalog: dict[str, ThemeAssets]) -> str:
+    if theme_id in catalog:
+        return theme_id
+    if DEFAULT_THEME_ID in catalog:
+        print(f"[boot-selector] Theme {theme_id!r} is unavailable; falling back to {DEFAULT_THEME_ID!r}.", file=sys.stderr, flush=True)
+        return DEFAULT_THEME_ID
+    return sorted(catalog)[0]
+
+
+def load_theme_selection(theme_state_store: ThemeStateStore, catalog: dict[str, ThemeAssets], default_theme_id: str) -> str:
+    saved = theme_state_store.read_theme_id()
+    if saved in catalog:
+        return saved  # type: ignore[return-value]
+    if default_theme_id in catalog:
+        return default_theme_id
+    return sorted(catalog)[0]
+
+
+def load_image(path: Path, width: int, height: int) -> Image.Image:
+    return Image.open(path).convert("RGB").resize((width, height), RESAMPLING_LANCZOS)
+
+
+def load_gif_frames(gif_path: Path, width: int, height: int, speed: float) -> list[tuple[Image.Image, float]]:
+    frames: list[tuple[Image.Image, float]] = []
+    with Image.open(gif_path) as gif:
+        for frame in ImageSequence.Iterator(gif):
+            duration = max(20, int(frame.info.get("duration", 100))) / 1000.0
+            frames.append((frame.convert("RGB").resize((width, height), RESAMPLING_LANCZOS), duration / speed))
+    return frames
+
+
+def save_preview(image: Image.Image, output_path: str | None) -> None:
+    if not output_path:
+        return
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path)
+    print(f"[boot-selector] Saved preview image to {path}", flush=True)
+
+
+def build_shell_images(theme: ThemeAssets, width: int, height: int) -> ShellImages:
+    screens = {screen_name: load_image(theme.asset(filename), width, height) for screen_name, filename in THEME_IMAGE_FILES.items()}
+    return ShellImages(screens=screens, status_base=screens[NETWORK_STATUS], granted_gif=theme.asset("granted.gif"), denied_gif=theme.asset("denied.gif"))
+
+
+def _screen_image(shell_images: ShellImages, screen_name: str) -> Image.Image:
+    return shell_images.screens[screen_name]
+
+
+def _status_title(screen_name: str) -> str:
+    return STATUS_TITLE_MAP.get(screen_name, screen_name.replace("_", " ").title())
+
+
+def _default_status_text(screen_name: str) -> str:
+    return STATUS_DEFAULT_MAP.get(screen_name, "Unavailable")
+
+
+def _read_proc_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _network_summary_lines() -> list[str]:
+    hostname = socket.gethostname().strip() or "unavailable"
+    ip_address = "unavailable"
+    try:
+        candidate_ips = [
+            ip
+            for ip in socket.gethostbyname_ex(hostname)[2]
+            if ip and not ip.startswith("127.")
+        ]
+        if candidate_ips:
+            ip_address = candidate_ips[0]
+    except OSError:
+        pass
+    return [f"Host: {hostname}", f"IP: {ip_address}"]
+
+
+def _format_uptime(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    if hours >= 24:
+        days, hours = divmod(hours, 24)
+        return f"{days}d {hours}h"
+    return f"{hours}h {minutes}m"
+
+
+def _mem_available_mib() -> str:
+    payload = _read_proc_text(Path("/proc/meminfo"))
+    if not payload:
+        return "unavailable"
+    for line in payload.splitlines():
+        if line.startswith("MemAvailable:"):
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    return f"{int(parts[1]) // 1024} MiB"
+                except ValueError:
+                    return "unavailable"
+    return "unavailable"
+
+
+def _cpu_temperature_c() -> str:
+    payload = _read_proc_text(Path("/sys/class/thermal/thermal_zone0/temp"))
+    if not payload:
+        return "unavailable"
+    try:
+        return f"{int(payload.strip()) / 1000.0:.1f} C"
+    except ValueError:
+        return "unavailable"
+
+
+def _disk_free_gib(path: Path = BASE_DIR) -> str:
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return "unavailable"
+    return f"{usage.free / (1024 ** 3):.1f} GiB"
+
+
+def _pi_stats_summary_lines() -> list[str]:
+    uptime_text = _read_proc_text(Path("/proc/uptime"))
+    uptime = "unavailable"
+    if uptime_text:
+        try:
+            uptime = _format_uptime(float(uptime_text.split()[0]))
+        except (ValueError, IndexError):
+            uptime = "unavailable"
+    try:
+        load_avg = " ".join(f"{value:.2f}" for value in os.getloadavg())
+    except (AttributeError, OSError):
+        load_avg = "unavailable"
+    return [
+        f"Uptime: {uptime}",
+        f"Load: {load_avg}",
+        f"Temp: {_cpu_temperature_c()}",
+        f"Mem: {_mem_available_mib()}",
+        f"Disk: {_disk_free_gib()}",
+    ]
+
+
+def _logs_summary_lines(day_service: str, night_service: str) -> list[str]:
+    units = tuple(dict.fromkeys(unit for unit in (day_service, night_service) if unit))
+    if not units:
+        return ["Logs unavailable"]
+    command = ["journalctl", "--no-pager", "-n", "3"]
+    for unit in units:
+        command.extend(["-u", unit])
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=2.0)
+    except (OSError, subprocess.TimeoutExpired):
+        return ["Logs unavailable"]
+    if result.returncode != 0:
+        return ["Logs unavailable"]
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        return ["Logs unavailable"]
+    return lines[-3:]
+
+
+def build_status_text(screen_name: str, *, day_service: str = DEFAULT_DAY_SERVICE, night_service: str = DEFAULT_NIGHT_SERVICE) -> str:
+    env_override = os.environ.get(f"BOOT_SELECTOR_{screen_name.upper()}_TEXT", "").strip()
+    if env_override:
+        return env_override
+    if screen_name == NETWORK_STATUS:
+        return "\n".join(_network_summary_lines())
+    if screen_name == PI_STATS_STATUS:
+        return "\n".join(_pi_stats_summary_lines())
+    if screen_name == LOGS_STATUS:
+        return "\n".join(_logs_summary_lines(day_service, night_service))
+    return _default_status_text(screen_name)
+
+
+def _wrap_status_lines(body: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in body.splitlines() or [""]:
+        lines.extend(textwrap.wrap(raw_line, width=STATUS_WRAP_WIDTH) or [""])
+    return lines
+
+
+def draw_status_screen(base_image: Image.Image, screen_name: str, status_text: str | None = None) -> Image.Image:
+    frame = base_image.copy()
+    draw = ImageDraw.Draw(frame)
+    title = _status_title(screen_name)
+    body = status_text or build_status_text(screen_name)
+    font = ImageFont.load_default()
+    draw.text((STATUS_TITLE_X, STATUS_TITLE_Y), title, font=font, fill=ACCENT)
+    fill = WARN if body == _default_status_text(screen_name) else FG
+    for index, line in enumerate(_wrap_status_lines(body)):
+        draw.text((STATUS_BODY_X, STATUS_BODY_Y + (index * STATUS_LINE_SPACING)), line, font=font, fill=fill)
+    return frame
+
+
+def annotate_touch_regions(image: Image.Image, regions: list[TouchRegion], title: str) -> Image.Image:
+    frame = image.copy()
+    draw = ImageDraw.Draw(frame)
+    draw.rectangle((0, 0, frame.width - 1, frame.height - 1), outline=ACCENT, width=1)
+    draw.text((8, 4), title, font=ImageFont.load_default(), fill=ACCENT)
+    for region in regions:
+        draw.rectangle((region.left, region.top, region.right, region.bottom), outline=WARN, width=1)
+    return frame
+
+
+def root_strip_action(screen_name: str) -> str:
+    return ROOT_MENU_2 if screen_name == ROOT_MENU_1 else ROOT_MENU_1
+
+
+def resolve_shutdown_action(screen_y: int, screen_height: int, invert_y: bool) -> str:
+    if invert_y:
+        screen_y = screen_height - screen_y
+    return "confirm" if screen_y < (screen_height // 2) else "cancel"
+
+
+def theme_picker_targets(theme_ids: dict[str, ThemeAssets] | tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    if isinstance(theme_ids, dict):
+        ordered = sorted(theme_ids)
+    else:
+        ordered = sorted(str(theme_id) for theme_id in theme_ids)
+    return tuple(ordered[:MAX_THEME_PICKER_ITEMS])
+
+
+def resolve_theme_picker_action(
+    screen_x: int,
+    screen_y: int,
+    screen_width: int,
+    screen_height: int,
+    theme_ids: tuple[str, ...] | None = None,
+) -> str | None:
+    targets = theme_picker_targets(theme_ids or ())
+    if not targets:
+        return None
+    usable_width = max(1, screen_width - MENU_STRIP_WIDTH)
+    column_count = min(THEME_PICKER_MAX_COLUMNS, len(targets))
+    row_count = 1 if len(targets) <= THEME_PICKER_MAX_COLUMNS else 2
+    column_width = usable_width / float(column_count)
+    row_height = screen_height / float(row_count)
+    relative_x = max(0, screen_x - MENU_STRIP_WIDTH)
+    column = min(column_count - 1, max(0, int(relative_x / column_width)))
+    row = min(row_count - 1, max(0, int(screen_y / row_height)))
+    index = (row * column_count) + column
+    if index >= len(targets):
+        return None
+    return targets[index]
+
+
+def resolve_keypad_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str | None:
+    column = min(3, max(0, screen_x // max(1, screen_width // 4)))
+    row = min(2, max(0, screen_y // max(1, screen_height // 3)))
+    keypad = (("1", "2", "3", "ok"), ("4", "5", "6", "0"), ("7", "8", "9", "cancel"))
+    return keypad[row][column]
+
+
+def resolve_screen_action(
+    screen_name: str,
+    screen_x: int,
+    screen_y: int,
+    screen_width: int,
+    screen_height: int,
+    theme_ids: tuple[str, ...] | None = None,
+) -> str | None:
+    if screen_name in {ROOT_MENU_1, ROOT_MENU_2}:
+        if screen_x < MENU_STRIP_WIDTH:
+            return root_strip_action(screen_name)
+        half_w = screen_width // 2
+        half_h = screen_height // 2
+        if screen_name == ROOT_MENU_1:
+            if screen_x < half_w and screen_y < half_h:
+                return "dashboards"
+            if screen_x >= half_w and screen_y < half_h:
+                return "photos"
+            if screen_x < half_w and screen_y >= half_h:
+                return "iss"
+            return APP_ID_LOCKED_CONTENT
+        if screen_x < half_w and screen_y < half_h:
+            return "credits"
+        if screen_x >= half_w and screen_y < half_h:
+            return "themes"
+        if screen_x < half_w and screen_y >= half_h:
+            return "settings"
+        return "shutdown"
+    if screen_name == DASHBOARDS_MENU:
+        if screen_x < MENU_STRIP_WIDTH:
+            return ROOT_MENU_1
+        return "dashboards" if screen_y < (screen_height // 2) else "night"
+    if screen_name == SETTINGS_MENU:
+        if screen_x < MENU_STRIP_WIDTH:
+            return ROOT_MENU_2
+        third = screen_height // 3
+        if screen_y < third:
+            return "network"
+        if screen_y < third * 2:
+            return "pi_stats"
+        return "logs"
+    if screen_name == SHUTDOWN_CONFIRM:
+        if screen_x < MENU_STRIP_WIDTH:
+            return "cancel"
+        return resolve_shutdown_action(screen_y, screen_height, False)
+    if screen_name == THEMES_MENU:
+        if screen_x < MENU_STRIP_WIDTH:
+            return ROOT_MENU_2
+        return resolve_theme_picker_action(screen_x, screen_y, screen_width, screen_height, theme_ids)
+    if screen_name == PIN_KEYPAD:
+        return resolve_keypad_action(screen_x, screen_y, screen_width, screen_height)
+    if screen_name in {NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS}:
+        return SETTINGS_MENU if screen_x < MENU_STRIP_WIDTH else None
+    if screen_name == ISS_PLACEHOLDER:
+        return ROOT_MENU_1 if screen_x < MENU_STRIP_WIDTH else None
+    return None
+
+
+def resolve_menu_action(menu_page, screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str | None:
+    screen_name = getattr(menu_page, "screen_name", getattr(menu_page, "name", menu_page))
+    return resolve_screen_action(screen_name, screen_x, screen_y, screen_width, screen_height)
+
+
+def wait_for_action(
+    touch_reader: "TouchReader",
+    label: str,
+    resolver: Callable[[int, int], str | None],
+    touch_settle_secs: float,
+    touch_debounce_secs: float,
+    timeout_secs: float | None = None,
+) -> str | None:
+    if not touch_reader.is_available():
+        print("[boot-selector] No touch device found; touch controls disabled.", flush=True)
+        return None
+    print(f"[boot-selector] Waiting for {label} on {touch_reader.describe()}.", flush=True)
+    ready_after = time.monotonic() + max(0.0, touch_settle_secs)
+    return touch_reader.read_action(resolver, ready_after, touch_debounce_secs, timeout_secs=timeout_secs)
+
+
+def wait_for_shell_action_or_mode(
+    touch_reader: "TouchReader",
+    label: str,
+    resolver: Callable[[int, int], str | None],
+    touch_settle_secs: float,
+    touch_debounce_secs: float,
+    mode_store: ModeSwitchRequestStore,
+) -> tuple[str | None, str | None]:
+    ready_after = time.monotonic() + max(0.0, touch_settle_secs)
+    announced = False
+    while not STOP_REQUESTED:
+        requested_mode = mode_store.consume_request()
+        if requested_mode is not None:
+            return None, requested_mode
+        if not touch_reader.is_available():
+            if not announced:
+                print("[boot-selector] No touch device found; waiting for shell mode requests only.", flush=True)
+                announced = True
+            time.sleep(POLL_TIMEOUT_SECS)
+            continue
+        if not announced:
+            print(f"[boot-selector] Waiting for {label} on {touch_reader.describe()}.", flush=True)
+            announced = True
+        action = touch_reader.read_action(resolver, ready_after, touch_debounce_secs, timeout_secs=POLL_TIMEOUT_SECS)
+        if action is not None:
+            return action, None
+    return None, None
+
+
+def home_gesture_region(screen_width: int, screen_height: int, corner_width: int, corner_height: int) -> TouchRegion:
+    return TouchRegion(SHELL_MODE_MENU, 0, 0, max(0, min(screen_width, corner_width) - 1), max(0, min(screen_height, corner_height) - 1))
+
+
+def wait_for_running_app_event(
+    child_manager: ChildAppManager,
+    touch_reader: "TouchReader",
+    mode_store: ModeSwitchRequestStore,
+    home_region: TouchRegion,
+    home_hold_secs: float,
+) -> str:
+    while not STOP_REQUESTED:
+        requested_mode = mode_store.consume_request()
+        if requested_mode is not None:
+            return requested_mode
+        running = child_manager.running_app()
+        if running is None:
+            return SHELL_MODE_MENU
+        if running.app.supports_home_gesture and not running.app.shell_handles_home_gesture:
+            touch_reader.close()
+        if running.app.supports_home_gesture and running.app.shell_handles_home_gesture and touch_reader.wait_for_home_gesture(home_region, home_hold_secs, POLL_TIMEOUT_SECS):
+            return SHELL_MODE_MENU
+        if not touch_reader.is_available() or not running.app.supports_home_gesture or not running.app.shell_handles_home_gesture:
+            time.sleep(POLL_TIMEOUT_SECS)
+    return SHELL_MODE_MENU
+
+
+def evaluate_pin_entry(entered_pin: str, expected_pin: str, consecutive_failures: int) -> tuple[str, int]:
+    if entered_pin == expected_pin:
+        return "success", 0
+    consecutive_failures += 1
+    return ("shutdown", consecutive_failures) if consecutive_failures >= 3 else ("retry", consecutive_failures)
+
+
+def should_reset_pin_failures(screen_name: str, action: str | None, requested_mode: str | None = None) -> bool:
+    if requested_mode is not None:
+        return True
+    if action is None:
+        return False
+    if screen_name == ROOT_MENU_1:
+        return action != APP_ID_LOCKED_CONTENT
+    if screen_name == PIN_KEYPAD:
+        return action == "cancel"
+    return screen_name in {
+        ROOT_MENU_2,
+        DASHBOARDS_MENU,
+        SETTINGS_MENU,
+        SHUTDOWN_CONFIRM,
+        THEMES_MENU,
+        NETWORK_STATUS,
+        PI_STATS_STATUS,
+        LOGS_STATUS,
+        ISS_PLACEHOLDER,
+    }
+
+
+def run_shutdown(command_text: str) -> int:
+    command = shutdown_command_args(command_text)
+    if not command:
+        print("[boot-selector] Shutdown command is empty.", file=sys.stderr, flush=True)
+        return 1
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode == 0:
+        print("[boot-selector] Shutdown command accepted.", flush=True)
+        return 0
+    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+    print(f"[boot-selector] Shutdown command failed: {stderr}", file=sys.stderr, flush=True)
+    return result.returncode
+
+
+def run_player(command_text: str) -> int:
+    command = player_command_args(command_text)
+    if not command:
+        print("[boot-selector] Player command is empty.", file=sys.stderr, flush=True)
+        return 1
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode == 0:
+        print("[boot-selector] Player command completed successfully.", flush=True)
+        return 0
+    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+    print(f"[boot-selector] Player command failed: {stderr}", file=sys.stderr, flush=True)
+    return result.returncode
+
+
+def handle_mode_request(requested_mode: str, app_registry: dict[str, AppSpec], night_app: AppSpec, child_manager: ChildAppManager) -> str:
+    if requested_mode == SHELL_MODE_MENU:
+        child_manager.stop_current(reason="menu mode request")
+        return SHELL_MODE_MENU
+    if requested_mode == SHELL_MODE_DASHBOARDS:
+        return RUNNING_APP if child_manager.start_app(app_registry[APP_ID_DASHBOARDS]) else SHELL_MODE_MENU
+    if requested_mode == SHELL_MODE_PHOTOS:
+        return RUNNING_APP if child_manager.start_app(app_registry[APP_ID_PHOTOS]) else SHELL_MODE_MENU
+    if requested_mode == SHELL_MODE_NIGHT:
+        return RUNNING_APP if child_manager.start_app(night_app) else SHELL_MODE_MENU
+    return SHELL_MODE_MENU
+
+
+def build_contract_snapshot(
+    app_registry: dict[str, AppSpec],
+    night_app: AppSpec,
+    mode_request_path: str,
+    args: argparse.Namespace,
+    theme_catalog: dict[str, ThemeAssets],
+    active_theme_id: str,
+) -> dict[str, object]:
+    return {
+        "shell_modes": list(SHELL_MODES),
+        "mode_request_path": mode_request_path,
+        "theme_root": args.theme_root,
+        "default_theme": args.default_theme,
+        "active_theme": active_theme_id,
+        "themes": sorted(theme_catalog),
+        "apps": {app_id: app.to_contract_dict() for app_id, app in app_registry.items()},
+        "night_app": night_app.to_contract_dict(),
+        "screens": [ROOT_MENU_1, ROOT_MENU_2, DASHBOARDS_MENU, SETTINGS_MENU, SHUTDOWN_CONFIRM, PIN_KEYPAD, THEMES_MENU, NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS, ISS_PLACEHOLDER, CREDITS_SCREEN, ACCESS_GRANTED, ACCESS_DENIED],
+    }
+
+
 def validate_args(args: argparse.Namespace) -> int | None:
     if args.width <= 0 or args.height <= 0:
         print("Width/height must be positive integers.", file=sys.stderr)
         return 1
     if args.touch_settle_secs < 0 or args.touch_debounce_secs < 0:
         print("Touch timing values cannot be negative.", file=sys.stderr)
+        return 1
+    if args.child_stop_grace_secs < 0 or args.home_gesture_hold_secs < 0:
+        print("Child-stop and home-gesture timing values cannot be negative.", file=sys.stderr)
+        return 1
+    if args.home_gesture_corner_width <= 0 or args.home_gesture_corner_height <= 0:
+        print("Home-gesture corner dimensions must be positive integers.", file=sys.stderr)
         return 1
     if args.gif_speed <= 0:
         print("GIF speed must be greater than zero.", file=sys.stderr)
@@ -195,463 +1112,169 @@ def validate_args(args: argparse.Namespace) -> int | None:
     return None
 
 
-def rgb888_to_rgb565(image: Image.Image) -> bytes:
-    r, g, b = image.split()
-    r = r.point(lambda value: value >> 3)
-    g = g.point(lambda value: value >> 2)
-    b = b.point(lambda value: value >> 3)
-    rgb565 = bytearray()
-    rp, gp, bp = r.tobytes(), g.tobytes(), b.tobytes()
-    for idx in range(len(rp)):
-        value = ((rp[idx] & 0x1F) << 11) | ((gp[idx] & 0x3F) << 5) | (bp[idx] & 0x1F)
-        rgb565 += struct.pack("<H", value)
-    return bytes(rgb565)
-
-
-class FramebufferWriter:
-    def __init__(self, fbdev: str, width: int, height: int) -> None:
-        self.fbdev = fbdev
-        self.expected = width * height * 2
-        self._handle = None
-        self._mapping = None
-
-    def open(self) -> None:
-        handle = open(self.fbdev, "r+b", buffering=0)
-        mapping = mmap.mmap(handle.fileno(), self.expected, mmap.MAP_SHARED, mmap.PROT_WRITE)
-        self._handle = handle
-        self._mapping = mapping
-
-    def write_image(self, image: Image.Image) -> None:
-        if self._mapping is None:
-            raise RuntimeError("Framebuffer is not open")
-        payload = rgb888_to_rgb565(image)
-        if len(payload) != self.expected:
-            raise RuntimeError(f"Framebuffer payload size mismatch: expected {self.expected} bytes, got {len(payload)} bytes")
-        self._mapping.seek(0)
-        self._mapping.write(payload)
-
-    def close(self) -> None:
-        if self._mapping is not None:
-            self._mapping.close()
-            self._mapping = None
-        if self._handle is not None:
-            self._handle.close()
-            self._handle = None
-
-
-def _read_sysfs_text(path: Path) -> str:
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except Exception:
-        return ""
-
-
-def _capability_mask(event_path: str, capability: str) -> int:
-    raw = _read_sysfs_text(Path("/sys/class/input") / Path(event_path).name / "device" / "capabilities" / capability)
-    if not raw:
-        return 0
-    try:
-        return int(raw, 16)
-    except ValueError:
-        return 0
-
-
-def _touch_candidate_details(event_path: str) -> tuple[tuple[int, int, int, int], str]:
-    base = Path("/sys/class/input") / Path(event_path).name / "device"
-    name = _read_sysfs_text(base / "name")
-    name_lc = name.lower()
-    abs_mask = _capability_mask(event_path, "abs")
-    key_mask = _capability_mask(event_path, "key")
-    has_abs_x = bool(abs_mask & (1 << ABS_X))
-    has_abs_y = bool(abs_mask & (1 << ABS_Y))
-    has_abs_mt_x = bool(abs_mask & (1 << ABS_MT_POSITION_X))
-    has_abs_mt_y = bool(abs_mask & (1 << ABS_MT_POSITION_Y))
-    has_touch_abs = (has_abs_x and has_abs_y) or (has_abs_mt_x and has_abs_mt_y)
-    has_btn_touch = bool(key_mask & (1 << BTN_TOUCH))
-    name_bonus = 5 if "touchscreen" in name_lc else 3 if "touch" in name_lc else -3 if ("mouse" in name_lc or "keyboard" in name_lc) else 0
-    score = (7 if has_touch_abs else -7) + (5 if has_btn_touch else -1) + name_bonus
-    match = re.search(r"event(\d+)$", event_path)
-    index = int(match.group(1)) if match else 999
-    reason = f"score={score}; name='{name or 'unknown'}'; touch_abs={'yes' if has_touch_abs else 'no'}; BTN_TOUCH={'yes' if has_btn_touch else 'no'}"
-    return (score, int(has_touch_abs), int(has_btn_touch), -index), reason
-
-
-def _resolve_forced_touch_device() -> tuple[str | None, str | None]:
-    forced = os.environ.get("TOUCH_DEVICE", "").strip() or os.environ.get("ROTATOR_TOUCH_DEVICE", "").strip()
-    if not forced:
-        return None, None
-    resolved = f"/dev/input/{forced}" if forced.startswith("event") and forced[5:].isdigit() else forced
-    if Path(resolved).exists():
-        source = "TOUCH_DEVICE" if os.environ.get("TOUCH_DEVICE", "").strip() else "ROTATOR_TOUCH_DEVICE"
-        return resolved, f"forced by {source}={forced}"
-    return None, f"configured override '{forced}' was not found"
-
-
-def touch_probe() -> tuple[str | None, str]:
-    forced_path, forced_reason = _resolve_forced_touch_device()
-    if forced_reason and forced_path is not None:
-        return forced_path, forced_reason
-    candidates = sorted(glob.glob("/dev/input/event*"))
-    if not candidates:
-        return None, "no /dev/input/event* devices found"
-    ranked: list[tuple[tuple[int, int, int, int], str, str]] = []
-    for path in candidates:
-        rank, reason = _touch_candidate_details(path)
-        ranked.append((rank, path, reason))
-    ranked.sort(reverse=True)
-    best_rank, best_path, best_reason = ranked[0]
-    if best_rank[0] <= 0:
-        details = "; ".join(f"{path}: {reason}" for _rank, path, reason in ranked)
-        return None, f"no candidates scored above zero ({details})"
-    return best_path, f"auto-selected highest rank ({best_reason})"
-
-
-def select_touch_device() -> str | None:
-    selected, reason = touch_probe()
-    if selected:
-        print(f"[boot-selector] Touch device selected: {selected} ({reason})", flush=True)
-        return selected
-    print(f"[boot-selector] Warning: no suitable touch input device found; touch controls disabled. Reason: {reason}.", flush=True)
-    return None
-
-
-def _candidate_absinfo_paths(device: str) -> list[Path]:
-    event_name = Path(device).name
-    base = Path("/sys/class/input") / event_name
-    candidates = [base / "device" / "absinfo", base / "device" / "device" / "absinfo"]
-    try:
-        real = base.resolve()
-        candidates.extend([real / "device" / "absinfo", real / "absinfo"])
-    except Exception:
-        pass
-    unique: list[Path] = []
-    seen: set[Path] = set()
-    for candidate in candidates:
-        if candidate not in seen:
-            seen.add(candidate)
-            unique.append(candidate)
-    return unique
-
-def _query_absinfo(device: str, axis: int) -> tuple[int, int] | None:
-    request = eviocgabs(axis)
-    payload = bytearray(INPUT_ABSINFO_STRUCT.size)
-    try:
-        with open(device, "rb", buffering=0) as handle:
-            fcntl.ioctl(handle.fileno(), request, payload, True)
-    except Exception:
-        return None
-    _value, minimum, maximum, _fuzz, _flat, _resolution = INPUT_ABSINFO_STRUCT.unpack(bytes(payload))
-    if maximum <= minimum:
-        return None
-    return minimum, maximum
-
-
-def detect_touch_bounds(device: str, default_width: int, default_height: int) -> tuple[int, int, int, int]:
-    x_bounds = _query_absinfo(device, ABS_X) or _query_absinfo(device, ABS_MT_POSITION_X)
-    y_bounds = _query_absinfo(device, ABS_Y) or _query_absinfo(device, ABS_MT_POSITION_Y)
-    if x_bounds is not None and y_bounds is not None:
-        x_min, x_max = x_bounds
-        y_min, y_max = y_bounds
-        return (x_max - x_min + 1), x_min, (y_max - y_min + 1), y_min
-
-    x_min = 0
-    y_min = 0
-    x_width = default_width
-    y_height = default_height
-    for absinfo_path in _candidate_absinfo_paths(device):
-        try:
-            with open(absinfo_path, encoding="utf-8") as absinfo:
-                for line in absinfo:
-                    code_str, _, payload = line.partition(":")
-                    if not payload:
-                        continue
-                    try:
-                        code = int(code_str.strip().lower(), 16)
-                    except ValueError:
-                        try:
-                            code = int(code_str.strip(), 0)
-                        except ValueError:
-                            continue
-                    parts = payload.strip().split()
-                    if len(parts) < 3:
-                        continue
-                    min_val = int(parts[1])
-                    max_val = int(parts[2])
-                    if max_val <= min_val:
-                        continue
-                    size = max_val - min_val + 1
-                    if code in (ABS_X, ABS_MT_POSITION_X):
-                        x_min = min_val
-                        x_width = max(100, size)
-                    elif code in (ABS_Y, ABS_MT_POSITION_Y):
-                        y_min = min_val
-                        y_height = max(100, size)
-        except Exception:
-            continue
-    return x_width, x_min, y_height, y_min
-
-
-def _fit_frame(frame: Image.Image, width: int, height: int) -> Image.Image:
-    converted = frame.convert("RGBA")
-    source_width, source_height = converted.size
-    scale = min(width / source_width, height / source_height)
-    scaled_width = max(1, int(source_width * scale))
-    scaled_height = max(1, int(source_height * scale))
-    resized = converted.resize((scaled_width, scaled_height), RESAMPLING_LANCZOS)
-    canvas = Image.new("RGBA", (width, height), BACKGROUND_RGB + (255,))
-    canvas.alpha_composite(resized, ((width - scaled_width) // 2, (height - scaled_height) // 2))
-    return canvas.convert("RGB")
-
-
-def load_selector_image(image_path: Path, width: int, height: int) -> Image.Image:
-    if image_path.exists():
-        with Image.open(image_path) as selector_image:
-            return _fit_frame(selector_image.copy(), width, height)
-    print(f"[boot-selector] Selector image not found at {image_path}; using a blank screen.", flush=True)
-    return Image.new("RGB", (width, height), BACKGROUND_RGB)
-
-
-def load_main_menu_image(image_path: Path, width: int, height: int, page: int) -> Image.Image:
-    return nasa_menu.render_menu_page(page, width, height, str(image_path))
-
-
-def load_gif_frames(gif_path: Path, width: int, height: int, speed: float) -> list[tuple[Image.Image, float]]:
-    with Image.open(gif_path) as gif:
-        frames: list[tuple[Image.Image, float]] = []
-        for frame in ImageSequence.Iterator(gif):
-            duration_ms = max(20, int(frame.info.get("duration", DEFAULT_GIF_FRAME_MS)))
-            frames.append((_fit_frame(frame.copy(), width, height), (duration_ms / 1000.0) / speed))
-        return frames
-
-
-def save_preview(image: Image.Image, path_like: str | None) -> None:
-    if not path_like:
-        return
-    output_path = Path(path_like)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(output_path)
-    print(f"Saved preview image to {output_path}", flush=True)
-
-
-
-def _make_region(action: str, left: int, top: int, right: int, bottom: int) -> TouchRegion:
-    return TouchRegion(action=action, left=left, top=top, right=right, bottom=bottom)
-
-
-def main_menu_regions(screen_width: int, screen_height: int, page: int = 0) -> list[TouchRegion]:
-    return [
-        _make_region(action, left, top, right, bottom)
-        for action, left, top, right, bottom in nasa_menu.menu_specs(page, screen_width, screen_height)
-    ]
-
-
-def vertical_regions(screen_width: int, screen_height: int, invert_y: bool, top_action: str, bottom_action: str) -> list[TouchRegion]:
-    mid_y = screen_height // 2
-    top_region = _make_region(top_action, 0, 0, max(0, screen_width - 1), max(0, mid_y - 1))
-    bottom_region = _make_region(bottom_action, 0, mid_y, max(0, screen_width - 1), max(0, screen_height - 1))
-    return [bottom_region, top_region] if invert_y else [top_region, bottom_region]
-
-
-def keypad_regions(screen_width: int, screen_height: int) -> list[TouchRegion]:
-    keypad_rows = (
-        ("1", "2", "3", KEYPAD_OK),
-        ("4", "5", "6", "0"),
-        ("7", "8", "9", KEYPAD_NO),
-    )
-    regions: list[TouchRegion] = []
-    for row_index, row in enumerate(keypad_rows):
-        top = row_index * screen_height // 3
-        bottom = ((row_index + 1) * screen_height // 3) - 1 if row_index < 2 else max(0, screen_height - 1)
-        for column_index, action in enumerate(row):
-            left = column_index * screen_width // 4
-            right = ((column_index + 1) * screen_width // 4) - 1 if column_index < 3 else max(0, screen_width - 1)
-            regions.append(_make_region(action, left, top, right, bottom))
-    return regions
-
-
-def resolve_touch_region(screen_x: int, screen_y: int, regions: list[TouchRegion], label: str) -> str:
-    for region in regions:
-        if region.contains(screen_x, screen_y):
-            return region.action
-    raise RuntimeError(f"No {label} region matched screen_x={screen_x} screen_y={screen_y}")
-
-
-def annotate_touch_regions(image: Image.Image, regions: list[TouchRegion], title: str) -> Image.Image:
-    annotated = image.copy()
-    draw = ImageDraw.Draw(annotated)
-    colours = (
-        (255, 80, 80),
-        (80, 200, 255),
-        (255, 210, 80),
-        (120, 255, 120),
-        (255, 120, 220),
-        (255, 255, 255),
-    )
-    draw.text((4, 4), title, fill=(255, 255, 255))
-    for index, region in enumerate(regions):
-        colour = colours[index % len(colours)]
-        draw.rectangle((region.left, region.top, region.right, region.bottom), outline=colour, width=2)
-        label_x = min(max(0, region.left + 3), max(0, annotated.width - 48))
-        label_y = min(max(12, region.top + 3), max(12, annotated.height - 12))
-        draw.text((label_x, label_y), region.action, fill=colour)
-    return annotated
-
-
-def log_touch_regions(label: str, regions: list[TouchRegion]) -> None:
-    for region in regions:
-        print(
-            f"[boot-selector] {label} zone {region.action}: left={region.left} top={region.top} right={region.right} bottom={region.bottom}",
-            flush=True,
-        )
-
-
-def resolve_main_menu_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int, page: int = 0) -> str:
-    return resolve_touch_region(screen_x, screen_y, main_menu_regions(screen_width, screen_height, page=page), "main menu")
-
-
-def _resolve_vertical_zone(screen_y: int, screen_height: int, invert_y: bool, top_action: str, bottom_action: str) -> str:
-    if invert_y:
-        screen_y = (screen_height - 1) - screen_y
-    return top_action if screen_y < (screen_height // 2) else bottom_action
-
-
-def resolve_day_night_action(screen_y: int, screen_height: int, invert_y: bool) -> str:
-    return resolve_touch_region(0, screen_y, vertical_regions(1, screen_height, invert_y, DAY_NIGHT_DAY, DAY_NIGHT_NIGHT), "day/night")
-
-
-def resolve_shutdown_action(screen_y: int, screen_height: int, invert_y: bool) -> str:
-    return resolve_touch_region(0, screen_y, vertical_regions(1, screen_height, invert_y, SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL), "shutdown")
-
-
-def resolve_keypad_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str:
-    return resolve_touch_region(screen_x, screen_y, keypad_regions(screen_width, screen_height), "keypad")
-
-def evaluate_pin_entry(entered_pin: str, expected_pin: str, consecutive_failures: int, max_failures: int = MAX_PIN_FAILURES) -> tuple[str, int]:
-    if entered_pin == expected_pin:
-        return "success", 0
-    updated_failures = consecutive_failures + 1
-    if updated_failures >= max_failures:
-        return "shutdown", updated_failures
-    return "retry", updated_failures
-
-
-def _normalise_axis(raw_value: int, source_size: int, source_min: int, target_size: int) -> int:
-    relative = raw_value - source_min
-    if relative < 0:
-        relative = 0
-    elif relative >= source_size:
-        relative = source_size - 1
-    if source_size <= 1:
-        return 0
-    return int(relative * (target_size - 1) / (source_size - 1))
-
-
-def _map_touch_to_screen(device: str, raw_x: int, raw_y: int, screen_width: int, screen_height: int, touch_width: int, touch_min_x: int, touch_height: int, touch_min_y: int) -> tuple[int, int]:
-    if touch_calibration.applies_to(device):
-        return touch_calibration.map_to_screen(raw_x, raw_y, width=screen_width, height=screen_height)
-    screen_x = _normalise_axis(raw_x, touch_width, touch_min_x, screen_width)
-    screen_y = _normalise_axis(raw_y, touch_height, touch_min_y, screen_height)
-    return screen_x, screen_y
-
-class TouchReader:
-    def __init__(self, screen_width: int, screen_height: int) -> None:
-        self.screen_width = screen_width
-        self.screen_height = screen_height
-        self.device = select_touch_device()
-        self.handle = None
-        self.touch_width = screen_width
-        self.touch_min_x = 0
-        self.touch_height = screen_height
-        self.touch_min_y = 0
-        self.last_x = 0
-        self.last_y = 0
-        self.last_emit = 0.0
-        self.touch_down = False
-        if not self.device:
-            return
-        self.touch_width, self.touch_min_x, self.touch_height, self.touch_min_y = detect_touch_bounds(self.device, screen_width, screen_height)
-        self.last_x = self.touch_min_x + (self.touch_width // 2)
-        self.last_y = self.touch_min_y + (self.touch_height // 2)
-        self.handle = open(self.device, "rb", buffering=0)
-
-    def is_available(self) -> bool:
-        return self.handle is not None and self.device is not None
-
-    def describe(self) -> str:
-        if not self.device:
-            return "touch disabled"
-        return f"{self.device} (width {self.touch_width}, height {self.touch_height})"
-
-    def close(self) -> None:
-        if self.handle is not None:
-            self.handle.close()
-            self.handle = None
-
-    def _commit_tap(self, now: float, ready_after: float, touch_debounce_secs: float, resolver) -> str | None:
-        if self.device is None:
-            return None
-        if now < ready_after or (now - self.last_emit) < touch_debounce_secs:
-            return None
-        self.last_emit = now
-        screen_x, screen_y = _map_touch_to_screen(
-            self.device,
-            self.last_x,
-            self.last_y,
-            self.screen_width,
-            self.screen_height,
-            self.touch_width,
-            self.touch_min_x,
-            self.touch_height,
-            self.touch_min_y,
-        )
-        action = resolver(screen_x, screen_y)
-        print(f"[boot-selector] Selected action: {action} (screen_x={screen_x}, screen_y={screen_y}, touch_x={self.last_x}, touch_y={self.last_y})", flush=True)
-        return action
-
-    def read_action(self, resolver, ready_after: float, touch_debounce_secs: float, timeout_secs: float | None = None) -> str | None:
-        if self.handle is None:
-            return None
-        deadline = None if timeout_secs is None else time.monotonic() + timeout_secs
-        while not STOP_REQUESTED:
-            wait_timeout = 0.2
-            if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return None
-                wait_timeout = min(wait_timeout, remaining)
-            readable, _, _ = select.select([self.handle], [], [], wait_timeout)
+def _capture_calibration_tap(device: str, prompt: str, timeout_secs: float = 20.0) -> tuple[int, int]:
+    print(f"[boot-selector] {prompt}", flush=True)
+    print("[boot-selector] Tap once, then release.", flush=True)
+
+    deadline = time.monotonic() + timeout_secs
+    last_x = 0
+    last_y = 0
+    touch_down = False
+    saw_explicit_touch_state = False
+    pending_abs_sample = False
+    last_synthetic_sample_at = 0.0
+    synthetic_touch_timeout_secs = 0.35
+
+    with open(device, "rb", buffering=0) as fd:
+        while time.monotonic() < deadline:
+            wait_secs = max(0.0, min(0.2, deadline - time.monotonic()))
+            readable, _, _ = select.select([fd], [], [], wait_secs)
+            now = time.monotonic()
             if not readable:
-                if deadline is not None and time.monotonic() >= deadline:
-                    return None
+                if touch_down and not saw_explicit_touch_state and last_synthetic_sample_at and (now - last_synthetic_sample_at) >= synthetic_touch_timeout_secs:
+                    return last_x, last_y
                 continue
-            raw = self.handle.read(INPUT_EVENT_STRUCT.size)
+
+            raw = fd.read(INPUT_EVENT_STRUCT.size)
             if len(raw) != INPUT_EVENT_STRUCT.size:
                 continue
+
             _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
             if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
-                self.last_x = ev_value
-            elif ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
-                self.last_y = ev_value
-            elif ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                last_x = ev_value
+                pending_abs_sample = True
+                continue
+            if ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
+                last_y = ev_value
+                pending_abs_sample = True
+                continue
+            if ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                saw_explicit_touch_state = True
                 if ev_value == 1:
-                    self.touch_down = True
-                elif ev_value == 0 and self.touch_down:
-                    self.touch_down = False
-                    action = self._commit_tap(time.monotonic(), ready_after, touch_debounce_secs, resolver)
-                    if action is not None:
-                        return action
-            elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
-                if ev_value == -1 and self.touch_down:
-                    self.touch_down = False
-                    action = self._commit_tap(time.monotonic(), ready_after, touch_debounce_secs, resolver)
-                    if action is not None:
-                        return action
-                elif ev_value >= 0:
-                    self.touch_down = True
-        return None
+                    touch_down = True
+                elif ev_value == 0 and touch_down:
+                    return last_x, last_y
+                continue
+            if ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                saw_explicit_touch_state = True
+                if ev_value >= 0:
+                    touch_down = True
+                elif ev_value == -1 and touch_down:
+                    return last_x, last_y
+                continue
+            if ev_type == EV_SYN and pending_abs_sample and not saw_explicit_touch_state:
+                pending_abs_sample = False
+                touch_down = True
+                last_synthetic_sample_at = now
+
+    raise TimeoutError(f"Timed out waiting for a touch sample on {device}")
 
 
-def playback_gif(framebuffer: FramebufferWriter | None, gif_path: Path, width: int, height: int, speed: float, output_first: str | None, output_last: str | None, touch_reader: TouchReader | None = None, touch_settle_secs: float = 0.0, touch_debounce_secs: float = 0.0, skip_action: str | None = None) -> str | None:
+def run_touch_calibration(width: int, height: int) -> int:
+    device, reason = touch_probe()
+    if not device:
+        print("[boot-selector] Touch calibration found no usable device.", flush=True)
+        print(f"[boot-selector] Probe reason: {reason}", flush=True)
+        return 1
+
+    print(f"[boot-selector] Touch calibration selected {device}", flush=True)
+    print(f"[boot-selector] Probe reason: {reason}", flush=True)
+    taps: dict[str, tuple[int, int]] = {}
+    prompts = (
+        ("top_left", "Touch the TOP-LEFT corner."),
+        ("top_right", "Touch the TOP-RIGHT corner."),
+        ("bottom_left", "Touch the BOTTOM-LEFT corner."),
+        ("bottom_right", "Touch the BOTTOM-RIGHT corner."),
+    )
+
+    try:
+        for key, prompt in prompts:
+            taps[key] = _capture_calibration_tap(device, prompt)
+            print(f"[boot-selector] Captured {key}: raw_x={taps[key][0]} raw_y={taps[key][1]}", flush=True)
+    except TimeoutError as exc:
+        print(f"[boot-selector] {exc}", file=sys.stderr, flush=True)
+        return 1
+    except OSError as exc:
+        print(f"[boot-selector] Touch calibration failed on {device}: {exc}", file=sys.stderr, flush=True)
+        return 1
+
+    calibration = touch_calibration.infer_from_corner_taps(device, taps)
+    print("[boot-selector] Suggested calibration exports:", flush=True)
+    for line in touch_calibration.format_exports(calibration):
+        print(line, flush=True)
+
+    print("[boot-selector] Corner preview:", flush=True)
+    for key, raw_sample in taps.items():
+        screen_x, screen_y = touch_calibration.map_to_screen(raw_sample[0], raw_sample[1], width=width, height=height, calibration=calibration)
+        print(f"[boot-selector] {key}: screen_x={screen_x} screen_y={screen_y}", flush=True)
+    return 0
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Play a boot GIF once, then show a theme-backed touch selector.")
+    parser.add_argument("--fbdev", default=FBDEV_DEFAULT, help=f"Framebuffer device path (default: {FBDEV_DEFAULT})")
+    parser.add_argument("--width", type=int, default=WIDTH_DEFAULT, help=f"Framebuffer width (default: {WIDTH_DEFAULT})")
+    parser.add_argument("--height", type=int, default=HEIGHT_DEFAULT, help=f"Framebuffer height (default: {HEIGHT_DEFAULT})")
+    parser.add_argument("--gif", default=DEFAULT_STARTUP_GIF_PATH, help=f"Startup GIF path (default: {DEFAULT_STARTUP_GIF_PATH})")
+    parser.add_argument("--theme-root", default=str(DEFAULT_THEME_ROOT), help=f"Theme root directory (default: {DEFAULT_THEME_ROOT})")
+    parser.add_argument("--default-theme", default=DEFAULT_THEME_ID, help=f"Default theme id (default: {DEFAULT_THEME_ID})")
+    parser.add_argument("--theme-state-path", default=str(DEFAULT_THEME_STATE_PATH), help=f"Theme state file path (default: {DEFAULT_THEME_STATE_PATH})")
+    parser.add_argument("--gif-speed", type=float, default=DEFAULT_GIF_SPEED, help=f"GIF playback speed multiplier (default: {DEFAULT_GIF_SPEED})")
+    parser.add_argument("--invert-y", action="store_true", default=DEFAULT_TOUCH_INVERT_Y, help="Invert the touch Y axis when deciding top/bottom selection.")
+    parser.add_argument("--no-invert-y", action="store_false", dest="invert_y", help="Disable Y-axis inversion for top/bottom selection.")
+    parser.add_argument("--output-selector", help="Optional output path for the rendered startup selector screen.")
+    parser.add_argument("--output-gif-first", help="Optional output path for the first rendered startup GIF frame.")
+    parser.add_argument("--output-gif-last", help="Optional output path for the last rendered startup GIF frame.")
+    parser.add_argument("--dump-contracts", action="store_true", help="Print the shell contracts as JSON and exit.")
+    parser.add_argument("--no-framebuffer", action="store_true", help="Skip framebuffer writes for local verification.")
+    parser.add_argument("--skip-gif", action="store_true", help="Skip startup GIF playback and show the menu immediately.")
+    parser.add_argument("--probe-touch", action="store_true", help="Probe touch device selection and exit.")
+    parser.add_argument("--calibrate-touch", action="store_true", help="Interactively capture corner taps and print suggested touch calibration env values.")
+    parser.add_argument("--request-mode", choices=SHELL_MODES, help="Write a shell mode-switch request for a running shell and exit.")
+    parser.add_argument("--mode-request-path", default=DEFAULT_MODE_REQUEST_PATH, help=f"Path used for shell mode-switch requests (default: {DEFAULT_MODE_REQUEST_PATH})")
+    parser.add_argument("--touch-settle-secs", type=float, default=DEFAULT_TOUCH_SETTLE_SECS, help=f"Ignore touches briefly after each screen draw (default: {DEFAULT_TOUCH_SETTLE_SECS})")
+    parser.add_argument("--touch-debounce-secs", type=float, default=DEFAULT_TOUCH_DEBOUNCE_SECS, help=f"Minimum interval between accepted taps (default: {DEFAULT_TOUCH_DEBOUNCE_SECS})")
+    parser.add_argument("--child-stop-grace-secs", type=float, default=DEFAULT_CHILD_STOP_GRACE_SECS, help=f"Seconds to wait for child apps to stop before force-killing them (default: {DEFAULT_CHILD_STOP_GRACE_SECS})")
+    parser.add_argument("--home-gesture-hold-secs", type=float, default=DEFAULT_HOME_GESTURE_HOLD_SECS, help=f"Reserved-corner hold duration used to reclaim child apps (default: {DEFAULT_HOME_GESTURE_HOLD_SECS})")
+    parser.add_argument("--home-gesture-corner-width", type=int, default=DEFAULT_HOME_GESTURE_CORNER_WIDTH, help=f"Width of the reserved home-gesture corner in pixels (default: {DEFAULT_HOME_GESTURE_CORNER_WIDTH})")
+    parser.add_argument("--home-gesture-corner-height", type=int, default=DEFAULT_HOME_GESTURE_CORNER_HEIGHT, help=f"Height of the reserved home-gesture corner in pixels (default: {DEFAULT_HOME_GESTURE_CORNER_HEIGHT})")
+    parser.add_argument("--day-service", default=DEFAULT_DAY_SERVICE, help=f"systemd unit to start for day mode (default: {DEFAULT_DAY_SERVICE})")
+    parser.add_argument("--night-service", default=DEFAULT_NIGHT_SERVICE, help=f"systemd unit to start for night mode (default: {DEFAULT_NIGHT_SERVICE})")
+    parser.add_argument("--shutdown-command", default=DEFAULT_SHUTDOWN_COMMAND, help=f"Command used for safe shutdown (default: {DEFAULT_SHUTDOWN_COMMAND})")
+    parser.add_argument("--player-command", default=DEFAULT_PLAYER_COMMAND, help=f"Command used after entering the correct PIN (default: {DEFAULT_PLAYER_COMMAND}).")
+    parser.add_argument("--nasa-command", default=DEFAULT_NASA_COMMAND, help=f"Command used to launch the NASA app (default: {DEFAULT_NASA_COMMAND}).")
+    parser.add_argument("--pin", default=DEFAULT_PIN, help="PIN required by the padlock keypad.")
+    parser.add_argument("--show-touch-zones", action="store_true", default=DEFAULT_SHOW_TOUCH_ZONES, help="Draw touch zone overlays on selector screens.")
+    return parser.parse_args()
+
+
+def run_touch_probe(width: int) -> int:
+    device, reason = touch_probe()
+    if not device:
+        print("[boot-selector] Touch probe found no usable device.", flush=True)
+        print(f"[boot-selector] Probe reason: {reason}", flush=True)
+        return 1
+    touch_width, touch_min_x = detect_touch_width(device, width)
+    print(f"[boot-selector] Touch probe selected {device}", flush=True)
+    print(f"[boot-selector] Probe reason: {reason}", flush=True)
+    print(f"[boot-selector] Probe width calibration: width={touch_width} min_x={touch_min_x}", flush=True)
+    return 0
+
+
+def playback_gif(
+    framebuffer: FramebufferWriter | None,
+    gif_path: Path,
+    width: int,
+    height: int,
+    speed: float,
+    output_first: str | None,
+    output_last: str | None,
+    *,
+    touch_reader: TouchReader | None = None,
+    touch_settle_secs: float = 0.0,
+    touch_debounce_secs: float = 0.0,
+    skip_action: str | None = None,
+) -> str | None:
     if not gif_path.exists():
         print(f"[boot-selector] GIF not found at {gif_path}; skipping animation.", flush=True)
         return None
@@ -662,14 +1285,13 @@ def playback_gif(framebuffer: FramebufferWriter | None, gif_path: Path, width: i
     save_preview(frames[0][0], output_first)
     save_preview(frames[-1][0], output_last)
     if framebuffer is None:
-        return None
-
+        return skip_action
     ready_after = time.monotonic() + max(0.0, touch_settle_secs)
     resolver = (lambda _screen_x, _screen_y: skip_action) if skip_action is not None else None
     for frame, duration in frames:
         if STOP_REQUESTED:
             return None
-        framebuffer.write_image(frame)
+        write_framebuffer_image(framebuffer, frame)
         deadline = time.monotonic() + duration
         while not STOP_REQUESTED:
             remaining = deadline - time.monotonic()
@@ -684,96 +1306,229 @@ def playback_gif(framebuffer: FramebufferWriter | None, gif_path: Path, width: i
     return None
 
 
-def wait_for_action(touch_reader: TouchReader, label: str, resolver, touch_settle_secs: float, touch_debounce_secs: float) -> str | None:
-    if not touch_reader.is_available():
-        print("[boot-selector] No touch device found; touch controls disabled.", flush=True)
-        return None
-    print(f"[boot-selector] Waiting for {label} on {touch_reader.describe()}.", flush=True)
-    ready_after = time.monotonic() + max(0.0, touch_settle_secs)
-    return touch_reader.read_action(resolver, ready_after, touch_debounce_secs)
+def write_framebuffer_image(framebuffer: FramebufferWriter, image: Image.Image) -> None:
+    write_frame = getattr(framebuffer, "write_frame", None)
+    if callable(write_frame):
+        write_frame(image)
+        return
+    write_image = getattr(framebuffer, "write_image", None)
+    if callable(write_image):
+        write_image(image)
+        return
+    raise AttributeError("Framebuffer object does not expose write_frame() or write_image()")
 
 
-def run_touch_probe(width: int, height: int) -> int:
-    device, reason = touch_probe()
-    if not device:
-        print("[boot-selector] Touch probe found no usable device.", flush=True)
-        print(f"[boot-selector] Probe reason: {reason}", flush=True)
-        return 1
-    touch_width, touch_min_x, touch_height, touch_min_y = detect_touch_bounds(device, width, height)
-    print(f"[boot-selector] Touch probe selected {device}", flush=True)
-    print(f"[boot-selector] Probe reason: {reason}", flush=True)
-    print(f"[boot-selector] Probe calibration: width={touch_width} min_x={touch_min_x} height={touch_height} min_y={touch_min_y}", flush=True)
-    return 0
+def run_main_screen_shell(
+    args: argparse.Namespace,
+    framebuffer: FramebufferWriter | None,
+    touch_reader: TouchReader,
+    mode_store: ModeSwitchRequestStore,
+    app_registry: dict[str, AppSpec],
+    theme_catalog: dict[str, ThemeAssets],
+    theme_state_store: ThemeStateStore,
+    shell_images: ShellImages,
+    active_theme_id: str,
+) -> int:
+    child_manager = ChildAppManager(args.child_stop_grace_secs)
+    home_region = home_gesture_region(args.width, args.height, args.home_gesture_corner_width, args.home_gesture_corner_height)
+    theme_picker_ids = theme_picker_targets(theme_catalog)
+    current_screen = ROOT_MENU_1
+    session_root_page = ROOT_MENU_1
+    consecutive_pin_failures = 0
+    entered_pin = ""
+    pending_pin_shutdown = False
 
+    requested_mode = mode_store.consume_request()
+    if requested_mode is not None:
+        current_screen = RUNNING_APP if handle_mode_request(requested_mode, app_registry, app_registry[APP_ID_NIGHT], child_manager) == RUNNING_APP else session_root_page
 
-def _launch_direct_mode(service_name: str) -> int:
-    command = DIRECT_MODE_COMMANDS.get(service_name)
-    if not command:
-        print(f"[boot-selector] No direct-launch fallback is defined for {service_name}.", file=sys.stderr, flush=True)
-        return 1
-    print(f"[boot-selector] Falling back to direct launch for {service_name}: {command}", flush=True)
-    os.execv(command[0], command)
-    return 1
+    while not STOP_REQUESTED:
+        if child_manager.running_app() is not None:
+            next_mode = wait_for_running_app_event(child_manager, touch_reader, mode_store, home_region, args.home_gesture_hold_secs)
+            if next_mode == SHELL_MODE_MENU:
+                child_manager.stop_current(reason="menu request")
+                current_screen = session_root_page
+                continue
+            current_screen = RUNNING_APP if handle_mode_request(next_mode, app_registry, app_registry[APP_ID_NIGHT], child_manager) == RUNNING_APP else session_root_page
+            continue
 
+        if current_screen == CREDITS_SCREEN:
+            playback_gif(
+                framebuffer,
+                Path(DEFAULT_CREDITS_GIF_PATH),
+                args.width,
+                args.height,
+                args.gif_speed,
+                None,
+                None,
+                touch_reader=touch_reader,
+                touch_settle_secs=args.touch_settle_secs,
+                touch_debounce_secs=args.touch_debounce_secs,
+                skip_action="skip_credits",
+            )
+            current_screen = ROOT_MENU_2
+            continue
 
-def launch_service(service_name: str) -> int:
-    running_under_systemd = bool(os.environ.get("INVOCATION_ID", "").strip())
-    if not running_under_systemd:
-        print(f"[boot-selector] Manual run detected; bypassing systemctl for {service_name}.", flush=True)
-        return _launch_direct_mode(service_name)
-    result = subprocess.run(["systemctl", "start", service_name], check=False, capture_output=True, text=True)
-    if result.returncode == 0:
-        print(f"[boot-selector] Started {service_name}", flush=True)
-        return 0
-    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
-    print(f"[boot-selector] Failed to start {service_name}: {stderr}", file=sys.stderr, flush=True)
-    auth_markers = ("Authentication is required", "polkit", "Access denied", "Interactive authentication required")
-    if any(marker.lower() in stderr.lower() for marker in auth_markers):
-        return _launch_direct_mode(service_name)
-    return result.returncode
+        if current_screen == ACCESS_GRANTED:
+            playback_gif(framebuffer, shell_images.granted_gif, args.width, args.height, args.gif_speed, None, None)
+            run_player(args.player_command)
+            current_screen = session_root_page
+            continue
 
+        if current_screen == ACCESS_DENIED:
+            playback_gif(framebuffer, shell_images.denied_gif, args.width, args.height, args.gif_speed, None, None)
+            if pending_pin_shutdown:
+                child_manager.shutdown()
+                if framebuffer is not None:
+                    write_framebuffer_image(framebuffer, Image.new("RGB", (args.width, args.height), BG))
+                return run_shutdown(args.shutdown_command)
+            current_screen = session_root_page
+            continue
 
-def run_shutdown(command_text: str) -> int:
-    command = shutdown_command_args(command_text)
-    if not command:
-        print("[boot-selector] Shutdown command is empty.", file=sys.stderr, flush=True)
-        return 1
-    print(f"[boot-selector] Running shutdown command: {command}", flush=True)
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
-    if result.returncode == 0:
-        print("[boot-selector] Shutdown command accepted.", flush=True)
-        return 0
-    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
-    print(f"[boot-selector] Shutdown command failed: {stderr}", file=sys.stderr, flush=True)
-    return result.returncode
+        if current_screen in {NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS, ISS_PLACEHOLDER}:
+            if framebuffer is not None:
+                write_framebuffer_image(
+                    framebuffer,
+                    draw_status_screen(
+                        shell_images.status_base,
+                        current_screen,
+                        status_text=build_status_text(
+                            current_screen,
+                            day_service=args.day_service,
+                            night_service=args.night_service,
+                        ),
+                    ),
+                )
+            action, requested_mode = wait_for_shell_action_or_mode(
+                touch_reader,
+                f"{current_screen} selection",
+                lambda x, y: resolve_screen_action(current_screen, x, y, args.width, args.height),
+                args.touch_settle_secs,
+                args.touch_debounce_secs,
+                mode_store,
+            )
+            if requested_mode is not None:
+                if requested_mode == SHELL_MODE_MENU:
+                    child_manager.stop_current(reason="menu mode request")
+                    current_screen = session_root_page
+                else:
+                    current_screen = RUNNING_APP if handle_mode_request(requested_mode, app_registry, app_registry[APP_ID_NIGHT], child_manager) == RUNNING_APP else session_root_page
+                continue
+            if action is not None:
+                current_screen = action
+            continue
 
-def run_player(command_text: str) -> int:
-    command = player_command_args(command_text)
-    if not command:
-        print("[boot-selector] Player command is empty.", file=sys.stderr, flush=True)
-        return 1
-    print(f"[boot-selector] Running player command: {command}", flush=True)
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
-    if result.returncode == 0:
-        print("[boot-selector] Player command completed successfully.", flush=True)
-        return 0
-    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
-    print(f"[boot-selector] Player command failed: {stderr}", file=sys.stderr, flush=True)
-    return result.returncode
+        if framebuffer is not None:
+            write_framebuffer_image(framebuffer, _screen_image(shell_images, current_screen))
+        action, requested_mode = wait_for_shell_action_or_mode(
+            touch_reader,
+            f"{current_screen} selection",
+            lambda x, y: resolve_screen_action(current_screen, x, y, args.width, args.height, theme_picker_ids if current_screen == THEMES_MENU else None),
+            args.touch_settle_secs,
+            args.touch_debounce_secs,
+            mode_store,
+        )
+        if should_reset_pin_failures(current_screen, action, requested_mode):
+            consecutive_pin_failures = 0
+            pending_pin_shutdown = False
+            entered_pin = ""
+        if requested_mode is not None:
+            if requested_mode == SHELL_MODE_MENU:
+                child_manager.stop_current(reason="menu mode request")
+                current_screen = session_root_page
+            else:
+                current_screen = RUNNING_APP if handle_mode_request(requested_mode, app_registry, app_registry[APP_ID_NIGHT], child_manager) == RUNNING_APP else session_root_page
+            continue
 
-def run_nasa(command_text: str) -> int:
-    command = player_command_args(command_text)
-    if not command:
-        print("[boot-selector] NASA command is empty.", file=sys.stderr, flush=True)
-        return 1
-    print(f"[boot-selector] Running NASA command: {command}", flush=True)
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
-    if result.returncode == 0:
-        print("[boot-selector] NASA command completed successfully.", flush=True)
-        return 0
-    stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
-    print(f"[boot-selector] NASA command failed: {stderr}", file=sys.stderr, flush=True)
-    return result.returncode
+        if current_screen == ROOT_MENU_1:
+            if action == ROOT_MENU_2:
+                session_root_page = ROOT_MENU_2
+                current_screen = ROOT_MENU_2
+            elif action == "dashboards":
+                session_root_page = ROOT_MENU_1
+                current_screen = DASHBOARDS_MENU
+            elif action == "photos":
+                session_root_page = ROOT_MENU_1
+                if child_manager.start_app(app_registry[APP_ID_PHOTOS]):
+                    current_screen = RUNNING_APP
+            elif action == "iss":
+                session_root_page = ROOT_MENU_1
+                if child_manager.start_app(app_registry[APP_ID_ISS]):
+                    current_screen = RUNNING_APP
+            elif action == APP_ID_LOCKED_CONTENT:
+                current_screen = PIN_KEYPAD
+                entered_pin = ""
+        elif current_screen == ROOT_MENU_2:
+            if action == ROOT_MENU_1:
+                session_root_page = ROOT_MENU_1
+                current_screen = ROOT_MENU_1
+            elif action == "credits":
+                current_screen = CREDITS_SCREEN
+            elif action == "themes":
+                current_screen = THEMES_MENU
+            elif action == "settings":
+                current_screen = SETTINGS_MENU
+            elif action == "shutdown":
+                current_screen = SHUTDOWN_CONFIRM
+        elif current_screen == DASHBOARDS_MENU:
+            if action == ROOT_MENU_1:
+                session_root_page = ROOT_MENU_1
+                current_screen = ROOT_MENU_1
+            elif action == "dashboards":
+                if child_manager.start_app(app_registry[APP_ID_DASHBOARDS]):
+                    current_screen = RUNNING_APP
+            elif action == "night":
+                if child_manager.start_app(app_registry[APP_ID_NIGHT]):
+                    current_screen = RUNNING_APP
+        elif current_screen == SETTINGS_MENU:
+            if action == ROOT_MENU_2:
+                session_root_page = ROOT_MENU_2
+                current_screen = ROOT_MENU_2
+            elif action == "network":
+                current_screen = NETWORK_STATUS
+            elif action == "pi_stats":
+                current_screen = PI_STATS_STATUS
+            elif action == "logs":
+                current_screen = LOGS_STATUS
+        elif current_screen == SHUTDOWN_CONFIRM:
+            if action == "confirm":
+                child_manager.shutdown()
+                if framebuffer is not None:
+                    write_framebuffer_image(framebuffer, Image.new("RGB", (args.width, args.height), BG))
+                return run_shutdown(args.shutdown_command)
+            current_screen = ROOT_MENU_2
+            session_root_page = ROOT_MENU_2
+        elif current_screen == THEMES_MENU:
+            if action == ROOT_MENU_2:
+                current_screen = ROOT_MENU_2
+                session_root_page = ROOT_MENU_2
+            elif action in theme_picker_ids:
+                active_theme_id = action
+                theme_state_store.write_theme_id(active_theme_id)
+                shell_images = build_shell_images(theme_catalog[active_theme_id], args.width, args.height)
+                current_screen = THEMES_MENU
+        elif current_screen == PIN_KEYPAD:
+            if action in {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"}:
+                entered_pin += action
+            elif action == "cancel":
+                entered_pin = ""
+                current_screen = session_root_page
+            elif action == "ok":
+                result, consecutive_pin_failures = evaluate_pin_entry(entered_pin, args.pin, consecutive_pin_failures)
+                entered_pin = ""
+                if result == "success":
+                    pending_pin_shutdown = False
+                    current_screen = ACCESS_GRANTED
+                elif result == "retry":
+                    pending_pin_shutdown = False
+                    current_screen = ACCESS_DENIED
+                else:
+                    pending_pin_shutdown = True
+                    current_screen = ACCESS_DENIED
+        else:
+            current_screen = session_root_page
+    child_manager.shutdown()
+    return 1 if STOP_REQUESTED else 0
 
 
 def main() -> int:
@@ -785,37 +1540,31 @@ def main() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
-    if args.probe_touch:
-        return run_touch_probe(args.width, args.height)
+    mode_store = ModeSwitchRequestStore(args.mode_request_path)
+    if args.request_mode:
+        mode_store.write_request(args.request_mode)
+        print(f"[boot-selector] Wrote shell mode request {args.request_mode} to {mode_store.path}", flush=True)
+        return 0
 
-    main_menu_images = [
-        load_main_menu_image(Path(args.main_menu_image), args.width, args.height, 0),
-        load_main_menu_image(Path(args.main_menu_page2_image), args.width, args.height, 1),
-    ]
-    selector_image = load_selector_image(Path(args.selector_image), args.width, args.height)
-    shutdown_image = load_selector_image(Path(args.shutdown_image), args.width, args.height)
-    keypad_image = load_selector_image(Path(args.keypad_image), args.width, args.height)
-    main_region_maps = [
-        main_menu_regions(args.width, args.height, page=0),
-        main_menu_regions(args.width, args.height, page=1),
-    ]
-    day_night_regions_map = vertical_regions(args.width, args.height, args.invert_y, DAY_NIGHT_DAY, DAY_NIGHT_NIGHT)
-    shutdown_regions_map = vertical_regions(args.width, args.height, args.invert_y, SHUTDOWN_CONFIRM, SHUTDOWN_CANCEL)
-    keypad_regions_map = keypad_regions(args.width, args.height)
-    if args.show_touch_zones:
-        log_touch_regions("main menu page 1", main_region_maps[0])
-        log_touch_regions("main menu page 2", main_region_maps[1])
-        log_touch_regions("day/night", day_night_regions_map)
-        log_touch_regions("shutdown", shutdown_regions_map)
-        log_touch_regions("keypad", keypad_regions_map)
-        main_menu_images[0] = annotate_touch_regions(main_menu_images[0], main_region_maps[0], "Main menu page 1 zones")
-        main_menu_images[1] = annotate_touch_regions(main_menu_images[1], main_region_maps[1], "Main menu page 2 zones")
-        selector_image = annotate_touch_regions(selector_image, day_night_regions_map, "Day/night zones")
-        shutdown_image = annotate_touch_regions(shutdown_image, shutdown_regions_map, "Shutdown zones")
-        keypad_image = annotate_touch_regions(keypad_image, keypad_regions_map, "Keypad zones")
-    blank_image = Image.new("RGB", (args.width, args.height), BACKGROUND_RGB)
-    save_preview(main_menu_images[0], args.output_main_menu)
-    save_preview(selector_image, args.output_selector)
+    if args.probe_touch:
+        return run_touch_probe(args.width)
+
+    if args.calibrate_touch:
+        return run_touch_calibration(args.width, args.height)
+
+    app_registry = build_app_registry(args)
+    night_app = app_registry[APP_ID_NIGHT]
+    theme_catalog = load_theme_catalog(Path(args.theme_root))
+    theme_state_store = ThemeStateStore(args.theme_state_path)
+    active_theme_id = validate_theme_selection(load_theme_selection(theme_state_store, theme_catalog, args.default_theme), theme_catalog)
+    theme_state_store.write_theme_id(active_theme_id)
+
+    if args.dump_contracts:
+        print(json.dumps(build_contract_snapshot(app_registry, night_app, str(mode_store.path), args, theme_catalog, active_theme_id), indent=2), flush=True)
+        return 0
+
+    shell_images = build_shell_images(theme_catalog[active_theme_id], args.width, args.height)
+    save_preview(shell_images.screens[ROOT_MENU_1], args.output_selector)
 
     framebuffer = None
     if not args.no_framebuffer:
@@ -826,144 +1575,13 @@ def main() -> int:
         framebuffer.open()
 
     touch_reader = TouchReader(args.width, args.height)
-    consecutive_pin_failures = 0
-    main_menu_page = 0
     try:
         if not args.skip_gif:
             playback_gif(framebuffer, Path(args.gif), args.width, args.height, args.gif_speed, args.output_gif_first, args.output_gif_last)
-
         if args.no_framebuffer:
             print("Skipping touch loop because --no-framebuffer was set.", flush=True)
             return 0
-
-        while not STOP_REQUESTED:
-            main_menu_image = main_menu_images[main_menu_page]
-            if framebuffer is not None:
-                framebuffer.write_image(main_menu_image)
-
-            main_action = wait_for_action(
-                touch_reader,
-                "main menu selection",
-                lambda screen_x, screen_y: resolve_main_menu_action(screen_x, screen_y, args.width, args.height, page=main_menu_page),
-                args.touch_settle_secs,
-                args.touch_debounce_secs,
-            )
-            if main_action == MAIN_MENU_PAGE_TOGGLE:
-                main_menu_page = (main_menu_page + 1) % len(main_menu_images)
-                continue
-
-            if main_action == MAIN_MENU_HOME:
-                if framebuffer is not None:
-                    framebuffer.write_image(selector_image)
-                day_night_action = wait_for_action(
-                    touch_reader,
-                    "day/night selection",
-                    lambda _screen_x, screen_y: resolve_day_night_action(screen_y, args.height, args.invert_y),
-                    args.touch_settle_secs,
-                    args.touch_debounce_secs,
-                )
-                if day_night_action == DAY_NIGHT_DAY:
-                    return launch_service(args.day_service)
-                if day_night_action == DAY_NIGHT_NIGHT:
-                    return launch_service(args.night_service)
-                return 1 if STOP_REQUESTED else 0
-
-            if main_action == MAIN_MENU_INFO:
-                playback_gif(
-                    framebuffer,
-                    Path(args.info_gif),
-                    args.width,
-                    args.height,
-                    args.gif_speed,
-                    None,
-                    None,
-                    touch_reader=touch_reader,
-                    touch_settle_secs=args.touch_settle_secs,
-                    touch_debounce_secs=args.touch_debounce_secs,
-                    skip_action=INFO_SKIP_ACTION,
-                )
-                continue
-
-            if main_action == MAIN_MENU_NASA:
-                run_nasa(args.nasa_command)
-                continue
-
-            if main_action == MAIN_MENU_PADLOCK:
-                entered_pin = ""
-                while not STOP_REQUESTED:
-                    if framebuffer is not None:
-                        framebuffer.write_image(keypad_image)
-                    keypad_action = wait_for_action(
-                        touch_reader,
-                        "keypad selection",
-                        lambda screen_x, screen_y: resolve_keypad_action(screen_x, screen_y, args.width, args.height),
-                        args.touch_settle_secs,
-                        args.touch_debounce_secs,
-                    )
-                    if keypad_action in KEYPAD_DIGITS:
-                        entered_pin += keypad_action
-                        continue
-                    if keypad_action == KEYPAD_NO:
-                        break
-                    if keypad_action == KEYPAD_OK:
-                        result, consecutive_pin_failures = evaluate_pin_entry(entered_pin, args.pin, consecutive_pin_failures)
-                        entered_pin = ""
-                        if result == "success":
-                            playback_gif(
-                                framebuffer,
-                                Path(args.granted_gif),
-                                args.width,
-                                args.height,
-                                args.gif_speed,
-                                None,
-                                None,
-                            )
-                            return run_player(args.player_command)
-                        if result == "retry":
-                            playback_gif(
-                                framebuffer,
-                                Path(args.denied_gif),
-                                args.width,
-                                args.height,
-                                args.gif_speed,
-                                None,
-                                None,
-                            )
-                            break
-                        if result == "shutdown":
-                            playback_gif(
-                                framebuffer,
-                                Path(args.denied_gif),
-                                args.width,
-                                args.height,
-                                args.gif_speed,
-                                None,
-                                None,
-                            )
-                            return run_shutdown(args.shutdown_command)
-                    return 1 if STOP_REQUESTED else 0
-                continue
-
-            if main_action == MAIN_MENU_SHUTDOWN:
-                if framebuffer is not None:
-                    framebuffer.write_image(shutdown_image)
-                shutdown_action = wait_for_action(
-                    touch_reader,
-                    "shutdown confirmation",
-                    lambda _screen_x, screen_y: resolve_shutdown_action(screen_y, args.height, args.invert_y),
-                    args.touch_settle_secs,
-                    args.touch_debounce_secs,
-                )
-                if shutdown_action == SHUTDOWN_CONFIRM:
-                    if framebuffer is not None:
-                        framebuffer.write_image(blank_image)
-                    return run_shutdown(args.shutdown_command)
-                if shutdown_action == SHUTDOWN_CANCEL:
-                    continue
-                return 1 if STOP_REQUESTED else 0
-
-            return 1 if STOP_REQUESTED else 0
-        return 1 if STOP_REQUESTED else 0
+        return run_main_screen_shell(args, framebuffer, touch_reader, mode_store, app_registry, theme_catalog, theme_state_store, shell_images, active_theme_id)
     finally:
         touch_reader.close()
         if framebuffer is not None:
@@ -972,15 +1590,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
-
-
-
-
-
-
-

@@ -56,10 +56,17 @@ if str(REPO_ROOT) not in sys.path:
 from _config import get_env, report_validation_errors
 
 from dotenv import load_dotenv
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from PIL import Image, ImageEnhance
+from framebuffer import rgb888_to_rgb565 as shared_rgb888_to_rgb565, write_framebuffer as shared_write_framebuffer
+
+try:
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+except ImportError:
+    Request = None
+    Credentials = None
+    InstalledAppFlow = None
 
 SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata"]
 
@@ -257,7 +264,17 @@ def load_config() -> Config:
     return config
 
 
+def _require_google_auth_support() -> None:
+    if Request is not None and Credentials is not None and InstalledAppFlow is not None:
+        return
+    raise RuntimeError(
+        "Google Photos support requires google-auth and google-auth-oauthlib. "
+        "Install the existing project dependencies before using online Photos sources."
+    )
+
+
 def authenticate(config: Config, log: Log) -> Credentials:
+    _require_google_auth_support()
     creds: Credentials | None = None
 
     calendar_default_token = (DEFAULT_ROOT / "calendash-token.json").resolve()
@@ -619,29 +636,11 @@ def composite_frame(photo_path: Path, logo_path: Path, width: int, height: int) 
 
 
 def rgb888_to_rgb565_bytes(img: Image.Image) -> bytes:
-    rgb = img.convert("RGB").tobytes()
-    out = bytearray((len(rgb) // 3) * 2)
-    j = 0
-    for i in range(0, len(rgb), 3):
-        r = rgb[i]
-        g = rgb[i + 1]
-        b = rgb[i + 2]
-        value = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-        out[j] = value & 0xFF
-        out[j + 1] = (value >> 8) & 0xFF
-        j += 2
-    return bytes(out)
+    return shared_rgb888_to_rgb565(img)
 
 
 def write_framebuffer(img: Image.Image, fb_device: str, width: int, height: int) -> None:
-    payload = rgb888_to_rgb565_bytes(img)
-    expected = width * height * 2
-    if len(payload) != expected:
-        raise ValueError(f"RGB565 payload size mismatch: {len(payload)} != {expected}")
-
-    with open(fb_device, "r+b", buffering=0) as fb:
-        fb.seek(0)
-        fb.write(payload)
+    shared_write_framebuffer(img, fb_device, width, height)
 
 
 def choose_local_image(config: Config, log: Log) -> Path:
@@ -699,6 +698,52 @@ def choose_offline_image(config: Config, log: Log) -> Path:
     return chosen
 
 
+def select_source_image(config: Config, log: Log) -> Path:
+    try:
+        return choose_local_image(config, log)
+    except Exception as local_exc:
+        log.info(f"Local photos unavailable ({local_exc}); trying online source")
+        try:
+            return choose_online_image(config, log)
+        except Exception as exc:
+            log.info(f"Online unavailable ({exc}); trying offline cache")
+            try:
+                return choose_offline_image(config, log)
+            except Exception as off_exc:
+                log.info(f"Offline cache unavailable ({off_exc}); using fallback image")
+                return config.fallback_image
+
+
+def render_frame_with_fallback(source_image: Path, config: Config, log: Log) -> Image.Image:
+    try:
+        return composite_frame(source_image, config.logo_path, config.width, config.height)
+    except Exception as exc:
+        log.info(f"Primary render failed ({exc}); trying fallback image")
+        try:
+            return composite_frame(config.fallback_image, config.logo_path, config.width, config.height)
+        except Exception as fallback_exc:
+            raise RuntimeError(f"Unable to render fallback image: {fallback_exc}") from fallback_exc
+
+
+def save_frame(frame: Image.Image, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.save(output_path)
+
+
+def write_framebuffer_with_fallback(frame: Image.Image, config: Config, log: Log) -> bool:
+    try:
+        write_framebuffer(frame, config.fb_device, config.width, config.height)
+        return False
+    except Exception as exc:
+        log.info(f"Framebuffer write failed ({exc}); trying fallback framebuffer render")
+        try:
+            fallback_frame = composite_frame(config.fallback_image, config.logo_path, config.width, config.height)
+            write_framebuffer(fallback_frame, config.fb_device, config.width, config.height)
+            return True
+        except Exception as fallback_exc:
+            raise RuntimeError(f"Unable to render to framebuffer: {fallback_exc}") from fallback_exc
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render one random Google Photos album image to framebuffer.")
     parser.add_argument("--test", action="store_true", help="Render to /tmp/photos-shuffle-test.png instead of framebuffer")
@@ -740,50 +785,28 @@ def main() -> int:
         print("[photos-shuffle.py] Authentication check passed.")
         return 0
 
-    source_image: Path | None = None
+    source_image = select_source_image(config, log)
     try:
-        source_image = choose_local_image(config, log)
-    except Exception as local_exc:
-        log.info(f"Local photos unavailable ({local_exc}); trying online source")
-        try:
-            source_image = choose_online_image(config, log)
-        except Exception as exc:
-            log.info(f"Online unavailable ({exc}); trying offline cache")
-            try:
-                source_image = choose_offline_image(config, log)
-            except Exception as off_exc:
-                log.info(f"Offline cache unavailable ({off_exc}); using fallback image")
-                source_image = config.fallback_image
-
-    try:
-        frame = composite_frame(source_image, config.logo_path, config.width, config.height)
-    except Exception as exc:
-        log.info(f"Primary render failed ({exc}); trying fallback image")
-        try:
-            frame = composite_frame(config.fallback_image, config.logo_path, config.width, config.height)
-        except Exception as fallback_exc:
-            print(f"Unable to render fallback image: {fallback_exc}")
-            return 1
+        frame = render_frame_with_fallback(source_image, config, log)
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
 
     if args.test:
-        frame.save(TEST_OUTPUT)
+        save_frame(frame, TEST_OUTPUT)
         log.info(f"Rendered test image: {TEST_OUTPUT}")
         return 0
 
     try:
-        write_framebuffer(frame, config.fb_device, config.width, config.height)
-        log.info(f"Rendered one frame to {config.fb_device}")
-        return 0
-    except Exception as exc:
-        log.info(f"Framebuffer write failed ({exc}); trying fallback framebuffer render")
-        try:
-            fallback_frame = composite_frame(config.fallback_image, config.logo_path, config.width, config.height)
-            write_framebuffer(fallback_frame, config.fb_device, config.width, config.height)
+        used_fallback = write_framebuffer_with_fallback(frame, config, log)
+        if used_fallback:
             log.info(f"Rendered fallback frame to {config.fb_device}")
-            return 0
-        except Exception as fallback_exc:
-            print(f"Unable to render to framebuffer: {fallback_exc}")
-            return 1
+        else:
+            log.info(f"Rendered one frame to {config.fb_device}")
+        return 0
+    except RuntimeError as exc:
+        print(str(exc))
+        return 1
 
 
 if __name__ == "__main__":
