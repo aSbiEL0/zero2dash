@@ -8,151 +8,123 @@ Rules:
 
 ---
 
-DECISION ID: D-015
+DECISION ID: D-022
 Status: ACTIVE
 
 Topic:
-Current app stabilization scope
+Current active scope
 
 Decision:
-Treat Photos, Settings, and Themes as the active remediation stream. Dashboard is not in a rebuild stream and only receives narrow layout guidance in this slice.
+The active workstream is post-merge shell stabilization. The earlier shell-owned-app slice is superseded as the active planning story.
 
 Reason:
-The operator explicitly stated that Dashboard has no substantive issue beyond minor layout tuning, while the real issues are in other apps/functions.
+The operator’s current goal is to clean up shell/menu regressions exposed after the bad NASA-branch merge, not to continue the previous Photos/Settings/Themes feature-oriented slice.
 
 Implications:
-- avoid reopening dashboard/rotator architecture
-- focus implementation and testing on shell-owned app flows plus Photos child behavior
+- NASA app work is out of scope
+- planning, coordination, and AGENTS files must point at one fresh active slice
+- old coordination context remains historical only
 
 Supersedes:
-- archived shell-repair planning state as the current active workstream
+- `D-015`
+- `D-016`
+- `D-017`
+- `D-018`
+- `D-019`
+- `D-020`
+- `D-021`
 
 ---
 
-DECISION ID: D-016
+DECISION ID: D-023
 Status: ACTIVE
 
 Topic:
-Photos interaction contract
+Themes screen contract
 
 Decision:
-Photos should match dashboard-style touch interaction: tap left for previous, tap right for next, and hold to exit back to the shell.
+The current Themes screen must follow the visible top-row order `default`, `steele`, `comic`, and all lower-row touch zones are inactive until future visible buttons/assets explicitly restore extra slots.
 
 Reason:
-The operator explicitly requested parity with Dashboard touch behavior for Photos.
+The operator confirmed the visible art order and explicitly stated that the lower three theme buttons were removed from the current design.
 
 Implications:
-- `modules/photos/slideshow.py` must own left/right/hold behavior while active
-- the shell must not compete for the same gesture path during active Photos runtime
+- shell code must not derive current visible order from alphabetical sorting
+- hidden live lower-row mapping is a bug in the current slice
+- future extra-theme support must be reintroduced explicitly, not left half-live
 
 Supersedes:
-None
+- generated 1..6 active Themes behavior as the current active contract
 
 ---
 
-DECISION ID: D-017
+DECISION ID: D-024
 Status: ACTIVE
 
 Topic:
-Settings content level
+Touch stabilization strategy
 
 Decision:
-Settings screens should render concise operator-summary content for Network, Pi Stats, and Logs instead of placeholder-only screens.
+Touch stabilization for this slice is calibration-first. The current `--probe-touch` and `--calibrate-touch` workflow remains the approved path, and shell touch logic should not be changed unless recalibrated on-device checks still miss intended menu zones.
 
 Reason:
-The operator selected operator-summary status content and shell stack service logs as the desired output.
+The operator wants recalibration rather than speculative touch-code changes and asked specifically about on-device stylus calibration support.
 
 Implications:
-- implement fallback-safe, read-only data gathering in the shell
-- preserve the existing `stats.png`-based screen model and strip-only back behavior
-
-Supersedes:
-None
-
----
-
-DECISION ID: D-018
-Status: ACTIVE
-
-Topic:
-Theme picker scaling model
-
-Decision:
-Themes should use a generated single-screen picker with deterministic touch mapping for discovered themes, supporting up to 6 installed themes without paging.
-
-Reason:
-The operator clarified that theme rendering will need to adapt to installed themes and there will not be more than 6 active themes.
-
-Implications:
-- remove hardcoded three-theme assumptions from the theme picker logic
-- keep the behavior shell-local in `boot/boot_selector.py`
-- keep persistence immediate and remain on the Themes screen after apply
-
-Supersedes:
-- archived three-column-only theme picker assumption for future work
-
----
-
-DECISION ID: D-019
-Status: ACTIVE
-
-Topic:
-Dashboard layout tuning surface
-
-Decision:
-Dashboard layout tuning remains narrow and uses existing global and script-local knobs instead of a structural layout rewrite.
-
-Reason:
-The operator asked where margins can be adjusted and did not request a dashboard redesign.
-
-Implications:
-- global tuning surface remains `display_layout.py`
-- shell status-screen offsets should become explicit named constants in `boot/boot_selector.py`
-- script-local offsets remain in the module files that already define them
+- docs and validation must emphasize the operator calibration workflow
+- code churn in touch math is not the default fix
+- a visual calibration UI is future work only
 
 Supersedes:
 None
 
 ---
 
-DECISION ID: D-020
+DECISION ID: D-025
 Status: ACTIVE
 
 Topic:
-Photos remediation ownership boundary
+Settings rendering scope
 
 Decision:
-Keep `modules/photos/*` changes in the Photos Worker stream and keep every `boot/boot_selector.py` change in the Switchboard stream, including the Photos launch/gesture handoff.
+Settings remains in scope, but only as a text-rendering task. Current Network, Pi Stats, and Logs summary providers stay unchanged; only the composition, spacing, alignment, and truncation behavior may change.
 
 Reason:
-The root repo rules assign `boot/boot_selector.py` to Switchboard, and the current shell-side gesture ownership for Photos is implemented there rather than in the Photos child.
+The operator confirmed the content is acceptable and only the way it is drawn must change.
 
 Implications:
-- child-side Photos work should use the existing menu-request contract instead of editing shell routing directly
-- shell-side gesture ownership changes must stay merge-safe inside the Switchboard stream
-- plan and task files must not ask the Photos Worker to edit `boot/boot_selector.py`
+- Switchboard may rework the render layout
+- shell data-gathering helpers are not to be reinvented in this slice
+- tests should focus on rendering constraints rather than content-source changes
 
 Supersedes:
-None
+operator-summary-content expansion as the current active focus
 
 ---
 
-DECISION ID: D-021
+DECISION ID: D-026
 Status: ACTIVE
 
 Topic:
-Regression runner baseline for this slice
+Execution team shape
 
 Decision:
-Use the existing `unittest` modules and `py_compile` sanity checks as the hardware-free validation baseline for the shell-owned apps slice.
+Use a standard specialized team:
+- Mouser
+- Pathfinder
+- Switchboard
+- Sentinel
+- Curator
+
+Framekeeper remains reserve-only. Rotor and Quartermaster remain out of the first wave unless scope expands.
 
 Reason:
-The current repo test surfaces for selector, Photos, and rotator are `unittest` modules, and `pytest` is not part of the declared runtime dependency set in `requirements.txt`.
+The operator asked for a specialized, efficient team that stays easy to manage and aligned with the goal.
 
 Implications:
-- plan commands should use `python -m unittest tests.test_boot_selector`, `tests.test_photos`, and `tests.test_display_rotator`
-- new regression coverage should fit the current test modules instead of assuming a new test runner
-- validation remains grounded in repo reality for later execution sessions
+- first-wave execution stays narrow
+- reserve roles need explicit justification before activation
+- agent `.toml` files and AGENTS docs must reflect the same team shape
 
 Supersedes:
 None

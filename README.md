@@ -4,7 +4,16 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 
 - Direct rendering to `/dev/fb1`
 - No X11, Wayland, SDL, or browser runtime
-- `PLAN.md` is the active source of truth for the current shell rebuild
+- `PLAN.md` is the active source of truth for the current post-merge shell stabilization slice
+
+## Active Focus
+
+- Current scope is post-merge shell/menu stabilization.
+- NASA app work is not part of the active slice.
+- The current stabilization targets are:
+  - Themes top-row order and lower-row inactivity
+  - calibration-first menu touch sign-off
+  - Settings text rendering only
 
 ## Runtime Overview
 
@@ -19,7 +28,7 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 | `tram.service` | Independent refresh job for the cached Firswood tram timetable | `modules/trams/tram_gtfs_refresh.py` |
 | `tram-alerts.service` | Independent refresh job for the cached Bee Network tram alerts | `modules/trams/tram_alerts_refresh.py` |
 
-## Rebuild Status
+## Runtime Status
 
 - `boot/boot_selector.py` is now the themed shell runtime
 - `display_rotator.py` remains the Dashboards child entrypoint
@@ -29,6 +38,7 @@ Framebuffer dashboard stack for a 320x240 SPI TFT on Raspberry Pi.
 - `rotator/touch.py` restores long-press `MAIN_MENU` return behavior
 - The shell baseline is usable on the Pi, including ADS7846 touch fallback handling, Dashboard/Night launch recovery, and keypad routing
 - Hardware-free tests cover the repaired rotator path and the rebuilt selector/router
+- Active clean-up work is focused on post-merge shell/menu regressions rather than new app work
 
 ## Asset Contract
 
@@ -86,7 +96,8 @@ Shared non-theme assets remain under `boot/`:
 
 ## Remaining Risks
 
-- App-specific debugging still remains, but the shell baseline is now past Pi-side validation.
+- Post-merge shell/menu cleanup still remains before the current slice is ready for execution.
+- Menu touch sign-off still depends on documented on-device recalibration.
 - `display.service` and `night.service` remain compatibility paths, not the primary runtime.
 
 ## Repo Map
@@ -117,3 +128,4 @@ zero2dash/
 - The shell’s menu contract is theme-backed, not the old paged tile UI.
 - `pin_keypad` follows the real keypad asset: green tick submits, red X cancels, and only uninterrupted failed keypad submissions count toward shutdown.
 - Touch calibration is env-driven. Use `TOUCH_SWAP_AXES`, `TOUCH_RAW_X_MIN`, `TOUCH_RAW_X_MAX`, `TOUCH_RAW_Y_MIN`, and `TOUCH_RAW_Y_MAX` after capturing values with `--calibrate-touch`.
+- The current Themes screen should behave as a visible top row only; lower-row theme zones are not part of the active contract.

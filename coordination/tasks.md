@@ -1,6 +1,6 @@
 # Tasks
 
-Live status: OPENED on 2026-03-19 for shell-owned app stabilization.
+Live status: OPENED on 2026-03-19 for post-merge shell stabilization.
 
 Rules:
 - Mouser assigns and re-sequences tasks.
@@ -12,17 +12,20 @@ Rules:
 
 ## Active Tasks
 
-TASK ID: R-015
+TASK ID: R-021
 Agent: Mouser
 Status: COMPLETE
 
 Objective:
-Replace the archived planning state with a live plan for Photos, Settings, Themes, and dashboard-layout guidance.
+Replace the stale shell-owned-app planning layer with a clean post-merge stabilization control plane.
 
 Allowed files:
 - `PLAN.md`
+- `AGENTS.md`
+- `boot/AGENTS.md`
 - `docs/plans/*`
 - `coordination/*`
+- `.codex/agents/*`
 
 Forbidden files:
 - runtime code
@@ -30,95 +33,63 @@ Forbidden files:
 
 Deliverables:
 - active `PLAN.md`
-- detailed execution plan
-- reopened coordination files
+- new stabilization plan
+- aligned root/nested AGENTS files
+- refreshed coordination state
+- aligned agent `.toml` specs
 
 Acceptance criteria:
-- `PLAN.md` no longer points at the archived shell-repair slice
-- the new plan names owners, dependencies, and merge order
-- coordination reflects the live workstream
+- old shell-owned-app planning is clearly superseded
+- one active stabilization story remains
+- first-wave roles and reserve roles are explicit
+- coordination starts from a fresh, relevant baseline
 
 Dependencies:
 - none
 
 ---
 
-TASK ID: R-016
+TASK ID: R-022
 Agent: Pathfinder
-Status: COMPLETE
+Status: OPEN
 
 Objective:
-Verify the live asset, theme, and Photos touch contracts before implementation starts.
+Verify the current Themes/touch/Settings reality before shell code edits begin.
 
 Allowed files:
-- `themes/*`
 - `boot/boot_selector.py`
-- `modules/photos/*`
+- `themes/*`
 - `tests/test_boot_selector.py`
-- `tests/test_photos.py`
 - `coordination/status.md`
 - `coordination/decisions.md`
+- `coordination/blockers.md`
 
 Forbidden files:
 - runtime code edits
 - `systemd/*`
 
 Deliverables:
-- verified theme inventory
-- verified shell asset contract
-- verified Photos touch seam notes
+- verified theme-order mismatch notes
+- verified lower-row touch-zone notes
+- verified Settings render seam notes
+- blocker note if recalibration-first assumptions look unsafe
 
 Acceptance criteria:
-- coordination records only verified facts
-- theme count and path assumptions are explicit
-- Photos input/exit seam is documented for implementation agents
+- repo evidence distinguishes real shell issues from stale assumptions
+- theme/touch decisions are backed by actual code/assets
+- Mouser can hand implementation to Switchboard without guessing
 
 Dependencies:
-- `R-015`
+- `R-021`
 
 ---
 
-TASK ID: R-017
-Agent: Photos Worker
-Status: COMPLETE
-
-Objective:
-Implement child-owned dashboard-parity touch behavior for Photos while preserving the existing child entrypoint and menu-request contracts.
-
-Allowed files:
-- `modules/photos/slideshow.py`
-- `modules/photos/display.py`
-- `tests/test_photos.py`
-- `coordination/status.md`
-
-Forbidden files:
-- `boot/boot_selector.py`
-- `display_rotator.py`
-- `systemd/*`
-- unrelated module trees
-
-Deliverables:
-- left/right/hold touch behavior in Photos
-- menu-request exit path from the child runtime
-- focused regression tests
-
-Acceptance criteria:
-- tap left selects previous photo
-- tap right selects next photo
-- hold requests menu exit
-- shell-boundary changes remain in `R-018`
-
-Dependencies:
-- `R-016`
-
----
-
-TASK ID: R-018
+TASK ID: R-023
 Agent: Switchboard
-Status: COMPLETE
+Status: OPEN
 
 Objective:
-Implement the shell-side Photos handoff, operator-summary Settings content, generated Themes mapping for up to 6 themes, and named shell layout knobs for status screens.
+Fix Themes screen behavior so visible buttons map correctly and hidden lower-row zones are inactive.
 
 Allowed files:
 - `boot/boot_selector.py`
@@ -127,67 +98,101 @@ Allowed files:
 
 Forbidden files:
 - `display_rotator.py`
+- `modules/*`
 - `systemd/*`
-- unrelated module trees
 
 Deliverables:
-- shell-side Photos ownership handoff
-- real Settings summaries
-- generated theme picker mapping
-- named shell status layout constants
+- explicit top-row theme order
+- inactive lower-row theme zones
+- focused selector regressions
 
 Acceptance criteria:
-- Photos no longer leaves the parent shell consuming the same gesture path while the child is active
-- Network, Pi Stats, and Logs screens render fallback-safe summaries
-- theme picker derives touch mapping from discovered themes
-- up to 6 themes fit on one screen without paging
-- shell status text layout is adjustable via named constants
+- Carbon Black maps to `default`
+- Brushed Steele maps to `steele`
+- Comic Book maps to `comic`
+- lower-row taps do nothing with current art
 
 Dependencies:
-- `R-016`
+- `R-022`
 
 ---
 
-TASK ID: R-019
+TASK ID: R-024
+Agent: Switchboard
+Status: OPEN
+
+Objective:
+Reformat Settings text rendering without changing the underlying summary content providers.
+
+Allowed files:
+- `boot/boot_selector.py`
+- `tests/test_boot_selector.py`
+- `coordination/status.md`
+
+Forbidden files:
+- `display_rotator.py`
+- `modules/*`
+- `systemd/*`
+
+Deliverables:
+- centered title/body composition shifted 10px left
+- more spacious layout
+- truncation/ellipsis behavior instead of dense wrapping
+- focused rendering regressions
+
+Acceptance criteria:
+- Network, Pi Stats, and Logs remain the same data sources
+- text becomes readable on `stats.png`
+- no overflow or uncontrolled wrapping remains
+
+Dependencies:
+- `R-023`
+
+---
+
+TASK ID: R-025
 Agent: Sentinel
 Status: OPEN
 
 Objective:
-Add regression coverage for Photos touch behavior, Settings summaries, and theme-grid mapping.
+Harden selector regressions around Themes mapping, lower-row inactivity, and Settings rendering.
 
 Allowed files:
 - `tests/test_boot_selector.py`
-- `tests/test_photos.py`
 - `coordination/status.md`
+- `coordination/blockers.md`
 
 Forbidden files:
-- runtime code except approved narrow seams
+- runtime code except narrow test-linked seams approved by Mouser
 - `systemd/*`
 
 Deliverables:
-- focused hardware-free regressions
-- coverage for fallback behavior and deterministic theme mapping
+- shell regression coverage
+- sign-off notes for code-side checks
+- blocker note if tests expose a deeper touch issue
 
 Acceptance criteria:
-- test suite covers Photos left/right/hold behavior
-- test suite covers non-empty Settings summaries with fallback states
-- test suite covers 1..6 theme mapping and in-place apply behavior
+- tests protect explicit theme order
+- tests protect lower-row inactivity
+- tests protect Settings formatting constraints
 
 Dependencies:
-- `R-017`
-- `R-018`
+- `R-024`
 
 ---
 
-TASK ID: R-020
+TASK ID: R-026
 Agent: Curator
 Status: OPEN
 
 Objective:
-Update operator-facing docs after runtime behavior stabilizes.
+Refresh operator-facing docs after shell behavior and regressions are stabilized.
 
 Allowed files:
 - `README.md`
+- `PLAN.md`
+- `AGENTS.md`
+- `boot/AGENTS.md`
 - `coordination/status.md`
 
 Forbidden files:
@@ -195,14 +200,44 @@ Forbidden files:
 - `systemd/*`
 
 Deliverables:
-- margin tuning documentation
-- Photos touch contract documentation
-- Settings and Themes behavior notes
+- aligned README notes
+- validation guidance for recalibration-first touch sign-off
+- documentation of current Themes behavior
 
 Acceptance criteria:
-- docs name the real files and knobs
-- docs match landed runtime behavior
+- docs match actual landed shell behavior
+- active plan/source-of-truth references stay consistent
+- NASA is explicitly out of scope in current docs
 
 Dependencies:
-- `R-019`
+- `R-025`
 
+---
+
+TASK ID: R-027
+Agent: Framekeeper
+Status: HOLD
+
+Objective:
+Stand by for escalation only if recalibrated menu touches still misfire and the blocker is no longer explainable by shell mapping or stale calibration.
+
+Allowed files:
+- `boot/boot_selector.py`
+- `touch_calibration.py`
+- framebuffer-adjacent helpers if explicitly approved
+- `coordination/*`
+
+Forbidden files:
+- broad shell redesign
+- `systemd/*`
+- unrelated module trees
+
+Deliverables:
+- targeted diagnosis
+- bounded fix only if needed
+
+Acceptance criteria:
+- reserve role is used only when calibration-first validation proves insufficient
+
+Dependencies:
+- `R-025`
