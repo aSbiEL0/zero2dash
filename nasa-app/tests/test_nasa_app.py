@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 
-MODULE_PATH = Path(__file__).resolve().parent.parent / "nasa-app" / "app.py"
+MODULE_PATH = Path(__file__).resolve().parent.parent / "app.py"
 SPEC = importlib.util.spec_from_file_location("nasa_app_module", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 NASA_APP = importlib.util.module_from_spec(SPEC)
@@ -117,4 +117,5 @@ class NasaAppTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

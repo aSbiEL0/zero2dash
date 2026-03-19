@@ -78,6 +78,7 @@ Recommended thread/depth settings (if configurable):
 ## Safety, permissions, and secrets
 
 Non-negotiables:
+-NEVER, ABSOLUTELY NEVER DELETE ANY FILES, BRANCHES OR EVEN THINK ABOOUT DELETING ANYTHING WITHOUT A CLEAR AUTHORISATION!!!!!!!!
 - NEVER commit `.env`, tokens, OAuth credentials, API keys, or cached personal data.
 - Redact secrets from logs, PR descriptions, and screenshots.
 - Treat device paths and privileges as high-risk:
