@@ -18,8 +18,8 @@ Live status: ACTIVE
 
 - `R-015` Mouser: planning reset and live coordination reopen. COMPLETE.
 - `R-016` Pathfinder: verify theme/assets and Photos touch seams. COMPLETE.
-- `R-017` Photos Worker: add dashboard-style touch behavior to Photos. OPEN.
-- `R-018` Switchboard: implement the shell-side Photos handoff, Settings summaries, generated Themes picker, and shell layout knobs. OPEN.
+- `R-017` Photos Worker: add dashboard-style touch behavior to Photos. COMPLETE.
+- `R-018` Switchboard: implement the shell-side Photos handoff, Settings summaries, generated Themes picker, and shell layout knobs. COMPLETE.
 - `R-019` Sentinel: add regression coverage for Photos, Settings, and Themes. OPEN.
 - `R-020` Curator: update operator-facing docs after stabilization. OPEN.
 
@@ -31,6 +31,21 @@ Live status: ACTIVE
 4. `R-019` regression hardening
 5. Mouser integration verification
 6. `R-020` documentation pass
+
+## Current Session Progress
+
+- Mouser launched the `R-017` Photos child stream and `R-018` Switchboard shell stream in parallel.
+- Coordination file edits remain centralized in Mouser to avoid merge churn while implementation proceeds in disjoint write sets.
+- Photos child runtime now supports left/right navigation and hold-to-menu via the existing shell mode-request file contract.
+- The shell no longer claims the Photos home gesture, Settings now renders fallback-safe operator summaries, and Themes now derives deterministic touch mapping from discovered theme ids capped at 6 items.
+- Named shell status layout constants are now extracted in `boot/boot_selector.py`, and Pi Stats now includes uptime, load, temperature, memory, and disk summaries.
+
+## Validation Snapshot
+
+- `tests.test_boot_selector` passes under `C:\ISS\.venv\Scripts\python.exe`.
+- `py_compile` passes for the touched shell and Photos files under LibreOffice Python with `C:\ISS\.venv\Lib\site-packages` on `PYTHONPATH`.
+- `tests.test_photos` could not be executed locally because the available venv launcher points to an inaccessible base Python 3.13 interpreter, while LibreOffice Python 3.8 is too old for the installed Pillow build.
+- `tests.test_display_rotator` currently fails `test_touch_worker_accepts_abs_syn_fallback_without_btn_touch` in unchanged rotator code during this environment's validation pass; this appears outside the edited file set and remains for follow-up confirmation.
 
 ## Current Repo Reality
 

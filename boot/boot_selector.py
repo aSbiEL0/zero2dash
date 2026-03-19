@@ -8,10 +8,13 @@ import json
 import os
 import select
 import shlex
+import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,7 +72,14 @@ DEFAULT_SHOW_TOUCH_ZONES = os.environ.get("BOOT_SELECTOR_SHOW_TOUCH_ZONES", "0")
 
 POLL_TIMEOUT_SECS = 0.2
 MENU_STRIP_WIDTH = 20
-THEME_PICKER_COLUMNS = ("default", "steele", "comic")
+MAX_THEME_PICKER_ITEMS = 6
+THEME_PICKER_MAX_COLUMNS = 3
+STATUS_TITLE_X = 20
+STATUS_TITLE_Y = 18
+STATUS_BODY_X = 20
+STATUS_BODY_Y = 54
+STATUS_LINE_SPACING = 14
+STATUS_WRAP_WIDTH = 38
 
 ROOT_MENU_1 = "main_menu_1"
 ROOT_MENU_2 = "main_menu_2"
@@ -129,6 +139,18 @@ WARN = (244, 198, 0)
 BG = (0, 0, 0)
 STOP_REQUESTED = False
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+STATUS_TITLE_MAP = {
+    NETWORK_STATUS: "Network",
+    PI_STATS_STATUS: "Pi Stats",
+    LOGS_STATUS: "Logs",
+    ISS_PLACEHOLDER: "NASA ISS",
+}
+STATUS_DEFAULT_MAP = {
+    NETWORK_STATUS: "Host: unavailable\nIP: unavailable",
+    PI_STATS_STATUS: "Uptime: unavailable\nLoad: unavailable\nTemp: unavailable\nMem: unavailable\nDisk: unavailable",
+    LOGS_STATUS: "Logs unavailable",
+    ISS_PLACEHOLDER: "Placeholder only",
+}
 
 
 def _default_theme_state_path() -> Path:
@@ -549,7 +571,7 @@ def build_app_registry(args: argparse.Namespace) -> dict[str, AppSpec]:
     child_env = _shell_child_env_overrides(getattr(args, "mode_request_path", DEFAULT_MODE_REQUEST_PATH))
     return {
         APP_ID_DASHBOARDS: AppSpec(APP_ID_DASHBOARDS, "Dashboards", APP_KIND_CHILD_PROCESS, day_command, "day-night.png", True, ROOT_MENU_1, False, child_env),
-        APP_ID_PHOTOS: AppSpec(APP_ID_PHOTOS, "Photos", APP_KIND_CHILD_PROCESS, (sys.executable, "-u", str(BASE_DIR / "modules" / "photos" / "slideshow.py")), "mainmenu1.png", True, ROOT_MENU_1, True, child_env),
+        APP_ID_PHOTOS: AppSpec(APP_ID_PHOTOS, "Photos", APP_KIND_CHILD_PROCESS, (sys.executable, "-u", str(BASE_DIR / "modules" / "photos" / "slideshow.py")), "mainmenu1.png", True, ROOT_MENU_1, False, child_env),
         APP_ID_NIGHT: AppSpec(APP_ID_NIGHT, "Night", APP_KIND_CHILD_PROCESS, night_command, "day-night.png", True, DASHBOARDS_MENU, False, child_env),
         APP_ID_CREDITS: AppSpec(APP_ID_CREDITS, "Credits", APP_KIND_SHELL_SCREEN, (), "credits.gif", False, ROOT_MENU_2),
         APP_ID_THEMES: AppSpec(APP_ID_THEMES, "Themes", APP_KIND_SHELL_SCREEN, (), "themes.png", False, ROOT_MENU_2),
@@ -628,16 +650,150 @@ def _screen_image(shell_images: ShellImages, screen_name: str) -> Image.Image:
     return shell_images.screens[screen_name]
 
 
+def _status_title(screen_name: str) -> str:
+    return STATUS_TITLE_MAP.get(screen_name, screen_name.replace("_", " ").title())
+
+
+def _default_status_text(screen_name: str) -> str:
+    return STATUS_DEFAULT_MAP.get(screen_name, "Unavailable")
+
+
+def _read_proc_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _network_summary_lines() -> list[str]:
+    hostname = socket.gethostname().strip() or "unavailable"
+    ip_address = "unavailable"
+    try:
+        candidate_ips = [
+            ip
+            for ip in socket.gethostbyname_ex(hostname)[2]
+            if ip and not ip.startswith("127.")
+        ]
+        if candidate_ips:
+            ip_address = candidate_ips[0]
+    except OSError:
+        pass
+    return [f"Host: {hostname}", f"IP: {ip_address}"]
+
+
+def _format_uptime(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    if hours >= 24:
+        days, hours = divmod(hours, 24)
+        return f"{days}d {hours}h"
+    return f"{hours}h {minutes}m"
+
+
+def _mem_available_mib() -> str:
+    payload = _read_proc_text(Path("/proc/meminfo"))
+    if not payload:
+        return "unavailable"
+    for line in payload.splitlines():
+        if line.startswith("MemAvailable:"):
+            parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    return f"{int(parts[1]) // 1024} MiB"
+                except ValueError:
+                    return "unavailable"
+    return "unavailable"
+
+
+def _cpu_temperature_c() -> str:
+    payload = _read_proc_text(Path("/sys/class/thermal/thermal_zone0/temp"))
+    if not payload:
+        return "unavailable"
+    try:
+        return f"{int(payload.strip()) / 1000.0:.1f} C"
+    except ValueError:
+        return "unavailable"
+
+
+def _disk_free_gib(path: Path = BASE_DIR) -> str:
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return "unavailable"
+    return f"{usage.free / (1024 ** 3):.1f} GiB"
+
+
+def _pi_stats_summary_lines() -> list[str]:
+    uptime_text = _read_proc_text(Path("/proc/uptime"))
+    uptime = "unavailable"
+    if uptime_text:
+        try:
+            uptime = _format_uptime(float(uptime_text.split()[0]))
+        except (ValueError, IndexError):
+            uptime = "unavailable"
+    try:
+        load_avg = " ".join(f"{value:.2f}" for value in os.getloadavg())
+    except (AttributeError, OSError):
+        load_avg = "unavailable"
+    return [
+        f"Uptime: {uptime}",
+        f"Load: {load_avg}",
+        f"Temp: {_cpu_temperature_c()}",
+        f"Mem: {_mem_available_mib()}",
+        f"Disk: {_disk_free_gib()}",
+    ]
+
+
+def _logs_summary_lines(day_service: str, night_service: str) -> list[str]:
+    units = tuple(dict.fromkeys(unit for unit in (day_service, night_service) if unit))
+    if not units:
+        return ["Logs unavailable"]
+    command = ["journalctl", "--no-pager", "-n", "3"]
+    for unit in units:
+        command.extend(["-u", unit])
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=2.0)
+    except (OSError, subprocess.TimeoutExpired):
+        return ["Logs unavailable"]
+    if result.returncode != 0:
+        return ["Logs unavailable"]
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
+        return ["Logs unavailable"]
+    return lines[-3:]
+
+
+def build_status_text(screen_name: str, *, day_service: str = DEFAULT_DAY_SERVICE, night_service: str = DEFAULT_NIGHT_SERVICE) -> str:
+    env_override = os.environ.get(f"BOOT_SELECTOR_{screen_name.upper()}_TEXT", "").strip()
+    if env_override:
+        return env_override
+    if screen_name == NETWORK_STATUS:
+        return "\n".join(_network_summary_lines())
+    if screen_name == PI_STATS_STATUS:
+        return "\n".join(_pi_stats_summary_lines())
+    if screen_name == LOGS_STATUS:
+        return "\n".join(_logs_summary_lines(day_service, night_service))
+    return _default_status_text(screen_name)
+
+
+def _wrap_status_lines(body: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in body.splitlines() or [""]:
+        lines.extend(textwrap.wrap(raw_line, width=STATUS_WRAP_WIDTH) or [""])
+    return lines
+
+
 def draw_status_screen(base_image: Image.Image, screen_name: str, status_text: str | None = None) -> Image.Image:
     frame = base_image.copy()
     draw = ImageDraw.Draw(frame)
-    title_map = {NETWORK_STATUS: "Network", PI_STATS_STATUS: "Pi Stats", LOGS_STATUS: "Logs", ISS_PLACEHOLDER: "NASA ISS"}
-    default_map = {NETWORK_STATUS: "Unavailable", PI_STATS_STATUS: "Unavailable", LOGS_STATUS: "Unavailable", ISS_PLACEHOLDER: "Placeholder only"}
-    title = title_map.get(screen_name, screen_name.replace("_", " ").title())
-    body = status_text or os.environ.get(f"BOOT_SELECTOR_{screen_name.upper()}_TEXT", "").strip() or default_map.get(screen_name, "Unavailable")
+    title = _status_title(screen_name)
+    body = status_text or build_status_text(screen_name)
     font = ImageFont.load_default()
-    draw.text((20, 18), title, font=font, fill=ACCENT)
-    draw.text((20, 54), body, font=font, fill=WARN if body == "Unavailable" else FG)
+    draw.text((STATUS_TITLE_X, STATUS_TITLE_Y), title, font=font, fill=ACCENT)
+    fill = WARN if body == _default_status_text(screen_name) else FG
+    for index, line in enumerate(_wrap_status_lines(body)):
+        draw.text((STATUS_BODY_X, STATUS_BODY_Y + (index * STATUS_LINE_SPACING)), line, font=font, fill=fill)
     return frame
 
 
@@ -661,16 +817,36 @@ def resolve_shutdown_action(screen_y: int, screen_height: int, invert_y: bool) -
     return "confirm" if screen_y < (screen_height // 2) else "cancel"
 
 
-def resolve_theme_picker_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str | None:
-    _ = screen_y
+def theme_picker_targets(theme_ids: dict[str, ThemeAssets] | tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    if isinstance(theme_ids, dict):
+        ordered = sorted(theme_ids)
+    else:
+        ordered = sorted(str(theme_id) for theme_id in theme_ids)
+    return tuple(ordered[:MAX_THEME_PICKER_ITEMS])
+
+
+def resolve_theme_picker_action(
+    screen_x: int,
+    screen_y: int,
+    screen_width: int,
+    screen_height: int,
+    theme_ids: tuple[str, ...] | None = None,
+) -> str | None:
+    targets = theme_picker_targets(theme_ids or ())
+    if not targets:
+        return None
     usable_width = max(1, screen_width - MENU_STRIP_WIDTH)
-    column_width = usable_width / 3.0
-    column = int((screen_x - MENU_STRIP_WIDTH) / column_width)
-    if column < 0:
-        column = 0
-    if column > 2:
-        column = 2
-    return THEME_PICKER_COLUMNS[column]
+    column_count = min(THEME_PICKER_MAX_COLUMNS, len(targets))
+    row_count = 1 if len(targets) <= THEME_PICKER_MAX_COLUMNS else 2
+    column_width = usable_width / float(column_count)
+    row_height = screen_height / float(row_count)
+    relative_x = max(0, screen_x - MENU_STRIP_WIDTH)
+    column = min(column_count - 1, max(0, int(relative_x / column_width)))
+    row = min(row_count - 1, max(0, int(screen_y / row_height)))
+    index = (row * column_count) + column
+    if index >= len(targets):
+        return None
+    return targets[index]
 
 
 def resolve_keypad_action(screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str | None:
@@ -680,7 +856,14 @@ def resolve_keypad_action(screen_x: int, screen_y: int, screen_width: int, scree
     return keypad[row][column]
 
 
-def resolve_screen_action(screen_name: str, screen_x: int, screen_y: int, screen_width: int, screen_height: int) -> str | None:
+def resolve_screen_action(
+    screen_name: str,
+    screen_x: int,
+    screen_y: int,
+    screen_width: int,
+    screen_height: int,
+    theme_ids: tuple[str, ...] | None = None,
+) -> str | None:
     if screen_name in {ROOT_MENU_1, ROOT_MENU_2}:
         if screen_x < MENU_STRIP_WIDTH:
             return root_strip_action(screen_name)
@@ -721,7 +904,7 @@ def resolve_screen_action(screen_name: str, screen_x: int, screen_y: int, screen
     if screen_name == THEMES_MENU:
         if screen_x < MENU_STRIP_WIDTH:
             return ROOT_MENU_2
-        return resolve_theme_picker_action(screen_x, screen_y, screen_width, screen_height)
+        return resolve_theme_picker_action(screen_x, screen_y, screen_width, screen_height, theme_ids)
     if screen_name == PIN_KEYPAD:
         return resolve_keypad_action(screen_x, screen_y, screen_width, screen_height)
     if screen_name in {NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS}:
@@ -1142,6 +1325,7 @@ def run_main_screen_shell(
 ) -> int:
     child_manager = ChildAppManager(args.child_stop_grace_secs)
     home_region = home_gesture_region(args.width, args.height, args.home_gesture_corner_width, args.home_gesture_corner_height)
+    theme_picker_ids = theme_picker_targets(theme_catalog)
     current_screen = ROOT_MENU_1
     session_root_page = ROOT_MENU_1
     consecutive_pin_failures = 0
@@ -1197,7 +1381,18 @@ def run_main_screen_shell(
 
         if current_screen in {NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS, ISS_PLACEHOLDER}:
             if framebuffer is not None:
-                write_framebuffer_image(framebuffer, draw_status_screen(shell_images.status_base, current_screen))
+                write_framebuffer_image(
+                    framebuffer,
+                    draw_status_screen(
+                        shell_images.status_base,
+                        current_screen,
+                        status_text=build_status_text(
+                            current_screen,
+                            day_service=args.day_service,
+                            night_service=args.night_service,
+                        ),
+                    ),
+                )
             action, requested_mode = wait_for_shell_action_or_mode(
                 touch_reader,
                 f"{current_screen} selection",
@@ -1222,7 +1417,7 @@ def run_main_screen_shell(
         action, requested_mode = wait_for_shell_action_or_mode(
             touch_reader,
             f"{current_screen} selection",
-            lambda x, y: resolve_screen_action(current_screen, x, y, args.width, args.height),
+            lambda x, y: resolve_screen_action(current_screen, x, y, args.width, args.height, theme_picker_ids if current_screen == THEMES_MENU else None),
             args.touch_settle_secs,
             args.touch_debounce_secs,
             mode_store,
@@ -1299,7 +1494,7 @@ def run_main_screen_shell(
             if action == ROOT_MENU_2:
                 current_screen = ROOT_MENU_2
                 session_root_page = ROOT_MENU_2
-            elif action in THEME_PICKER_COLUMNS:
+            elif action in theme_picker_ids:
                 active_theme_id = action
                 theme_state_store.write_theme_id(active_theme_id)
                 shell_images = build_shell_images(theme_catalog[active_theme_id], args.width, args.height)

@@ -157,6 +157,7 @@ class BootSelectorTests(unittest.TestCase):
     def test_screen_action_routes_root_and_child_screens(self) -> None:
         w = 320
         h = 240
+        theme_ids = ("comic", "default", "steele")
         cases = [
             (boot_selector.ROOT_MENU_1, 0, 120, boot_selector.ROOT_MENU_2),
             (boot_selector.ROOT_MENU_1, 30, 20, "dashboards"),
@@ -179,9 +180,9 @@ class BootSelectorTests(unittest.TestCase):
             (boot_selector.SHUTDOWN_CONFIRM, 30, 20, "confirm"),
             (boot_selector.SHUTDOWN_CONFIRM, 30, 180, "cancel"),
             (boot_selector.THEMES_MENU, 0, 120, boot_selector.ROOT_MENU_2),
-            (boot_selector.THEMES_MENU, 30, 20, "default"),
-            (boot_selector.THEMES_MENU, 140, 20, "steele"),
-            (boot_selector.THEMES_MENU, 250, 20, "comic"),
+            (boot_selector.THEMES_MENU, 30, 20, "comic"),
+            (boot_selector.THEMES_MENU, 140, 20, "default"),
+            (boot_selector.THEMES_MENU, 250, 20, "steele"),
             (boot_selector.NETWORK_STATUS, 0, 120, boot_selector.SETTINGS_MENU),
             (boot_selector.NETWORK_STATUS, 30, 120, None),
             (boot_selector.PI_STATS_STATUS, 0, 120, boot_selector.SETTINGS_MENU),
@@ -193,7 +194,7 @@ class BootSelectorTests(unittest.TestCase):
         for screen_name, x, y, expected in cases:
             with self.subTest(screen_name=screen_name, x=x, y=y):
                 self.assertEqual(
-                    boot_selector.resolve_screen_action(screen_name, x, y, w, h),
+                    boot_selector.resolve_screen_action(screen_name, x, y, w, h, theme_ids),
                     expected,
                 )
 
@@ -205,7 +206,7 @@ class BootSelectorTests(unittest.TestCase):
         self.assertEqual(boot_selector.resolve_keypad_action(300, 20, w, h), "ok")
         self.assertEqual(boot_selector.resolve_keypad_action(300, 100, w, h), "0")
         self.assertEqual(boot_selector.resolve_keypad_action(300, 190, w, h), "cancel")
-        self.assertEqual(boot_selector.resolve_keypad_action(160, 190, w, h), "8")
+        self.assertEqual(boot_selector.resolve_keypad_action(160, 190, w, h), "9")
 
         self.assertEqual(boot_selector.evaluate_pin_entry("1234", "1234", 2), ("success", 0))
         self.assertEqual(boot_selector.evaluate_pin_entry("1111", "1234", 0), ("retry", 1))
@@ -228,7 +229,7 @@ class BootSelectorTests(unittest.TestCase):
         self.assertEqual(registry[boot_selector.APP_ID_NETWORK].preview_asset, "stats.png")
         self.assertEqual(registry[boot_selector.APP_ID_ISS].parent_screen, boot_selector.ROOT_MENU_1)
         self.assertFalse(registry[boot_selector.APP_ID_DASHBOARDS].shell_handles_home_gesture)
-        self.assertTrue(registry[boot_selector.APP_ID_PHOTOS].shell_handles_home_gesture)
+        self.assertFalse(registry[boot_selector.APP_ID_PHOTOS].shell_handles_home_gesture)
         self.assertIn(("BOOT_SELECTOR_MODE_REQUEST_PATH", "/tmp/shell-mode"), registry[boot_selector.APP_ID_NIGHT].env_overrides)
 
         snapshot = boot_selector.build_contract_snapshot(
@@ -302,14 +303,23 @@ class BootSelectorTests(unittest.TestCase):
                 (boot_selector.EV_SYN, 0, 0),
             ]
         )
-        select_results = iter([([fake_input], [], []), ([], [], [])])
+        def _select_results(*_args, **_kwargs):
+            if fake_input._offset < len(fake_input._payload):
+                return ([fake_input], [], [])
+            return ([], [], [])
+
+        monotonic_state = {"value": -0.1}
+
+        def _monotonic() -> float:
+            monotonic_state["value"] += 0.1
+            return monotonic_state["value"]
 
         with mock.patch.object(boot_selector, "touch_probe", return_value=("/dev/input/event0", "test")), \
             mock.patch.object(boot_selector.touch_calibration, "applies_to", return_value=False), \
             mock.patch.object(boot_selector, "detect_touch_width", return_value=(320, 0)), \
-            mock.patch.object(boot_selector.select, "select", side_effect=lambda *_args, **_kwargs: next(select_results)), \
+            mock.patch.object(boot_selector.select, "select", side_effect=_select_results), \
             mock.patch("builtins.open", return_value=fake_input), \
-            mock.patch.object(boot_selector.time, "monotonic", side_effect=[0.0, 0.2]):
+            mock.patch.object(boot_selector.time, "monotonic", side_effect=_monotonic):
             reader = boot_selector.TouchReader(320, 240)
             region = boot_selector.TouchRegion("menu", 0, 0, 20, 20)
             self.assertTrue(reader.wait_for_home_gesture(region, hold_secs=0.15, poll_timeout_secs=0.05))
@@ -374,6 +384,98 @@ class BootSelectorTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertEqual(labels, ["main_menu_1 selection", "dashboards_menu selection"])
         self.assertEqual(manager.started, [])
+
+    def test_theme_picker_targets_are_sorted_and_limited_to_six(self) -> None:
+        self.assertEqual(
+            boot_selector.theme_picker_targets(("steele", "comic", "default")),
+            ("comic", "default", "steele"),
+        )
+        self.assertEqual(
+            boot_selector.theme_picker_targets(("z", "y", "x", "w", "v", "u", "t")),
+            ("t", "u", "v", "w", "x", "y"),
+        )
+
+    def test_theme_picker_supports_two_rows_and_ignores_unused_cells(self) -> None:
+        theme_ids = ("comic", "default", "steele", "sunrise", "terminal")
+
+        self.assertEqual(
+            boot_selector.resolve_theme_picker_action(30, 20, 320, 240, theme_ids),
+            "comic",
+        )
+        self.assertEqual(
+            boot_selector.resolve_theme_picker_action(140, 20, 320, 240, theme_ids),
+            "default",
+        )
+        self.assertEqual(
+            boot_selector.resolve_theme_picker_action(250, 20, 320, 240, theme_ids),
+            "steele",
+        )
+        self.assertEqual(
+            boot_selector.resolve_theme_picker_action(30, 180, 320, 240, theme_ids),
+            "sunrise",
+        )
+        self.assertEqual(
+            boot_selector.resolve_theme_picker_action(140, 180, 320, 240, theme_ids),
+            "terminal",
+        )
+        self.assertIsNone(
+            boot_selector.resolve_theme_picker_action(250, 180, 320, 240, theme_ids)
+        )
+
+    def test_build_status_text_prefers_runtime_summaries_and_safe_fallbacks(self) -> None:
+        with mock.patch.object(boot_selector, "_network_summary_lines", return_value=["Host: pi", "IP: 10.0.0.2"]), \
+            mock.patch.object(
+                boot_selector,
+                "_pi_stats_summary_lines",
+                return_value=[
+                    "Uptime: 1h 2m",
+                    "Load: 0.10 0.20 0.30",
+                    "Temp: 41.2 C",
+                    "Mem: 128 MiB",
+                    "Disk: 4.2 GiB",
+                ],
+            ), \
+            mock.patch.object(boot_selector, "_logs_summary_lines", return_value=["display started", "night idle"]):
+            self.assertEqual(
+                boot_selector.build_status_text(boot_selector.NETWORK_STATUS),
+                "Host: pi\nIP: 10.0.0.2",
+            )
+            self.assertEqual(
+                boot_selector.build_status_text(boot_selector.PI_STATS_STATUS),
+                "Uptime: 1h 2m\nLoad: 0.10 0.20 0.30\nTemp: 41.2 C\nMem: 128 MiB\nDisk: 4.2 GiB",
+            )
+            self.assertEqual(
+                boot_selector.build_status_text(boot_selector.LOGS_STATUS),
+                "display started\nnight idle",
+            )
+
+        self.assertEqual(
+            boot_selector.build_status_text(boot_selector.ISS_PLACEHOLDER),
+            "Placeholder only",
+        )
+
+    def test_logs_summary_lines_falls_back_when_journalctl_fails(self) -> None:
+        with mock.patch.object(boot_selector.subprocess, "run", side_effect=OSError("missing")):
+            self.assertEqual(
+                boot_selector._logs_summary_lines("display.service", "night.service"),
+                ["Logs unavailable"],
+            )
+
+    def test_pi_stats_summary_lines_include_temperature_memory_and_disk(self) -> None:
+        with mock.patch.object(boot_selector, "_read_proc_text", side_effect=["3661.0 0.0", "MemAvailable:      262144 kB\n"]), \
+            mock.patch.object(boot_selector.os, "getloadavg", return_value=(0.1, 0.2, 0.3), create=True), \
+            mock.patch.object(boot_selector, "_cpu_temperature_c", return_value="42.0 C"), \
+            mock.patch.object(boot_selector, "_disk_free_gib", return_value="5.5 GiB"):
+            self.assertEqual(
+                boot_selector._pi_stats_summary_lines(),
+                [
+                    "Uptime: 1h 1m",
+                    "Load: 0.10 0.20 0.30",
+                    "Temp: 42.0 C",
+                    "Mem: 256 MiB",
+                    "Disk: 5.5 GiB",
+                ],
+            )
 
 
 if __name__ == "__main__":

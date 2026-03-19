@@ -80,7 +80,7 @@ Dependencies:
 
 TASK ID: R-017
 Agent: Photos Worker
-Status: OPEN
+Status: COMPLETE
 
 Objective:
 Implement child-owned dashboard-parity touch behavior for Photos while preserving the existing child entrypoint and menu-request contracts.
@@ -115,7 +115,7 @@ Dependencies:
 
 TASK ID: R-018
 Agent: Switchboard
-Status: OPEN
+Status: COMPLETE
 
 Objective:
 Implement the shell-side Photos handoff, operator-summary Settings content, generated Themes mapping for up to 6 themes, and named shell layout knobs for status screens.
