@@ -68,8 +68,8 @@ LOCATION_REFRESH_SECS = 120.0
 TOUCH_SETTLE_SECS = 0.20
 TOUCH_DEBOUNCE_SECS = 0.20
 HOLD_TO_EXIT_SECS = 2.0
-HTTP_TIMEOUT_SECS = 5.0
-LIVE_FETCH_RETRIES = 3
+HTTP_TIMEOUT_SECS = 3.0
+LIVE_FETCH_RETRIES = 1
 TEXT_RGB = (245, 245, 245)
 MUTED_RGB = (163, 176, 194)
 WARNING_RGB = (255, 198, 64)
@@ -296,10 +296,9 @@ def generate_error_image(path: Path, width: int = CANVAS_WIDTH, height: int = CA
 
 
 def ensure_assets() -> None:
-    if not WORLD_MAP_PATH.exists():
-        generate_world_map(WORLD_MAP_PATH)
     if not LEGACY_ERROR_ASSET_PATH.exists() and not ERROR_TEMPLATE_PATH.exists():
         generate_error_image(LEGACY_ERROR_ASSET_PATH)
+
 
 
 def load_country_map() -> dict[str, str]:
@@ -1064,127 +1063,110 @@ def draw_badge(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label:
 
 def render_map_page(location: LocationSnapshot, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(MAP_STALE_TEMPLATE_PATH if stale else MAP_TEMPLATE_PATH, MAP_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
-    world_map = load_asset_candidates(WORLD_MAP_PATH)
-    map_box = (8, 28, CANVAS_WIDTH - 10, CANVAS_HEIGHT - 8)
-    paste_rounded_panel(image, world_map, map_box, radius=20)
     draw = ImageDraw.Draw(image)
-    meta_font = load_font(12, bold=False)
+    map_box = (9, 29, CANVAS_WIDTH - 9, CANVAS_HEIGHT - 9)
     if location.trail:
         previous = None
         for point in location.trail:
             current = map_point(point.latitude, point.longitude, map_box)
             if previous is not None and abs(current[0] - previous[0]) < (map_box[2] - map_box[0]) // 2:
-                draw.line((previous[0], previous[1], current[0], current[1]), fill=(252, 222, 110), width=2)
+                draw.line((previous[0], previous[1], current[0], current[1]), fill=(255, 208, 64), width=3)
             previous = current
     marker_x, marker_y = map_point(location.latitude, location.longitude, map_box)
-    draw.ellipse((marker_x - 5, marker_y - 5, marker_x + 5, marker_y + 5), fill=(255, 94, 94), outline=(255, 244, 244), width=1)
-    timestamp_text = format_timestamp(location.position_timestamp)
-    draw.text((16, CANVAS_HEIGHT - 20), timestamp_text, font=meta_font, fill=(225, 225, 230))
+    draw.ellipse((marker_x - 5, marker_y - 5, marker_x + 5, marker_y + 5), fill=(255, 70, 70), outline=(255, 245, 245), width=2)
     return image
+
 
 def render_details_page(location: LocationSnapshot, observer: ObserverConfig, expedition_reason: str, *, stale: bool) -> Image.Image:
     _ = observer
-    image = load_asset_candidates(DETAILS_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
+    image = load_asset_candidates(ERROR_TEMPLATE_PATH if stale else DETAILS_TEMPLATE_PATH, DETAILS_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    label_font = load_font(11, bold=True, name=DETAILS_TITLE_FONT_NAME)
+    line_font = load_font(11, bold=True, name=DETAILS_TITLE_FONT_NAME)
     value_font = load_font(11, bold=False)
-    reason_font = load_font(9, bold=False)
-    footer_font = load_font(10, bold=False)
+    body_font = load_font(9, bold=False)
 
-    label_right = 148
-    value_left = 154
-    value_right = 303
-    row_centres = {
-        "lonlat": 58,
-        "over": 87,
-        "visibility": 116,
-        "velocity": 145,
-        "altitude": 174,
-    }
+    entries = [
+        ("Lon/Lat:", f"{location.longitude:.5f}, {location.latitude:.5f}"),
+        ("Currently over:", location.country_name or location.location_label or "International Waters"),
+        ("Visibility:", location.visibility or "TBA"),
+        ("Velocity(km/h):", f"{location.velocity_kmh:,.0f}km/h" if location.velocity_kmh is not None else "Unknown"),
+        ("Altitude:", f"{location.altitude_km:.0f}km" if location.altitude_km is not None else "Unknown"),
+    ]
+    row_centres = (56, 84, 112, 140, 168)
 
-    def draw_row(label: str, value: str, centre_y: int) -> None:
-        label_y = centred_text_y(label_font, label, centre_y)
-        value_text = ellipsize_text(value, value_font, value_right - value_left)
-        value_y = centred_text_y(value_font, value_text, centre_y)
-        label_width = draw.textbbox((0, 0), label, font=label_font)[2]
-        draw.text((label_right - label_width, label_y), label, font=label_font, fill=TEXT_RGB)
-        draw.text((value_left, value_y), value_text, font=value_font, fill=TEXT_RGB)
-
-    country_value = location.country_name or location.location_label or "International Waters"
-    lonlat_value = f"{location.longitude:.5f}, {location.latitude:.5f}"
-    visibility_value = location.visibility or "TBA"
-    velocity_value = f"{location.velocity_kmh:,.0f}km/h" if location.velocity_kmh is not None else "Unknown"
-    altitude_value = f"{location.altitude_km:.0f}km" if location.altitude_km is not None else "Unknown"
-
-    draw_row("Lon/Lat:", lonlat_value, row_centres["lonlat"])
-    draw_row("Currently over:", country_value, row_centres["over"])
-    draw_row("Visibility:", visibility_value, row_centres["visibility"])
-    draw_row("Velocity(km/h):", velocity_value, row_centres["velocity"])
-    draw_row("Altitude:", altitude_value, row_centres["altitude"])
+    for (label, value), centre_y in zip(entries, row_centres):
+        label_text = label
+        value_text = ellipsize_text(str(value), value_font, 150)
+        label_width = draw.textbbox((0, 0), label_text, font=line_font)[2]
+        value_width = draw.textbbox((0, 0), value_text, font=value_font)[2]
+        gap = 8
+        total_width = label_width + gap + value_width
+        start_x = max(LEFT_STRIP_WIDTH + 4, (CANVAS_WIDTH - total_width) // 2)
+        draw.text((start_x, centred_text_y(line_font, label_text, centre_y)), label_text, font=line_font, fill=TEXT_RGB)
+        draw.text((start_x + label_width + gap, centred_text_y(value_font, value_text, centre_y)), value_text, font=value_font, fill=TEXT_RGB)
 
     reason_label = "Expedition Reason:"
-    reason_label_width = draw.textbbox((0, 0), reason_label, font=label_font)[2]
-    reason_label_x = max(LEFT_STRIP_WIDTH + 8, (CANVAS_WIDTH - reason_label_width) // 2)
-    draw.text((reason_label_x, centred_text_y(label_font, reason_label, 197)), reason_label, font=label_font, fill=TEXT_RGB)
+    reason_label_width = draw.textbbox((0, 0), reason_label, font=line_font)[2]
+    draw.text(((CANVAS_WIDTH - reason_label_width) // 2, centred_text_y(line_font, reason_label, 196)), reason_label, font=line_font, fill=TEXT_RGB)
 
-    reason_text = (expedition_reason or "TBA").strip() or "TBA"
-    words = reason_text.split()
-    reason_lines: list[str] = []
+    words = ((expedition_reason or "TBA").strip() or "TBA").split()
+    wrapped: list[str] = []
     current = ""
     for word in words:
         trial = word if not current else f"{current} {word}"
-        width = draw.textbbox((0, 0), trial, font=reason_font)[2]
-        if width <= 255 or not current:
+        if draw.textbbox((0, 0), trial, font=body_font)[2] <= 238 or not current:
             current = trial
-            continue
-        reason_lines.append(current)
-        current = word
-        if len(reason_lines) == 2:
-            break
-    if len(reason_lines) < 2 and current:
-        reason_lines.append(current)
-    if reason_lines:
-        reason_lines[-1] = ellipsize_text(reason_lines[-1], reason_font, 255)
-    reason_y = 209
-    for line in reason_lines[:2]:
-        line_width = draw.textbbox((0, 0), line, font=reason_font)[2]
-        line_x = max(LEFT_STRIP_WIDTH + 4, (CANVAS_WIDTH - line_width) // 2)
-        draw.text((line_x, reason_y), line, font=reason_font, fill=(220, 220, 226))
+        else:
+            wrapped.append(current)
+            current = word
+            if len(wrapped) == 2:
+                break
+    if len(wrapped) < 2 and current:
+        wrapped.append(current)
+    if wrapped:
+        wrapped[-1] = ellipsize_text(wrapped[-1], body_font, 238)
+    reason_y = 210
+    for line in wrapped[:2]:
+        width = draw.textbbox((0, 0), line, font=body_font)[2]
+        draw.text(((CANVAS_WIDTH - width) // 2, reason_y), line, font=body_font, fill=(225, 225, 230))
         reason_y += 12
-
-    footer_text = "API error - displaying cached data" if stale else format_timestamp(location.position_timestamp)
-    footer_fill = (255, 198, 148) if stale else MUTED_RGB
-    footer_x = LEFT_STRIP_WIDTH + 2 if stale else LEFT_STRIP_WIDTH + 12
-    draw.text((footer_x, 226), ellipsize_text(footer_text, footer_font, CANVAS_WIDTH - footer_x - 8), font=footer_font, fill=footer_fill)
     return image
-
 
 def render_crew_page(crew_page: list[CrewMember], page_number: int, total_pages: int, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(CREW_STALE_TEMPLATE_PATH if stale else CREW_TEMPLATE_PATH, CREW_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    name_font = load_font(15, bold=True)
-    detail_font = load_font(12, bold=False)
-    tag_font = load_font(11, bold=False)
-    header_text = f"{page_number}/{total_pages}"
-    draw.text((283, 8), header_text, font=tag_font, fill=TEXT_RGB)
-    if stale:
-        draw.text((23, 217), "API error - displaying cached data", font=detail_font, fill=(255, 198, 148))
+    name_font = load_font(16, bold=True, name=DETAILS_TITLE_FONT_NAME)
+    detail_font = load_font(11, bold=False)
     if not crew_page:
-        empty_font = load_font(15, bold=False)
-        draw.text((28, 102), "Crew data unavailable", font=empty_font, fill=TEXT_RGB)
-        draw.text((28, 126), "No live data and no cache.", font=detail_font, fill=(210, 210, 216))
+        empty_text = "Crew data unavailable"
+        width = draw.textbbox((0, 0), empty_text, font=detail_font)[2]
+        draw.text(((CANVAS_WIDTH - width) // 2, 108), empty_text, font=detail_font, fill=TEXT_RGB)
         return image
-    top = 46
-    for item in crew_page:
-        draw.rounded_rectangle((18, top, CANVAS_WIDTH - 18, top + 54), radius=12, fill=(17, 25, 48), outline=(60, 78, 110))
-        draw.text((28, top + 8), ellipsize_text(item.name, name_font, CANVAS_WIDTH - 88), font=name_font, fill=TEXT_RGB)
-        draw.text((28, top + 30), ellipsize_text(item.secondary, detail_font, CANVAS_WIDTH - 106), font=detail_font, fill=(214, 214, 220))
-        if item.agency:
-            badge_text = ellipsize_text(item.agency, tag_font, 72)
-            badge_left = CANVAS_WIDTH - 90
-            draw.rounded_rectangle((badge_left, top + 9, CANVAS_WIDTH - 28, top + 27), radius=8, fill=(33, 50, 72))
-            draw.text((badge_left + 7, centred_text_y(tag_font, badge_text, top + 18)), badge_text, font=tag_font, fill=TEXT_RGB)
-        top += 60
+    slots = ((47, 67, 84), (108, 128, 145), (169, 189, 206))
+    for item, (name_y, detail_y1, detail_y2) in zip(crew_page, slots):
+        name_text = ellipsize_text(item.name, name_font, 255)
+        words = (item.secondary or item.role or "ISS crew").split()
+        line_1 = ""
+        line_2 = ""
+        current = ""
+        for word in words:
+            trial = word if not current else f"{current} {word}"
+            if draw.textbbox((0, 0), trial, font=detail_font)[2] <= 255 or not current:
+                current = trial
+            else:
+                line_1 = current
+                current = word
+                break
+        if not line_1:
+            line_1 = current
+            current = ""
+        if current:
+            line_2 = ellipsize_text(current, detail_font, 255)
+        draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), name_text, font=name_font)[2]) // 2, centred_text_y(name_font, name_text, name_y)), name_text, font=name_font, fill=TEXT_RGB)
+        if line_1:
+            draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), line_1, font=detail_font)[2]) // 2, centred_text_y(detail_font, line_1, detail_y1)), line_1, font=detail_font, fill=(225, 225, 230))
+        if line_2:
+            draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), line_2, font=detail_font)[2]) // 2, centred_text_y(detail_font, line_2, detail_y2)), line_2, font=detail_font, fill=(225, 225, 230))
     return image
 
 
@@ -1223,8 +1205,6 @@ def render_single_page(page_name: str, pages: list[PageState]) -> Image.Image:
             return page.image
     return pages[0].image
 
-
-def validate_args(args: argparse.Namespace) -> int | None:
     if args.width <= 0 or args.height <= 0:
         print("Width and height must be positive integers.", file=sys.stderr)
         return 1
@@ -1388,4 +1368,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
