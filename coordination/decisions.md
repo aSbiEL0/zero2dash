@@ -167,6 +167,28 @@ None
 
 ---
 
+DECISION ID: D-012
+Status: ACTIVE
+
+Topic:
+Theme persistence failure policy
+
+Decision:
+Theme persistence must be best-effort only. If the selector cannot update its theme-state file, it should log the error and continue booting with the currently selected theme instead of aborting startup.
+
+Reason:
+Pi smoke testing showed that a permissions issue on `/tmp/zero2dash-shell-theme` can prevent the entire shell from starting. Theme persistence is not critical enough to justify a boot failure.
+
+Implications:
+- the shell remains bootable even when the theme-state file is stale or owned by another user
+- startup robustness is prioritized over atomic persistence in this path
+- Pi validation can proceed without requiring manual cleanup of temp-state files
+
+Supersedes:
+None
+
+---
+
 ## Archive Note
 
 - Previous-team decision logs are archive material only.

@@ -84,18 +84,22 @@ Raised by: Mouser
 Status: OPEN
 
 Problem:
-Pi smoke testing hit a real service startup failure: `boot_selector.py` crashes during startup GIF playback on the Pi because the shell calls `FramebufferWriter.write_image()`, but the real framebuffer contract only exposes `write_frame()`.
+Pi smoke testing has exposed two real startup blockers on device: first a framebuffer API mismatch during GIF playback, then a hard failure when theme-state persistence cannot replace `/tmp/zero2dash-shell-theme`.
 
 Impact:
 - blocks closing Pi validation
 - blocks final wiki publication, because runtime confirmation on device is still incomplete
 
 Possible cause:
-The local shell rewrite assumed a framebuffer method name that does not match the repo's real `framebuffer.py` implementation used on the Pi.
+The local shell rewrite assumed a framebuffer method name that does not match the repo's real `framebuffer.py` implementation used on the Pi, and it treated theme-state persistence as mandatory even when the temp-state file is not writable by the current service user.
 
 Suggested resolution:
-Deploy the selector hotfix that writes through a shell-local compatibility helper accepting either `write_frame()` or `write_image()`, then restart `boot-selector.service` and repeat Pi smoke checks.
+Deploy the selector hotfixes that:
+- write through a shell-local framebuffer compatibility helper accepting either `write_frame()` or `write_image()`
+- log and continue when theme-state persistence fails instead of aborting startup
+Then restart `boot-selector.service` and repeat Pi smoke checks.
 
 Notes:
-This is a Pi-only blocker. The failure is now concretely identified from Pi logs:
-`AttributeError: 'FramebufferWriter' object has no attribute 'write_image'. Did you mean: 'write_frame'?`
+This is a Pi-only blocker. The failures are now concretely identified from Pi logs/manual runs:
+- `AttributeError: 'FramebufferWriter' object has no attribute 'write_image'. Did you mean: 'write_frame'?`
+- `PermissionError: [Errno 1] Operation not permitted: '/tmp/zero2dash-shell-theme.tmp' -> '/tmp/zero2dash-shell-theme'`

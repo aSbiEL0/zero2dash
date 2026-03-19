@@ -43,8 +43,8 @@ Last updated: 2026-03-19
 - Boot selector smoke checks passed for `py_compile` and `--dump-contracts --skip-gif --no-framebuffer`.
 - Hardware-free selector and rotator regression suites now pass.
 - Pi smoke testing is now in progress for touch hardware, framebuffer ownership, and real service interaction.
-- Current Pi note: `boot-selector.service` is failing during startup GIF playback before the first frame renders.
-- Latest Pi note: Pi logs show `AttributeError: 'FramebufferWriter' object has no attribute 'write_image'`; a selector hotfix is now in place locally to route writes through the real `write_frame()` contract and is pending redeploy/retest on device.
+- Current Pi note: the original GIF/framebuffer crash is fixed locally and Pi testing has advanced to the next startup fault.
+- Latest Pi note: a manual Pi run with `--skip-gif` exposed a second boot blocker, `PermissionError` while replacing `/tmp/zero2dash-shell-theme`; a follow-up hotfix now logs and continues instead of aborting shell startup when theme persistence fails.
 - Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
 
 ## Archive Note

@@ -6,6 +6,7 @@ import types
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +94,16 @@ class BootSelectorTests(unittest.TestCase):
             self.assertIsNone(store.read_theme_id())
             store.write_theme_id("comic")
             self.assertEqual(store.read_theme_id(), "comic")
+
+    def test_theme_state_store_ignores_persist_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            theme_path = Path(temp_dir) / "theme.txt"
+            store = boot_selector.ThemeStateStore(theme_path)
+
+            with mock.patch.object(boot_selector.os, "replace", side_effect=PermissionError("nope")):
+                store.write_theme_id("comic")
+
+            self.assertFalse(theme_path.exists())
 
     def test_screen_action_routes_root_and_child_screens(self) -> None:
         w = 320

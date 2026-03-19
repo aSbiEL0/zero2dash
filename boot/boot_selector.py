@@ -237,9 +237,17 @@ class ThemeStateStore:
 
     def write_theme_id(self, theme_id: str) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self.path.with_suffix(f"{self.path.suffix}.tmp")
-        tmp_path.write_text(f"{theme_id}\n", encoding="utf-8")
-        os.replace(tmp_path, self.path)
+        tmp_path = self.path.with_suffix(f"{self.path.suffix}.{os.getpid()}.tmp")
+        try:
+            tmp_path.write_text(f"{theme_id}\n", encoding="utf-8")
+            os.replace(tmp_path, self.path)
+        except OSError as exc:
+            print(f"[boot-selector] Failed to persist theme state {self.path}: {exc}", file=sys.stderr, flush=True)
+            try:
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
 
 
 class ChildAppManager:
