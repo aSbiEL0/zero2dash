@@ -3,7 +3,7 @@
 # v6 auth handled elsewhere; this file only renders and calls API
 # Manual Pi-hole stats display
 
-import sys, time, json, urllib.request, urllib.parse, urllib.error, argparse, ssl, errno
+import sys, time, json, urllib.request, urllib.parse, urllib.error, mmap, struct, argparse, ssl, errno
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -15,8 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
 from _config import get_env, report_validation_errors
-from display_layout import LAYOUT_2_1, Column, aligned_text_x, centred_text_y, truncate_pair
-from framebuffer import write_framebuffer as write_rgb565_framebuffer
+from display_layout import LAYOUT_2_1, aligned_text_x, centred_text_y, truncate_pair
 
 DEFAULT_ROOT = Path('~/zero2dash').expanduser()
 SCRIPT_NAME = "piholestats_manual.py"
@@ -199,6 +198,21 @@ def fit_font(draw, text: str, *, preferred_size: int, min_size: int, bold: bool,
     return best_font
 
 
+def rgb888_to_rgb565(img_rgb):
+    r, g, b = img_rgb.split()
+    r = r.point(lambda i: i >> 3)
+    g = g.point(lambda i: i >> 2)
+    b = b.point(lambda i: i >> 3)
+    arr = bytearray()
+    rp = r.tobytes()
+    gp = g.tobytes()
+    bp = b.tobytes()
+    for i in range(len(rp)):
+        v = ((rp[i] & 0x1F) << 11) | ((gp[i] & 0x3F) << 5) | (bp[i] & 0x1F)
+        arr += struct.pack("<H", v)
+    return bytes(arr)
+
+
 def _is_transient_io_error(exc: OSError) -> bool:
     return exc.errno in {
         errno.EAGAIN,
@@ -221,6 +235,32 @@ def _retry_io(action, description: str, retries: int = IO_RETRIES):
             time.sleep(IO_RETRY_DELAY_SECS)
 
 
+def _write_framebuffer_payload(payload: bytes) -> None:
+    fb_file = None
+    fb_map = None
+    try:
+        try:
+            fb_file = open(FBDEV, "r+b", buffering=0)
+        except OSError as exc:
+            raise RuntimeError(f"Unable to open framebuffer device {FBDEV}: {exc}") from exc
+
+        try:
+            fb_map = mmap.mmap(fb_file.fileno(), W * H * 2, mmap.MAP_SHARED, mmap.PROT_WRITE)
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(f"Unable to memory-map framebuffer {FBDEV}: {exc}") from exc
+
+        try:
+            fb_map.seek(0)
+            fb_map.write(payload)
+        except (BufferError, ValueError, OSError) as exc:
+            raise RuntimeError(f"Unable to write frame to framebuffer {FBDEV}: {exc}") from exc
+    finally:
+        if fb_map is not None:
+            fb_map.close()
+        if fb_file is not None:
+            fb_file.close()
+
+
 def fb_write(img):
     if img.size != (W, H):
         img = img.resize((W, H), Image.BILINEAR)
@@ -232,7 +272,8 @@ def fb_write(img):
         _retry_io(lambda: img.save(output_path, format="PNG"), f"Writing PNG output image {output_path}")
         return
 
-    _retry_io(lambda: write_rgb565_framebuffer(img, FBDEV, W, H), f"Framebuffer write to {FBDEV}")
+    payload = rgb888_to_rgb565(img)
+    _retry_io(lambda: _write_framebuffer_payload(payload), f"Framebuffer write to {FBDEV}")
 
 
 def read_temp_c():
@@ -542,7 +583,7 @@ def _format_temp(temp_c: float | None) -> str:
     return f"{temp_c:0.1f}\N{DEGREE SIGN}C"
 
 
-def _draw_stat_row(draw, *, y: int, label: str, value: str, label_column: Column, value_column: Column):
+def _draw_stat_row(draw, *, y: int, label: str, value: str, label_x: int):
     label_font = load_font(22, False)
     value_font = fit_font(draw, value, preferred_size=22, min_size=22, bold=False, max_width=LAYOUT_2_1.right.width)
     label, value = truncate_pair(
@@ -553,14 +594,9 @@ def _draw_stat_row(draw, *, y: int, label: str, value: str, label_column: Column
         left_width_limit=LAYOUT_2_1.left.width,
         right_width_limit=LAYOUT_2_1.right.width,
     )
+    draw.text((label_x, centred_text_y(label_font, label, y)), label, font=label_font, fill=COL_TXT)
     draw.text(
-        (aligned_text_x(label_column, label_font, label, "left"), centred_text_y(label_font, label, y)),
-        label,
-        font=label_font,
-        fill=COL_TXT,
-    )
-    draw.text(
-        (aligned_text_x(value_column, value_font, value, "right") -5, centred_text_y(value_font, value, y)),
+        (aligned_text_x(LAYOUT_2_1.right, value_font, value, "right"), centred_text_y(value_font, value, y)),
         value,
         font=value_font,
         fill=COL_TXT,
@@ -587,8 +623,7 @@ def draw_frame(stats, temp_c):
             y=LAYOUT_2_1.row_centre_y(index),
             label=label,
             value=value,
-            label_column=LAYOUT_2_1.left,
-            value_column=LAYOUT_2_1.right,
+            label_x=LAYOUT_2_1.left.left,
         )
 
     return img
