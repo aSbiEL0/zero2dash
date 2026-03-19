@@ -1,0 +1,112 @@
+On branch main
+Your branch is up to date with 'origin/main'.
+
+You have unmerged paths.
+  (fix conflicts and run "git commit")
+  (use "git merge --abort" to abort the merge)
+
+Changes to be committed:
+	modified:   .env.example
+	modified:   .gitignore
+	new file:   PLAN.md
+	new file:   coordination/blockers.md
+	new file:   coordination/decisions.md
+	new file:   coordination/status.md
+	new file:   coordination/tasks.md
+	new file:   docs/plans/shell-owned-apps-plan.md
+	new file:   docs/wiki/Home.md
+	new file:   docs/wiki/Runtime.md
+	new file:   docs/wiki/Validation.md
+	new file:   framebuffer.py
+	new file:   modules/AGENTS.md
+	modified:   modules/blackout/blackout.py
+	modified:   modules/calendash/calendash-api.py
+	modified:   modules/calendash/display.py
+	modified:   modules/currency/currency.py
+	modified:   modules/photos/display.py
+	new file:   modules/photos/slideshow.py
+	modified:   modules/pihole/display.py
+	modified:   modules/trams/display.py
+	modified:   modules/trams/tram_timetable.json
+	modified:   modules/weather/display.py
+	modified:   modules/weather/weather_refresh.py
+	new file:   output/speech/last-response-chunk1.mp3
+	new file:   rotator/__init__.py
+	new file:   rotator/backoff.py
+	new file:   rotator/config.py
+	new file:   rotator/defaults.py
+	new file:   rotator/discovery.py
+	new file:   rotator/power.py
+	new file:   rotator/touch.py
+	new file:   systemd/AGENTS.md
+	modified:   systemd/boot-selector.service
+	modified:   systemd/day.timer
+	modified:   systemd/display.service
+	modified:   systemd/night.service
+	modified:   systemd/night.timer
+	new file:   systemd/shell-mode-switch@.service
+	modified:   systemd/weather.service
+	new file:   tests/test_blackout.py
+	new file:   tests/test_boot_selector.py
+	new file:   tests/test_display_rotator.py
+	new file:   tests/test_framebuffer.py
+	new file:   tests/test_photos.py
+	new file:   themes/comic/day-night.png
+	new file:   themes/comic/denied.gif
+	new file:   themes/comic/granted.gif
+	new file:   themes/comic/keypad.png
+	new file:   themes/comic/mainmenu1.png
+	new file:   themes/comic/mainmenu2.png
+	new file:   themes/comic/settings.png
+	new file:   themes/comic/stats.png
+	new file:   themes/comic/themes.png
+	new file:   themes/comic/yes-no.png
+	new file:   themes/default/1.png
+	new file:   themes/default/day-night.png
+	new file:   themes/default/denied.gif
+	new file:   themes/default/granted.gif
+	new file:   themes/default/keypad.png
+	new file:   themes/default/mainmenu1.png
+	new file:   themes/default/mainmenu2.png
+	new file:   themes/default/settings.png
+	new file:   themes/default/stats.png
+	new file:   themes/default/themes.png
+	new file:   themes/default/yes-no.png
+	new file:   themes/steele/1.png
+	new file:   themes/steele/day-night.png
+	new file:   themes/steele/denied.gif
+	new file:   themes/steele/granted.gif
+	new file:   themes/steele/keypad.png
+	new file:   themes/steele/mainmenu1.png
+	new file:   themes/steele/mainmenu2.png
+	new file:   themes/steele/settings.png
+	new file:   themes/steele/stats.png
+	new file:   themes/steele/themes.png
+	new file:   themes/steele/yes-no.png
+	new file:   tmp/speech/last-response-chunk1-instructions.txt
+	new file:   tmp/speech/last-response-chunk1.txt
+	new file:   tmp/zero2dash-wiki
+	modified:   touch_calibration.py
+
+Unmerged paths:
+  (use "git add <file>..." to mark resolution)
+	both modified:   AGENTS.md
+	both modified:   README.md
+	both modified:   boot/boot_selector.py
+	both modified:   display_layout.py
+	both modified:   display_rotator.py
+	both modified:   modules/calendash/calendash.png
+	both modified:   modules/currency/current-currency.png
+	both modified:   modules/weather/weather-cache.json
+	both modified:   modules/weather/weather.png
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   nasa-app/app.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	nasa-app/assets/
+	recovery/
+
