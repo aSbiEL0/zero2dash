@@ -105,6 +105,12 @@ class BootSelectorTests(unittest.TestCase):
 
             self.assertFalse(theme_path.exists())
 
+    def test_screen_image_returns_named_screen(self) -> None:
+        marker = object()
+        shell_images = types.SimpleNamespace(screens={boot_selector.ROOT_MENU_1: marker})
+
+        self.assertIs(boot_selector._screen_image(shell_images, boot_selector.ROOT_MENU_1), marker)
+
     def test_screen_action_routes_root_and_child_screens(self) -> None:
         w = 320
         h = 240

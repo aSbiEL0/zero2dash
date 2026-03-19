@@ -43,8 +43,8 @@ Last updated: 2026-03-19
 - Boot selector smoke checks passed for `py_compile` and `--dump-contracts --skip-gif --no-framebuffer`.
 - Hardware-free selector and rotator regression suites now pass.
 - Pi smoke testing is now in progress for touch hardware, framebuffer ownership, and real service interaction.
-- Current Pi note: the original GIF/framebuffer crash is fixed locally and Pi testing has advanced to the next startup fault.
-- Latest Pi note: a manual Pi run with `--skip-gif` exposed a second boot blocker, `PermissionError` while replacing `/tmp/zero2dash-shell-theme`; a follow-up hotfix now logs and continues instead of aborting shell startup when theme persistence fails.
+- Current Pi note: the original GIF/framebuffer crash is fixed locally and Pi testing has advanced through successive shell-startup faults.
+- Latest Pi note: after the theme-persistence fix, a manual Pi run with `--skip-gif` exposed an undefined `_screen_image` call in the first shell render path. A follow-up hotfix now restores the helper and moves theme-state default storage to a user-scoped path instead of the shared temp file.
 - Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
 
 ## Archive Note

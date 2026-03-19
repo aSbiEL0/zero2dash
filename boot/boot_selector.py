@@ -64,7 +64,6 @@ DEFAULT_HOME_GESTURE_CORNER_HEIGHT = int(os.environ.get("BOOT_SELECTOR_HOME_GEST
 DEFAULT_MODE_REQUEST_PATH = os.environ.get("BOOT_SELECTOR_MODE_REQUEST_PATH", str(Path(tempfile.gettempdir()) / "zero2dash-shell-mode-request"))
 DEFAULT_THEME_ROOT = Path(os.environ.get("BOOT_SELECTOR_THEME_ROOT", str(THEMES_DIR)))
 DEFAULT_THEME_ID = os.environ.get("BOOT_SELECTOR_DEFAULT_THEME", "default")
-DEFAULT_THEME_STATE_PATH = Path(os.environ.get("BOOT_SELECTOR_THEME_STATE_PATH", str(Path(tempfile.gettempdir()) / "zero2dash-shell-theme")))
 DEFAULT_SHOW_TOUCH_ZONES = os.environ.get("BOOT_SELECTOR_SHOW_TOUCH_ZONES", "0").strip().lower() not in {"0", "false", "no", "off"}
 
 POLL_TIMEOUT_SECS = 0.2
@@ -129,6 +128,19 @@ WARN = (244, 198, 0)
 BG = (0, 0, 0)
 STOP_REQUESTED = False
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+
+
+def _default_theme_state_path() -> Path:
+    override = os.environ.get("BOOT_SELECTOR_THEME_STATE_PATH")
+    if override:
+        return Path(override)
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home) / "zero2dash" / "shell-theme"
+    return Path.home() / ".cache" / "zero2dash" / "shell-theme"
+
+
+DEFAULT_THEME_STATE_PATH = _default_theme_state_path()
 
 
 @dataclass(frozen=True)
@@ -561,6 +573,10 @@ def save_preview(image: Image.Image, output_path: str | None) -> None:
 def build_shell_images(theme: ThemeAssets, width: int, height: int) -> ShellImages:
     screens = {screen_name: load_image(theme.asset(filename), width, height) for screen_name, filename in THEME_IMAGE_FILES.items()}
     return ShellImages(screens=screens, status_base=screens[NETWORK_STATUS], granted_gif=theme.asset("granted.gif"), denied_gif=theme.asset("denied.gif"))
+
+
+def _screen_image(shell_images: ShellImages, screen_name: str) -> Image.Image:
+    return shell_images.screens[screen_name]
 
 
 def draw_status_screen(base_image: Image.Image, screen_name: str, status_text: str | None = None) -> Image.Image:

@@ -189,6 +189,28 @@ None
 
 ---
 
+DECISION ID: D-013
+Status: ACTIVE
+
+Topic:
+Default theme-state storage
+
+Decision:
+Default theme-state persistence should use a user-scoped state path rather than a shared file under `/tmp`.
+
+Reason:
+Pi smoke testing showed that the shared temp-file default creates cross-user ownership conflicts between service runs and manual runs. Theme persistence needs to be stable without requiring cleanup of root-owned temp files.
+
+Implications:
+- default theme persistence becomes per-user unless explicitly overridden with `BOOT_SELECTOR_THEME_STATE_PATH`
+- manual Pi testing no longer collides with the service by default
+- service units can still pin a different state path explicitly if they need shared behavior
+
+Supersedes:
+None
+
+---
+
 ## Archive Note
 
 - Previous-team decision logs are archive material only.

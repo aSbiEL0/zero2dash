@@ -84,22 +84,24 @@ Raised by: Mouser
 Status: OPEN
 
 Problem:
-Pi smoke testing has exposed two real startup blockers on device: first a framebuffer API mismatch during GIF playback, then a hard failure when theme-state persistence cannot replace `/tmp/zero2dash-shell-theme`.
+Pi smoke testing has exposed three real startup blockers on device: first a framebuffer API mismatch during GIF playback, then a hard failure when theme-state persistence cannot replace the shared temp-state file, and now an undefined `_screen_image` reference in the first shell render path.
 
 Impact:
 - blocks closing Pi validation
 - blocks final wiki publication, because runtime confirmation on device is still incomplete
 
 Possible cause:
-The local shell rewrite assumed a framebuffer method name that does not match the repo's real `framebuffer.py` implementation used on the Pi, and it treated theme-state persistence as mandatory even when the temp-state file is not writable by the current service user.
+The local shell rewrite assumed a framebuffer method name that does not match the repo's real `framebuffer.py` implementation used on the Pi, treated theme-state persistence as mandatory even when the state file is not writable by the current user, and shipped a render-path helper call without the helper implementation.
 
 Suggested resolution:
 Deploy the selector hotfixes that:
 - write through a shell-local framebuffer compatibility helper accepting either `write_frame()` or `write_image()`
-- log and continue when theme-state persistence fails instead of aborting startup
+- default theme persistence to a user-scoped state path and log-and-continue if persistence still fails
+- restore the missing `_screen_image()` helper used by the shell render loop
 Then restart `boot-selector.service` and repeat Pi smoke checks.
 
 Notes:
 This is a Pi-only blocker. The failures are now concretely identified from Pi logs/manual runs:
 - `AttributeError: 'FramebufferWriter' object has no attribute 'write_image'. Did you mean: 'write_frame'?`
 - `PermissionError: [Errno 1] Operation not permitted: '/tmp/zero2dash-shell-theme.tmp' -> '/tmp/zero2dash-shell-theme'`
+- `NameError: name '_screen_image' is not defined`
