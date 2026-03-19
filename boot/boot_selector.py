@@ -175,6 +175,8 @@ class AppSpec:
     preview_asset: str
     supports_home_gesture: bool = False
     parent_screen: str | None = None
+    shell_handles_home_gesture: bool = False
+    env_overrides: tuple[tuple[str, str], ...] = ()
 
     def to_contract_dict(self) -> dict[str, object]:
         return {
@@ -185,6 +187,7 @@ class AppSpec:
             "preview_asset": self.preview_asset,
             "supports_home_gesture": self.supports_home_gesture,
             "parent_screen": self.parent_screen,
+            "shell_handles_home_gesture": self.shell_handles_home_gesture,
         }
 
 
@@ -292,7 +295,9 @@ class ChildAppManager:
             self.stop_current(reason=f"switching from {current.app.id} to {app.id}")
         print(f"[boot-selector] Starting child app {app.id}: {list(app.launch_command)}", flush=True)
         try:
-            process = subprocess.Popen(list(app.launch_command), cwd=str(BASE_DIR))
+            child_env = os.environ.copy()
+            child_env.update(dict(app.env_overrides))
+            process = subprocess.Popen(list(app.launch_command), cwd=str(BASE_DIR), env=child_env)
         except OSError as exc:
             print(f"[boot-selector] Failed to start child app {app.id}: {exc}", file=sys.stderr, flush=True)
             return False
@@ -455,10 +460,18 @@ class TouchReader:
         touch_started_at = 0.0
         last_x = self.screen_width // 2
         last_y = self.screen_height // 2
+        saw_explicit_touch_state = False
+        pending_abs_sample = False
+        last_synthetic_sample_at = 0.0
+        synthetic_touch_timeout_secs = max(0.35, poll_timeout_secs * 2)
         while not STOP_REQUESTED:
             readable, _, _ = select.select([fd], [], [], poll_timeout_secs)
+            now = time.monotonic()
             if not readable:
-                if touch_down and region.contains(last_x, last_y) and (time.monotonic() - touch_started_at) >= hold_secs:
+                if touch_down and not saw_explicit_touch_state and last_synthetic_sample_at and (now - last_synthetic_sample_at) >= synthetic_touch_timeout_secs:
+                    touch_down = False
+                mapped_x, mapped_y = self._map_coordinates(last_x, last_y)
+                if touch_down and region.contains(mapped_x, mapped_y) and (now - touch_started_at) >= hold_secs:
                     return True
                 continue
             raw = fd.read(INPUT_EVENT_STRUCT.size)
@@ -467,23 +480,34 @@ class TouchReader:
             _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
             if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
                 last_x = ev_value
+                pending_abs_sample = True
                 continue
             if ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
                 last_y = ev_value
+                pending_abs_sample = True
                 continue
             if ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                saw_explicit_touch_state = True
                 if ev_value == 1:
                     touch_down = True
-                    touch_started_at = time.monotonic()
+                    touch_started_at = now
                 elif ev_value == 0:
                     touch_down = False
                 continue
             if ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                saw_explicit_touch_state = True
                 if ev_value >= 0:
                     touch_down = True
-                    touch_started_at = time.monotonic()
+                    touch_started_at = now
                 elif ev_value == -1:
                     touch_down = False
+                continue
+            if ev_type == EV_SYN and pending_abs_sample and not saw_explicit_touch_state:
+                pending_abs_sample = False
+                if not touch_down:
+                    touch_down = True
+                    touch_started_at = now
+                last_synthetic_sample_at = now
         return False
 
 
@@ -512,13 +536,21 @@ def _command_for_service(service_name: str, fallback_command: list[str]) -> tupl
     return tuple(command)
 
 
+def _shell_child_env_overrides(mode_request_path: str | Path) -> tuple[tuple[str, str], ...]:
+    return (
+        ("ZERO2DASH_PARENT_SHELL", "1"),
+        ("BOOT_SELECTOR_MODE_REQUEST_PATH", str(mode_request_path)),
+    )
+
+
 def build_app_registry(args: argparse.Namespace) -> dict[str, AppSpec]:
     day_command = _command_for_service(args.day_service, [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")])
     night_command = _command_for_service(args.night_service, [sys.executable, "-u", str(BASE_DIR / "modules" / "blackout" / "blackout.py")])
+    child_env = _shell_child_env_overrides(getattr(args, "mode_request_path", DEFAULT_MODE_REQUEST_PATH))
     return {
-        APP_ID_DASHBOARDS: AppSpec(APP_ID_DASHBOARDS, "Dashboards", APP_KIND_CHILD_PROCESS, day_command, "day-night.png", True, ROOT_MENU_1),
-        APP_ID_PHOTOS: AppSpec(APP_ID_PHOTOS, "Photos", APP_KIND_CHILD_PROCESS, (sys.executable, "-u", str(BASE_DIR / "modules" / "photos" / "slideshow.py")), "mainmenu1.png", True, ROOT_MENU_1),
-        APP_ID_NIGHT: AppSpec(APP_ID_NIGHT, "Night", APP_KIND_CHILD_PROCESS, night_command, "day-night.png", True, DASHBOARDS_MENU),
+        APP_ID_DASHBOARDS: AppSpec(APP_ID_DASHBOARDS, "Dashboards", APP_KIND_CHILD_PROCESS, day_command, "day-night.png", True, ROOT_MENU_1, False, child_env),
+        APP_ID_PHOTOS: AppSpec(APP_ID_PHOTOS, "Photos", APP_KIND_CHILD_PROCESS, (sys.executable, "-u", str(BASE_DIR / "modules" / "photos" / "slideshow.py")), "mainmenu1.png", True, ROOT_MENU_1, True, child_env),
+        APP_ID_NIGHT: AppSpec(APP_ID_NIGHT, "Night", APP_KIND_CHILD_PROCESS, night_command, "day-night.png", True, DASHBOARDS_MENU, False, child_env),
         APP_ID_CREDITS: AppSpec(APP_ID_CREDITS, "Credits", APP_KIND_SHELL_SCREEN, (), "credits.gif", False, ROOT_MENU_2),
         APP_ID_THEMES: AppSpec(APP_ID_THEMES, "Themes", APP_KIND_SHELL_SCREEN, (), "themes.png", False, ROOT_MENU_2),
         APP_ID_SETTINGS: AppSpec(APP_ID_SETTINGS, "Settings", APP_KIND_SHELL_SCREEN, (), "settings.png", False, ROOT_MENU_2),
@@ -767,9 +799,11 @@ def wait_for_running_app_event(
         running = child_manager.running_app()
         if running is None:
             return SHELL_MODE_MENU
-        if running.app.supports_home_gesture and touch_reader.wait_for_home_gesture(home_region, home_hold_secs, POLL_TIMEOUT_SECS):
+        if running.app.supports_home_gesture and not running.app.shell_handles_home_gesture:
+            touch_reader.close()
+        if running.app.supports_home_gesture and running.app.shell_handles_home_gesture and touch_reader.wait_for_home_gesture(home_region, home_hold_secs, POLL_TIMEOUT_SECS):
             return SHELL_MODE_MENU
-        if not touch_reader.is_available() or not running.app.supports_home_gesture:
+        if not touch_reader.is_available() or not running.app.supports_home_gesture or not running.app.shell_handles_home_gesture:
             time.sleep(POLL_TIMEOUT_SECS)
     return SHELL_MODE_MENU
 
@@ -868,6 +902,104 @@ def validate_args(args: argparse.Namespace) -> int | None:
     return None
 
 
+def _capture_calibration_tap(device: str, prompt: str, timeout_secs: float = 20.0) -> tuple[int, int]:
+    print(f"[boot-selector] {prompt}", flush=True)
+    print("[boot-selector] Tap once, then release.", flush=True)
+
+    deadline = time.monotonic() + timeout_secs
+    last_x = 0
+    last_y = 0
+    touch_down = False
+    saw_explicit_touch_state = False
+    pending_abs_sample = False
+    last_synthetic_sample_at = 0.0
+    synthetic_touch_timeout_secs = 0.35
+
+    with open(device, "rb", buffering=0) as fd:
+        while time.monotonic() < deadline:
+            wait_secs = max(0.0, min(0.2, deadline - time.monotonic()))
+            readable, _, _ = select.select([fd], [], [], wait_secs)
+            now = time.monotonic()
+            if not readable:
+                if touch_down and not saw_explicit_touch_state and last_synthetic_sample_at and (now - last_synthetic_sample_at) >= synthetic_touch_timeout_secs:
+                    return last_x, last_y
+                continue
+
+            raw = fd.read(INPUT_EVENT_STRUCT.size)
+            if len(raw) != INPUT_EVENT_STRUCT.size:
+                continue
+
+            _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
+            if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
+                last_x = ev_value
+                pending_abs_sample = True
+                continue
+            if ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
+                last_y = ev_value
+                pending_abs_sample = True
+                continue
+            if ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                saw_explicit_touch_state = True
+                if ev_value == 1:
+                    touch_down = True
+                elif ev_value == 0 and touch_down:
+                    return last_x, last_y
+                continue
+            if ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                saw_explicit_touch_state = True
+                if ev_value >= 0:
+                    touch_down = True
+                elif ev_value == -1 and touch_down:
+                    return last_x, last_y
+                continue
+            if ev_type == EV_SYN and pending_abs_sample and not saw_explicit_touch_state:
+                pending_abs_sample = False
+                touch_down = True
+                last_synthetic_sample_at = now
+
+    raise TimeoutError(f"Timed out waiting for a touch sample on {device}")
+
+
+def run_touch_calibration(width: int, height: int) -> int:
+    device, reason = touch_probe()
+    if not device:
+        print("[boot-selector] Touch calibration found no usable device.", flush=True)
+        print(f"[boot-selector] Probe reason: {reason}", flush=True)
+        return 1
+
+    print(f"[boot-selector] Touch calibration selected {device}", flush=True)
+    print(f"[boot-selector] Probe reason: {reason}", flush=True)
+    taps: dict[str, tuple[int, int]] = {}
+    prompts = (
+        ("top_left", "Touch the TOP-LEFT corner."),
+        ("top_right", "Touch the TOP-RIGHT corner."),
+        ("bottom_left", "Touch the BOTTOM-LEFT corner."),
+        ("bottom_right", "Touch the BOTTOM-RIGHT corner."),
+    )
+
+    try:
+        for key, prompt in prompts:
+            taps[key] = _capture_calibration_tap(device, prompt)
+            print(f"[boot-selector] Captured {key}: raw_x={taps[key][0]} raw_y={taps[key][1]}", flush=True)
+    except TimeoutError as exc:
+        print(f"[boot-selector] {exc}", file=sys.stderr, flush=True)
+        return 1
+    except OSError as exc:
+        print(f"[boot-selector] Touch calibration failed on {device}: {exc}", file=sys.stderr, flush=True)
+        return 1
+
+    calibration = touch_calibration.infer_from_corner_taps(device, taps)
+    print("[boot-selector] Suggested calibration exports:", flush=True)
+    for line in touch_calibration.format_exports(calibration):
+        print(line, flush=True)
+
+    print("[boot-selector] Corner preview:", flush=True)
+    for key, raw_sample in taps.items():
+        screen_x, screen_y = touch_calibration.map_to_screen(raw_sample[0], raw_sample[1], width=width, height=height, calibration=calibration)
+        print(f"[boot-selector] {key}: screen_x={screen_x} screen_y={screen_y}", flush=True)
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Play a boot GIF once, then show a theme-backed touch selector.")
     parser.add_argument("--fbdev", default=FBDEV_DEFAULT, help=f"Framebuffer device path (default: {FBDEV_DEFAULT})")
@@ -887,6 +1019,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-framebuffer", action="store_true", help="Skip framebuffer writes for local verification.")
     parser.add_argument("--skip-gif", action="store_true", help="Skip startup GIF playback and show the menu immediately.")
     parser.add_argument("--probe-touch", action="store_true", help="Probe touch device selection and exit.")
+    parser.add_argument("--calibrate-touch", action="store_true", help="Interactively capture corner taps and print suggested touch calibration env values.")
     parser.add_argument("--request-mode", choices=SHELL_MODES, help="Write a shell mode-switch request for a running shell and exit.")
     parser.add_argument("--mode-request-path", default=DEFAULT_MODE_REQUEST_PATH, help=f"Path used for shell mode-switch requests (default: {DEFAULT_MODE_REQUEST_PATH})")
     parser.add_argument("--touch-settle-secs", type=float, default=DEFAULT_TOUCH_SETTLE_SECS, help=f"Ignore touches briefly after each screen draw (default: {DEFAULT_TOUCH_SETTLE_SECS})")
@@ -1086,8 +1219,7 @@ def run_main_screen_shell(
                 current_screen = ROOT_MENU_2
             elif action == "dashboards":
                 session_root_page = ROOT_MENU_1
-                if child_manager.start_app(app_registry[APP_ID_DASHBOARDS]):
-                    current_screen = RUNNING_APP
+                current_screen = DASHBOARDS_MENU
             elif action == "photos":
                 session_root_page = ROOT_MENU_1
                 if child_manager.start_app(app_registry[APP_ID_PHOTOS]):
@@ -1185,6 +1317,12 @@ def main() -> int:
         print(f"[boot-selector] Wrote shell mode request {args.request_mode} to {mode_store.path}", flush=True)
         return 0
 
+    if args.probe_touch:
+        return run_touch_probe(args.width)
+
+    if args.calibrate_touch:
+        return run_touch_calibration(args.width, args.height)
+
     app_registry = build_app_registry(args)
     night_app = app_registry[APP_ID_NIGHT]
     theme_catalog = load_theme_catalog(Path(args.theme_root))
@@ -1195,9 +1333,6 @@ def main() -> int:
     if args.dump_contracts:
         print(json.dumps(build_contract_snapshot(app_registry, night_app, str(mode_store.path), args, theme_catalog, active_theme_id), indent=2), flush=True)
         return 0
-
-    if args.probe_touch:
-        return run_touch_probe(args.width)
 
     shell_images = build_shell_images(theme_catalog[active_theme_id], args.width, args.height)
     save_preview(shell_images.screens[ROOT_MENU_1], args.output_selector)

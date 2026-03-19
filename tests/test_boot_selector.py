@@ -46,6 +46,9 @@ class _FakeChildManager:
     def shutdown(self) -> None:
         self.shutdown_calls += 1
 
+    def running_app(self):
+        return None
+
 
 class _WriteFrameOnlyFramebuffer:
     def __init__(self) -> None:
@@ -130,6 +133,27 @@ class BootSelectorTests(unittest.TestCase):
 
         self.assertIs(boot_selector._screen_image(shell_images, boot_selector.ROOT_MENU_1), marker)
 
+    def test_touch_calibration_infers_swapped_axes_from_corner_taps(self) -> None:
+        calibration = boot_selector.touch_calibration.infer_from_corner_taps(
+            "/dev/input/event0",
+            {
+                "top_left": (3800, 300),
+                "top_right": (3800, 3700),
+                "bottom_left": (400, 300),
+                "bottom_right": (400, 3700),
+            },
+        )
+
+        self.assertTrue(calibration.swap_axes)
+        self.assertEqual(
+            boot_selector.touch_calibration.map_to_screen(3800, 300, width=320, height=240, calibration=calibration),
+            (0, 0),
+        )
+        self.assertEqual(
+            boot_selector.touch_calibration.map_to_screen(400, 3700, width=320, height=240, calibration=calibration),
+            (319, 239),
+        )
+
     def test_screen_action_routes_root_and_child_screens(self) -> None:
         w = 320
         h = 240
@@ -187,13 +211,16 @@ class BootSelectorTests(unittest.TestCase):
         self.assertEqual(boot_selector.evaluate_pin_entry("1111", "1234", 2), ("shutdown", 3))
 
     def test_app_registry_and_mode_request_handling(self) -> None:
-        args = types.SimpleNamespace(day_service="display.service", night_service="night.service")
+        args = types.SimpleNamespace(day_service="display.service", night_service="night.service", mode_request_path="/tmp/shell-mode")
         registry = boot_selector.build_app_registry(args)
 
         self.assertEqual(registry[boot_selector.APP_ID_DASHBOARDS].kind, boot_selector.APP_KIND_CHILD_PROCESS)
         self.assertEqual(registry[boot_selector.APP_ID_PHOTOS].parent_screen, boot_selector.ROOT_MENU_1)
         self.assertEqual(registry[boot_selector.APP_ID_NETWORK].preview_asset, "stats.png")
         self.assertEqual(registry[boot_selector.APP_ID_ISS].parent_screen, boot_selector.ROOT_MENU_1)
+        self.assertFalse(registry[boot_selector.APP_ID_DASHBOARDS].shell_handles_home_gesture)
+        self.assertTrue(registry[boot_selector.APP_ID_PHOTOS].shell_handles_home_gesture)
+        self.assertIn(("BOOT_SELECTOR_MODE_REQUEST_PATH", "/tmp/shell-mode"), registry[boot_selector.APP_ID_NIGHT].env_overrides)
 
         snapshot = boot_selector.build_contract_snapshot(
             registry,
@@ -257,6 +284,87 @@ class BootSelectorTests(unittest.TestCase):
             action = reader.read_action(lambda x, y: f"{x},{y}", ready_after=0.0, touch_debounce_secs=0.0, timeout_secs=None)
 
         self.assertEqual(action, "10,20")
+
+    def test_wait_for_home_gesture_accepts_abs_syn_fallback(self) -> None:
+        fake_input = _FakeInputFile(
+            [
+                (boot_selector.EV_ABS, boot_selector.ABS_X, 10),
+                (boot_selector.EV_ABS, boot_selector.ABS_Y, 10),
+                (boot_selector.EV_SYN, 0, 0),
+            ]
+        )
+        select_results = iter([([fake_input], [], []), ([], [], [])])
+
+        with mock.patch.object(boot_selector, "touch_probe", return_value=("/dev/input/event0", "test")), \
+            mock.patch.object(boot_selector.touch_calibration, "applies_to", return_value=False), \
+            mock.patch.object(boot_selector, "detect_touch_width", return_value=(320, 0)), \
+            mock.patch.object(boot_selector.select, "select", side_effect=lambda *_args, **_kwargs: next(select_results)), \
+            mock.patch("builtins.open", return_value=fake_input), \
+            mock.patch.object(boot_selector.time, "monotonic", side_effect=[0.0, 0.2]):
+            reader = boot_selector.TouchReader(320, 240)
+            region = boot_selector.TouchRegion("menu", 0, 0, 20, 20)
+            self.assertTrue(reader.wait_for_home_gesture(region, hold_secs=0.15, poll_timeout_secs=0.05))
+
+    def test_run_main_screen_shell_routes_root_dashboard_to_dashboards_menu(self) -> None:
+        labels: list[str] = []
+        manager = _FakeChildManager()
+
+        def _wait_for_shell_action_or_mode(_touch_reader, label, _resolver, _settle, _debounce, _mode_store):
+            labels.append(label)
+            if len(labels) == 1:
+                return "dashboards", None
+            boot_selector.STOP_REQUESTED = True
+            return None, None
+
+        args = types.SimpleNamespace(
+            child_stop_grace_secs=1.0,
+            width=320,
+            height=240,
+            home_gesture_corner_width=64,
+            home_gesture_corner_height=48,
+            home_gesture_hold_secs=1.5,
+            touch_settle_secs=0.0,
+            touch_debounce_secs=0.0,
+            gif_speed=1.0,
+            pin="",
+            player_command="echo",
+            shutdown_command="echo",
+        )
+        app_registry = {
+            boot_selector.APP_ID_DASHBOARDS: types.SimpleNamespace(id=boot_selector.APP_ID_DASHBOARDS),
+            boot_selector.APP_ID_PHOTOS: types.SimpleNamespace(id=boot_selector.APP_ID_PHOTOS),
+            boot_selector.APP_ID_NIGHT: types.SimpleNamespace(id=boot_selector.APP_ID_NIGHT),
+        }
+        shell_images = types.SimpleNamespace(
+            screens={
+                boot_selector.ROOT_MENU_1: object(),
+                boot_selector.DASHBOARDS_MENU: object(),
+            },
+            status_base=object(),
+            granted_gif=Path("granted.gif"),
+            denied_gif=Path("denied.gif"),
+        )
+
+        with mock.patch.object(boot_selector, "ChildAppManager", return_value=manager), \
+            mock.patch.object(boot_selector, "wait_for_shell_action_or_mode", side_effect=_wait_for_shell_action_or_mode), \
+            mock.patch.object(boot_selector, "write_framebuffer_image", return_value=None):
+            boot_selector.STOP_REQUESTED = False
+            rc = boot_selector.run_main_screen_shell(
+                args,
+                framebuffer=object(),
+                touch_reader=types.SimpleNamespace(),
+                mode_store=types.SimpleNamespace(consume_request=lambda: None),
+                app_registry=app_registry,
+                theme_catalog={},
+                theme_state_store=types.SimpleNamespace(write_theme_id=lambda *_args, **_kwargs: None),
+                shell_images=shell_images,
+                active_theme_id="default",
+            )
+        boot_selector.STOP_REQUESTED = False
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(labels, ["main_menu_1 selection", "dashboards_menu selection"])
+        self.assertEqual(manager.started, [])
 
 
 if __name__ == "__main__":

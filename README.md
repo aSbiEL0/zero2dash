@@ -70,6 +70,8 @@ Shared non-theme assets remain under `boot/`:
 | --- | --- | --- |
 | Shell contracts | `python3 boot/boot_selector.py --dump-contracts --no-framebuffer --skip-gif` | Confirms the shell registry and mode surface. |
 | Shell smoke | `python3 boot/boot_selector.py --no-framebuffer --skip-gif` | Verifies the shell boots without hardware writes. |
+| Touch probe | `python3 boot/boot_selector.py --probe-touch` | Prints the chosen touch device and probe reason. |
+| Touch calibration | `python3 boot/boot_selector.py --calibrate-touch` | Captures four corner taps and prints suggested touch env values. |
 | Rotator slice | `python3 -m unittest tests.test_display_rotator` | Covers the extracted touch and screen-power paths. |
 | Selector/router slice | `python3 -m unittest tests.test_boot_selector` | Covers themed routing, theme discovery, and mode handling. |
 | Framebuffer slice | `python3 -m unittest tests.test_framebuffer` | Covers RGB565 conversion and framebuffer writes. |
@@ -106,3 +108,4 @@ zero2dash/
 - `modules/photos/slideshow.py` is the long-running Photos app.
 - `display_rotator.py` is the supported Dashboards entrypoint.
 - The shell’s menu contract is theme-backed, not the old paged tile UI.
+- Touch calibration is env-driven. Use `TOUCH_SWAP_AXES`, `TOUCH_RAW_X_MIN`, `TOUCH_RAW_X_MAX`, `TOUCH_RAW_Y_MIN`, and `TOUCH_RAW_Y_MAX` after capturing values with `--calibrate-touch`.

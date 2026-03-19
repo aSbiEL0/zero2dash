@@ -24,6 +24,7 @@ Last updated: 2026-03-19
 ## Active Workstreams
 
 - `R-013` Curator: complete.
+- `R-014` Mouser: in progress.
 - `R-009` Mouser: coordination reset, dependency tracking, merge control.
 - `R-010` Rotor: complete.
 - `R-011` Switchboard: complete.
@@ -44,7 +45,8 @@ Last updated: 2026-03-19
 - Hardware-free selector and rotator regression suites now pass.
 - Pi smoke testing is now in progress for touch hardware, framebuffer ownership, and real service interaction.
 - Current Pi note: the shell now boots to the themed main menu on device.
-- Latest Pi note: touch probe selects `/dev/input/event0` (`ADS7846 Touchscreen`), but the device reports `BTN_TOUCH=no`. A selector patch is now in place locally to accept `ABS_X/ABS_Y + EV_SYN` tap samples for this controller class.
+- Latest repo note: the touch-remediation slice is now implemented locally. It adds reusable touch calibration, routes root Dashboards through `dashboards_menu`, closes the shell reader while Dashboard/Night own touch, and teaches shell/rotator/blackout to consume ADS7846 `ABS_X/ABS_Y + EV_SYN` gestures.
+- Latest validation note: hardware-free Python test execution is still blocked in this shell by a local interpreter wrapper issue, so the next meaningful gate is Pi retest with the updated branch.
 - Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
 
 ## Archive Note

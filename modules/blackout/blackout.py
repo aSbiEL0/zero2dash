@@ -38,6 +38,7 @@ _STOP_REQUESTED = False
 BASE_DIR = Path(__file__).resolve().parents[2]
 BOOT_SELECTOR_SCRIPT = BASE_DIR / "boot" / "boot_selector.py"
 BOOT_SELECTOR_SERVICE = os.environ.get("BLACKOUT_BOOT_SELECTOR_SERVICE", "boot-selector.service").strip() or "boot-selector.service"
+PARENT_SHELL_MODE_REQUEST_PATH = os.environ.get("BOOT_SELECTOR_MODE_REQUEST_PATH", "").strip()
 
 # linux/input-event-codes.h
 EV_SYN = 0x00
@@ -161,6 +162,10 @@ def touch_worker(event_q: "queue.Queue[str]", stop_evt: threading.Event) -> None
 
     touch_down = False
     touch_started_at = 0.0
+    saw_explicit_touch_state = False
+    pending_abs_sample = False
+    last_synthetic_sample_at = 0.0
+    synthetic_touch_timeout_secs = 0.35
 
     def emit_touch_event() -> None:
         duration = time.monotonic() - touch_started_at
@@ -171,6 +176,14 @@ def touch_worker(event_q: "queue.Queue[str]", stop_evt: threading.Event) -> None
             while not stop_evt.is_set():
                 readable, _, _ = select.select([fd], [], [], 0.2)
                 if not readable:
+                    now = time.monotonic()
+                    if touch_down and not saw_explicit_touch_state and last_synthetic_sample_at:
+                        if (now - touch_started_at) >= HOLD_TO_SELECTOR_SECS and (now - last_synthetic_sample_at) < synthetic_touch_timeout_secs:
+                            touch_down = False
+                            emit_touch_event()
+                        elif (now - last_synthetic_sample_at) >= synthetic_touch_timeout_secs:
+                            touch_down = False
+                            emit_touch_event()
                     continue
 
                 raw = fd.read(INPUT_EVENT_STRUCT.size)
@@ -179,6 +192,7 @@ def touch_worker(event_q: "queue.Queue[str]", stop_evt: threading.Event) -> None
 
                 _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
                 if ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                    saw_explicit_touch_state = True
                     if ev_value == 1:
                         touch_down = True
                         touch_started_at = time.monotonic()
@@ -186,12 +200,23 @@ def touch_worker(event_q: "queue.Queue[str]", stop_evt: threading.Event) -> None
                         touch_down = False
                         emit_touch_event()
                 elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                    saw_explicit_touch_state = True
                     if ev_value == -1 and touch_down:
                         touch_down = False
                         emit_touch_event()
                     elif ev_value >= 0:
                         touch_down = True
                         touch_started_at = time.monotonic()
+                elif ev_type == EV_ABS:
+                    pending_abs_sample = True
+                    continue
+                elif ev_type == EV_SYN and pending_abs_sample and not saw_explicit_touch_state:
+                    pending_abs_sample = False
+                    now = time.monotonic()
+                    if not touch_down:
+                        touch_down = True
+                        touch_started_at = now
+                    last_synthetic_sample_at = now
                 elif ev_type in (EV_ABS, EV_SYN):
                     continue
     except Exception as exc:
@@ -200,6 +225,34 @@ def touch_worker(event_q: "queue.Queue[str]", stop_evt: threading.Event) -> None
 
 def activate_boot_selector() -> int:
     global _STOP_REQUESTED
+
+    if os.environ.get("ZERO2DASH_PARENT_SHELL", "").strip():
+        if not PARENT_SHELL_MODE_REQUEST_PATH:
+            print("[blackout] Parent shell mode request path is missing.", file=sys.stderr, flush=True)
+            return 1
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-u",
+                str(BOOT_SELECTOR_SCRIPT),
+                "--request-mode",
+                "menu",
+                "--mode-request-path",
+                PARENT_SHELL_MODE_REQUEST_PATH,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(BASE_DIR),
+        )
+        if result.returncode == 0:
+            print("[blackout] Long press detected; requested menu from parent shell.", flush=True)
+            _STOP_REQUESTED = True
+            return 0
+
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        print(f"[blackout] Failed to request menu from parent shell: {stderr}", file=sys.stderr, flush=True)
+        return result.returncode
 
     running_under_systemd = bool(os.environ.get("INVOCATION_ID", "").strip())
     if running_under_systemd:

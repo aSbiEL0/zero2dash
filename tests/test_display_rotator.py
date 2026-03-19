@@ -250,6 +250,56 @@ class DisplayRotatorTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertIn("TOGGLE_SCREEN", commands.commands)
 
+    def test_touch_worker_accepts_abs_syn_fallback_without_btn_touch(self) -> None:
+        fake_input = _FakeInputFile(
+            _touch_stream(
+                (rotator_touch.EV_ABS, rotator_touch.ABS_X, 12),
+                (rotator_touch.EV_ABS, rotator_touch.ABS_Y, 34),
+                (rotator_touch.EV_SYN, 0, 0),
+            )
+        )
+        stop_evt = threading.Event()
+        commands = _CommandRecorder(stop_evt, "PREV")
+
+        with patch.object(rotator_touch, "select_touch_device", return_value="/dev/input/event0"), \
+            patch.object(rotator_touch.touch_calibration, "applies_to", return_value=False), \
+            patch.object(rotator_touch, "detect_touch_width", return_value=(100, 0)), \
+            patch.object(rotator_touch.select, "select", side_effect=lambda *_args, **_kwargs: ([fake_input], [], []) if fake_input._payloads else ([], [], [])), \
+            patch("builtins.open", return_value=fake_input), \
+            patch.object(rotator_touch.time, "monotonic", side_effect=[0.0, 0.5]):
+            thread = threading.Thread(
+                target=rotator_touch.touch_worker,
+                args=(commands, stop_evt, 100, 0.2),
+                daemon=True,
+            )
+            thread.start()
+            thread.join(timeout=1.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(commands.commands, ["PREV"])
+
+    def test_activate_boot_selector_requests_parent_menu_when_shell_managed(self) -> None:
+        result = types.SimpleNamespace(returncode=0, stderr="", stdout="")
+
+        with patch.dict(os.environ, {"ZERO2DASH_PARENT_SHELL": "1"}, clear=False), \
+            patch.object(display_rotator, "PARENT_SHELL_MODE_REQUEST_PATH", "/tmp/zero2dash-shell-mode-request"), \
+            patch.object(display_rotator.subprocess, "run", return_value=result) as run_mock:
+            rc = display_rotator.activate_boot_selector()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            run_mock.call_args.args[0],
+            [
+                sys.executable,
+                "-u",
+                str(display_rotator.BOOT_SELECTOR_SCRIPT),
+                "--request-mode",
+                "menu",
+                "--mode-request-path",
+                "/tmp/zero2dash-shell-mode-request",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,6 +43,46 @@ Dependencies:
 
 ## Active Tasks
 
+TASK ID: R-014
+Agent: Mouser
+Status: IN_PROGRESS
+
+Objective:
+Repair the remaining Pi interaction defects by fixing touch calibration, Dashboard routing, child touch ownership, and ADS7846 event handling across the shell and child apps.
+
+Allowed files:
+- `boot/boot_selector.py`
+- `display_rotator.py`
+- `rotator/*`
+- `modules/blackout/blackout.py`
+- `touch_calibration.py`
+- `tests/*`
+- `coordination/*`
+
+Forbidden files:
+- `systemd/*`
+- unrelated module trees
+
+Deliverables:
+- corrected `main_menu_1` routing into `dashboards_menu`
+- parent/child touch ownership contract for dashboards and night
+- shared ADS7846-compatible touch handling in shell, rotator, and blackout
+- reusable touch calibration flow and regression coverage
+
+Acceptance criteria:
+- Dashboards button opens `dashboards_menu` instead of freezing touch
+- Dashboards and Night can return to menu under shell ownership rules
+- Photos can still be exited by shell hold-to-menu
+- keypad confirm/cancel mapping matches the themed asset after calibrated mapping
+- touch calibration can be diagnosed and regenerated on-device without editing code
+
+Dependencies:
+- `R-010`
+- `R-011`
+- `R-012`
+
+---
+
 TASK ID: R-013
 Agent: Curator
 Status: IN_PROGRESS

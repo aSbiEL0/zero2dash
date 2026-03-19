@@ -84,7 +84,7 @@ Raised by: Mouser
 Status: OPEN
 
 Problem:
-Pi smoke testing has cleared the shell startup blockers, but touch input is still non-responsive on the live menu. The remaining device-side blocker is now touch acquisition: no usable touch events are reaching the shell, or the wrong input device/calibration is being applied.
+Pi smoke testing has cleared the shell startup blockers, but the remaining live interaction defects still block sign-off: root-menu touch mapping is wrong, Dashboard freezes touch, Dashboard/Night child readers still miss ADS7846 events, and keypad confirm/cancel hit testing is not aligned to the asset.
 
 Impact:
 - blocks closing Pi validation
@@ -96,6 +96,8 @@ Likely causes are:
 - the service user cannot read the chosen input device
 - `touch_calibration.py` is bound to the wrong event device and is remapping coordinates incorrectly
 - the shell reader only emitted taps from `BTN_TOUCH` or multitouch tracking IDs, while the Pi probe selected an `ADS7846 Touchscreen` that reports `BTN_TOUCH=no`
+- `main_menu_1` currently launches Dashboard directly instead of routing through `dashboards_menu`
+- the shell and Dashboard/Night child readers can compete for the same touch device
 
 Suggested resolution:
 Capture the touch probe result on the Pi, then confirm device permissions and calibration binding:
@@ -104,10 +106,18 @@ Capture the touch probe result on the Pi, then confirm device permissions and ca
 - `grep -E 'TOUCH_DEVICE|ROTATOR_TOUCH_DEVICE' /etc/systemd/system/boot-selector.service /etc/systemd/system/boot-selector.service.d/* 2>/dev/null`
 If probe selects the wrong device, force the correct one with `TOUCH_DEVICE=/dev/input/eventX`.
 If the probe is correct and the device is `ADS7846`, deploy the selector patch that accepts `ABS_X/ABS_Y + EV_SYN` samples as taps when no explicit touch-state events are present.
+Then repair the runtime contract so:
+- root Dashboards opens `dashboards_menu`
+- Dashboard/Night children request `menu` from the running shell instead of starting another selector
+- calibration can be regenerated and applied consistently across shell/keypad/child apps
+- use `python3 boot/boot_selector.py --calibrate-touch` on the Pi if zone mapping is still wrong after the runtime fix
 
 Notes:
-This is now a pure Pi-side touch blocker. The shell itself boots to the main menu successfully after the startup fixes. Touch debugging should focus on probe output, input-device permissions, and calibration binding.
+This remains the active Pi validation blocker. The shell itself boots to the main menu successfully after the startup fixes, but runtime interaction is still not trustworthy enough to close the slice.
 Latest Pi probe:
 - selected `/dev/input/event0`
 - name `ADS7846 Touchscreen`
 - `BTN_TOUCH=no`
+Latest repo note:
+- the remediation code is now in place locally
+- local Python test execution is currently blocked in this shell by a wrapper/interpreter issue, so Pi validation is the next gate

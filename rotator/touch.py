@@ -218,6 +218,10 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
     touch_started_at = 0.0
     last_tap_ts = None
     last_emit = 0.0
+    saw_explicit_touch_state = False
+    pending_abs_sample = False
+    last_synthetic_sample_at = 0.0
+    synthetic_touch_timeout_secs = 0.35
 
     def emit_tap(raw_x: int, raw_y: int, now: float) -> None:
         nonlocal last_tap_ts, last_emit
@@ -253,6 +257,14 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
             while not stop_evt.is_set():
                 readable, _, _ = select.select([fd], [], [], 0.2)
                 if not readable:
+                    now = time.monotonic()
+                    if touch_down and not saw_explicit_touch_state and last_synthetic_sample_at:
+                        if (now - touch_started_at) >= HOLD_TO_SELECTOR_SECS and (now - last_synthetic_sample_at) < synthetic_touch_timeout_secs:
+                            touch_down = False
+                            emit_tap(last_x, last_y, now)
+                        elif (now - last_synthetic_sample_at) >= synthetic_touch_timeout_secs:
+                            touch_down = False
+                            emit_tap(last_x, last_y, now)
                     continue
 
                 raw = fd.read(INPUT_EVENT_STRUCT.size)
@@ -263,9 +275,12 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
 
                 if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
                     last_x = ev_value
+                    pending_abs_sample = True
                 elif ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
                     last_y = ev_value
+                    pending_abs_sample = True
                 elif ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                    saw_explicit_touch_state = True
                     if ev_value == 1:
                         touch_down = True
                         touch_started_at = time.monotonic()
@@ -273,12 +288,20 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
                         touch_down = False
                         emit_tap(last_x, last_y, time.monotonic())
                 elif ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                    saw_explicit_touch_state = True
                     if ev_value == -1 and touch_down:
                         touch_down = False
                         emit_tap(last_x, last_y, time.monotonic())
                     elif ev_value >= 0:
                         touch_down = True
                         touch_started_at = time.monotonic()
+                elif ev_type == EV_SYN and pending_abs_sample and not saw_explicit_touch_state:
+                    pending_abs_sample = False
+                    now = time.monotonic()
+                    if not touch_down:
+                        touch_down = True
+                        touch_started_at = now
+                    last_synthetic_sample_at = now
                 elif ev_type == EV_SYN:
                     continue
     except Exception as exc:

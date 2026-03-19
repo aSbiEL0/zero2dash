@@ -211,6 +211,29 @@ None
 
 ---
 
+DECISION ID: D-014
+Status: ACTIVE
+
+Topic:
+Touch remediation scope
+
+Decision:
+Treat the remaining Pi interaction issues as one touch-contract repair spanning the shell, Dashboard rotator, Night blackout path, and calibration layer.
+
+Reason:
+Pi smoke testing showed that the current failures are not isolated widget bugs. The shell and child apps disagree about touch event shapes, coordinate mapping, and runtime ownership, so point fixes would keep reintroducing regressions.
+
+Implications:
+- `main_menu_1` must route to `dashboards_menu` before launching Dashboard/Night children
+- child apps launched by the shell must receive an explicit parent-shell return contract
+- ADS7846 fallback handling must be consistent across all active touch readers
+- touch calibration must become operator-regenerable rather than hardcoded only
+
+Supersedes:
+None
+
+---
+
 ## Archive Note
 
 - Previous-team decision logs are archive material only.

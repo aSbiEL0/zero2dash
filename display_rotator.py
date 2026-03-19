@@ -41,6 +41,7 @@ DEFAULT_FBDEV = "/dev/fb1"
 BASE_DIR = Path(__file__).resolve().parent
 BOOT_SELECTOR_SCRIPT = BASE_DIR / "boot" / "boot_selector.py"
 BOOT_SELECTOR_SERVICE = os.environ.get("ROTATOR_BOOT_SELECTOR_SERVICE", "boot-selector.service").strip() or "boot-selector.service"
+PARENT_SHELL_MODE_REQUEST_PATH = os.environ.get("BOOT_SELECTOR_MODE_REQUEST_PATH", "").strip()
 
 
 
@@ -126,6 +127,32 @@ def launch_page(script_path: str) -> subprocess.Popen[bytes]:
 
 
 def activate_boot_selector() -> int:
+    if os.environ.get("ZERO2DASH_PARENT_SHELL", "").strip():
+        if not PARENT_SHELL_MODE_REQUEST_PATH:
+            print("[rotator] Parent shell mode request path is missing.", file=sys.stderr, flush=True)
+            return 1
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-u",
+                str(BOOT_SELECTOR_SCRIPT),
+                "--request-mode",
+                "menu",
+                "--mode-request-path",
+                PARENT_SHELL_MODE_REQUEST_PATH,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=str(BASE_DIR),
+        )
+        if result.returncode == 0:
+            print("[rotator] Long press detected; requested menu from parent shell.", flush=True)
+            return 0
+        stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        print(f"[rotator] Failed to request menu from parent shell: {stderr}", file=sys.stderr, flush=True)
+        return result.returncode
+
     running_under_systemd = bool(os.environ.get("INVOCATION_ID", "").strip())
     if running_under_systemd:
         result = subprocess.run(["systemctl", "start", BOOT_SELECTOR_SERVICE], check=False, capture_output=True, text=True)
