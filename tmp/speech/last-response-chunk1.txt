@@ -1,0 +1,36 @@
+Shell Repair and Theme-Backed Menu Rebuild.
+
+Summary.
+Treat PLAN dot M D as the active target contract. This overrides stale coordination text that still says rebuild-plan dot M D is authoritative.
+
+Do not start selector implementation from the current shell UI. First restore repo integrity. The dashboards path is broken by unresolved merge markers in display_rotator dot py, display_layout dot py, and modules slash trams slash display dot py.
+
+Preserve the working runtime contracts already present in boot slash boot_selector dot py: request-file mode switching, graceful-then-kill child reclaim, menu, dashboards, photos, and night modes, and display_rotator dot py as the dashboards entrypoint.
+
+Replace only the selector and menu model. Move from the current code-rendered paged tile UI to a theme-backed screen-state model driven by themes slash star assets and explicit touch maps.
+
+Repo reality map.
+Branch head is 6249094 on codex slash architectuer-remediate. The commit message says themed assets were added, but runtime wiring is not implemented.
+
+Live shell behavior is still the old paged selector in boot slash boot_selector dot py. Page 0 is Dashboards, Info, Keypad, and Shutdown. Page 1 is Photos only.
+
+The real theme asset contract exists on disk under themes slash default, themes slash comic, and themes slash steele. Each provides mainmenu1 dot png, mainmenu2 dot png, day-night dot png, themes dot png, settings dot png, stats dot png, yes-no dot png, keypad dot png, granted dot gif, and denied dot gif.
+
+Old selector assets are still live under boot: mainmenu dot png, day-night dot png, yes-no dot png, keypad dot png, granted dot gif, denied dot gif, credits dot gif, and startup dot gif.
+
+Themes slash default slash 1 dot png and themes slash steele slash 1 dot png are extra drift and should stay unbound in this slice.
+
+Current automated coverage is only 13 tests across rotator, framebuffer, and photos. There are no selector, router, or theme tests.
+
+The current shell environment cannot run Python from path, so implementation must assume local verification may need an explicit interpreter path or a later Pi or dev-shell run.
+
+Contract risks and contradictions.
+There is a source-of-truth conflict. Coordination files say rebuild-plan dot M D is active, but operator instructions plus AGENTS dot M D make PLAN dot M D authoritative. Implementation must update coordination files first to remove that contradiction.
+
+There is a plan and runtime mismatch. Boot slash boot_selector dot py uses geometry-driven paged tiles, not theme-backed full-screen states, left-strip routing, theme persistence, settings and status screens, or I S S placeholder behavior.
+
+There is a rotator regression risk. Resolving display_rotator dot py by blindly keeping extracted rotator dot touch would lose long-press main-menu behavior unless that command is restored explicitly.
+
+There is a dashboard dependency risk. Even after rotator cleanup, conflicted display_layout dot py and modules slash trams slash display dot py can still break a dashboard page and trigger backoff or quarantine.
+
+There is also a validation gap. Selector refactor is high risk because there is no current boot slash boot_selector dot py test harness.

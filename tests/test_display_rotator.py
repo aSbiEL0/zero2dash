@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import types
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -35,6 +36,43 @@ def _load_module(name: str, relative_path: str):
 
 
 display_rotator = _load_module("display_rotator_test", "display_rotator.py")
+rotator_touch = _load_module("rotator_touch_test", "rotator/touch.py")
+
+
+def _touch_event(ev_type: int, ev_code: int, ev_value: int) -> bytes:
+    return rotator_touch.INPUT_EVENT_STRUCT.pack(0, 0, ev_type, ev_code, ev_value)
+
+
+def _touch_stream(*events: tuple[int, int, int]) -> list[bytes]:
+    return [_touch_event(*event) for event in events]
+
+
+class _FakeInputFile:
+    def __init__(self, payloads: list[bytes]) -> None:
+        self._payloads = payloads
+
+    def read(self, size: int) -> bytes:
+        if self._payloads:
+            return self._payloads.pop(0)
+        return b""
+
+    def __enter__(self) -> "_FakeInputFile":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
+class _CommandRecorder:
+    def __init__(self, stop_evt: threading.Event, stop_on: str) -> None:
+        self.stop_evt = stop_evt
+        self.stop_on = stop_on
+        self.commands: list[str] = []
+
+    def put(self, item: str) -> None:
+        self.commands.append(item)
+        if item == self.stop_on:
+            self.stop_evt.set()
 
 
 class DisplayRotatorTests(unittest.TestCase):
@@ -149,6 +187,68 @@ class DisplayRotatorTests(unittest.TestCase):
             self.assertEqual(rotator_config.parse_quarantine_failure_threshold(), 1)
             self.assertEqual(rotator_config.parse_quarantine_cycles(), 1)
             self.assertEqual(rotator_config.parse_backoff_max_secs(), 1)
+
+    def test_touch_worker_emits_main_menu_after_long_press(self) -> None:
+        fake_input = _FakeInputFile(
+            _touch_stream(
+                (rotator_touch.EV_ABS, rotator_touch.ABS_X, 12),
+                (rotator_touch.EV_ABS, rotator_touch.ABS_Y, 34),
+                (rotator_touch.EV_KEY, rotator_touch.BTN_TOUCH, 1),
+                (rotator_touch.EV_KEY, rotator_touch.BTN_TOUCH, 0),
+            )
+        )
+        stop_evt = threading.Event()
+        commands = _CommandRecorder(stop_evt, "MAIN_MENU")
+
+        with patch.object(rotator_touch, "select_touch_device", return_value="/dev/input/event0"), \
+            patch.object(rotator_touch.touch_calibration, "applies_to", return_value=False), \
+            patch.object(rotator_touch, "detect_touch_width", return_value=(100, 0)), \
+            patch.object(rotator_touch.select, "select", side_effect=lambda *_args, **_kwargs: ([fake_input], [], [])), \
+            patch("builtins.open", return_value=fake_input), \
+            patch.object(rotator_touch.time, "monotonic", side_effect=[0.0, 3.5]):
+            thread = threading.Thread(
+                target=rotator_touch.touch_worker,
+                args=(commands, stop_evt, 100, 0.2),
+                daemon=True,
+            )
+            thread.start()
+            thread.join(timeout=1.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(commands.commands, ["MAIN_MENU"])
+
+    def test_touch_worker_still_emits_toggle_screen_on_double_tap(self) -> None:
+        fake_input = _FakeInputFile(
+            _touch_stream(
+                (rotator_touch.EV_ABS, rotator_touch.ABS_X, 12),
+                (rotator_touch.EV_ABS, rotator_touch.ABS_Y, 34),
+                (rotator_touch.EV_KEY, rotator_touch.BTN_TOUCH, 1),
+                (rotator_touch.EV_KEY, rotator_touch.BTN_TOUCH, 0),
+                (rotator_touch.EV_ABS, rotator_touch.ABS_X, 12),
+                (rotator_touch.EV_ABS, rotator_touch.ABS_Y, 34),
+                (rotator_touch.EV_KEY, rotator_touch.BTN_TOUCH, 1),
+                (rotator_touch.EV_KEY, rotator_touch.BTN_TOUCH, 0),
+            )
+        )
+        stop_evt = threading.Event()
+        commands = _CommandRecorder(stop_evt, "TOGGLE_SCREEN")
+
+        with patch.object(rotator_touch, "select_touch_device", return_value="/dev/input/event0"), \
+            patch.object(rotator_touch.touch_calibration, "applies_to", return_value=False), \
+            patch.object(rotator_touch, "detect_touch_width", return_value=(100, 0)), \
+            patch.object(rotator_touch.select, "select", side_effect=lambda *_args, **_kwargs: ([fake_input], [], [])), \
+            patch("builtins.open", return_value=fake_input), \
+            patch.object(rotator_touch.time, "monotonic", side_effect=[0.0, 0.1, 0.2, 0.3]):
+            thread = threading.Thread(
+                target=rotator_touch.touch_worker,
+                args=(commands, stop_evt, 100, 0.2),
+                daemon=True,
+            )
+            thread.start()
+            thread.join(timeout=1.0)
+
+        self.assertFalse(thread.is_alive())
+        self.assertIn("TOGGLE_SCREEN", commands.commands)
 
 
 if __name__ == "__main__":

@@ -271,30 +271,10 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     body_font = _fit_font("Rochdale Town Centre", width_limit=LAYOUT_2_1.left.width, initial_size=22, min_size=22)
     mins_font = _fit_font("27min", width_limit=LAYOUT_2_1.right.width, initial_size=22, min_size=22)
     message_font = _fit_font("Timetable unavailable", width_limit=LAYOUT_2_1.body.width, initial_size=22, min_size=22)
-<<<<<<< HEAD
-    status = _cache_status(cache)
-    if status != "ok":
-        message = _ellipsize_text("Timetable unavailable", message_font, LAYOUT_2_1.body.width)
-        draw.text(
-            (aligned_text_x(LAYOUT_2_1.body, message_font, message, "left"), centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))),
-            message,
-            font=message_font,
-            fill=white,
-        )
-    elif not departures:
-        message = _ellipsize_text("No more trams today", message_font, LAYOUT_2_1.body.width)
-        draw.text(
-            (aligned_text_x(LAYOUT_2_1.body, message_font, message, "left"), centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))),
-            message,
-            font=message_font,
-            fill=white,
-        )
-=======
     message = _departure_message(status, departures)
     if message is not None:
         message = _ellipsize_text(message, message_font, LAYOUT_2_1.body.width)
         draw.text((LAYOUT_2_1.body.left, centred_text_y(message_font, message, LAYOUT_2_1.row_centre_y(1))), message, font=message_font, fill=white)
->>>>>>> origin/main
     else:
         for index, departure in enumerate(departures):
             row_centre = LAYOUT_2_1.row_centre_y(index)

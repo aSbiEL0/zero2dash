@@ -1,20 +1,22 @@
 # Tasks
 
-This file tracks active work assignments for the remediation rebuild.
+This file tracks active work assignments for the shell repair and asset-backed menu rebuild.
+`PLAN.md` is the only execution source of truth. This file is a progress ledger for the current run only.
 
 Rules:
-- Only Merlin assigns new tasks.
-- Engineers update status only.
-- Keep tasks bounded and merge-safe.
-- Do not expand scope to solve adjacent problems.
+- Mouser assigns and re-sequences tasks.
+- Engineers update status for their own stream.
+- Keep tasks bounded, merge-safe, and reversible.
+- Do not expand scope beyond `PLAN.md` without an operator decision.
+- Archive entries from previous agent teams are historical context only and are not authoritative.
 
 ---
 
 ## Task Template
 
-TASK ID: R-XXX  
-Agent:  
-Status: OPEN | IN_PROGRESS | BLOCKED | COMPLETE  
+TASK ID: R-XXX
+Agent:
+Status: OPEN | IN_PROGRESS | BLOCKED | COMPLETE
 
 Objective:
 <clear objective>
@@ -41,263 +43,179 @@ Dependencies:
 
 ## Active Tasks
 
-TASK ID: R-007  
-Agent: Merlin  
-Status: OPEN  
+TASK ID: R-013
+Agent: Curator
+Status: IN_PROGRESS
 
 Objective:
-Audit and normalize failure semantics so genuine runtime and refresh failures return non-zero consistently without weakening existing rotator backoff or quarantine protection.
+Update repo-facing documentation and the GitHub wiki so they reflect the now-landed shell repair and asset-backed menu rebuild accurately.
 
 Allowed files:
-- `display_rotator.py`
-- `modules/*`
-- relevant tests
+- `README.md`
+- docs/wiki working files created for the update
 - `coordination/*`
 
 Forbidden files:
-- `boot/*`
-- menu/UI redesign files
-- unrelated assets
-
-Deliverables:
-- bounded task split for implementation agents
-- current failure-semantics gap summary
-- updated coordination state
-
-Acceptance criteria:
-- remaining failure-semantics work is explicitly scoped
-- active gaps are identified before more feature work starts
-- coordination files clearly separate completed rebuild slices from pending work
-
-Dependencies:
-- `R-001`
-- `R-002`
-- `R-003`
-- `R-004`
-- `R-005`
-
----
-
-TASK ID: R-008  
-Agent: Merlin  
-Status: COMPLETE  
-
-Objective:
-Produce a concise current-state assessment of the software and the remaining areas that require Pi validation or technical review before the rebuild can be closed.
-
-Allowed files:
-- `coordination/status.md`
-- `coordination/tasks.md`
-- `rebuild-plan.md`
-
-Forbidden files:
 - runtime code
-- `boot/*`
-- `systemd/*`
-
-Deliverables:
-- current-state summary
-- explicit review/watch list
-- cleaned coordination references
-
-Acceptance criteria:
-- operator can see what is done, what is pending, and what needs checking next
-- completed rebuild tasks are not mixed into the active queue
-
-Dependencies:
-- `R-007`
-
----
-
-## Completed Tasks
-TASK ID: R-000  
-Agent: Merlin  
-Status: COMPLETE  
-
-Objective:
-Reset the repo control plane around the remediation rebuild by replacing stale planning artifacts, cleaning live coordination files, and removing obvious transient clutter.
-
-Allowed files:
-- `rebuild-plan.md`
-- `PLAN.md`
-- `AGENTS.md`
-- `coordination/*`
-- `.gitignore`
-
-Forbidden files:
-- runtime code
-- `systemd/*`
-- `modules/*`
 - tests
+- `systemd/*`
 
 Deliverables:
-- cleanup of planning and coordination artifacts
-- updated repo-level instructions
-- summary of changes and next tasks
+- refreshed repo documentation
+- prepared GitHub wiki updates
+- publish-ready wiki repo update once Pi smoke validation confirms runtime behavior
+- concise operator-facing summary of doc changes
 
 Acceptance criteria:
-- remediation plan is the active execution plan
-- coordination files no longer reflect obsolete shell-split task state
-- contaminated status transcript is replaced with a concise live status summary
+- repo docs describe the real current shell, rotator, and test baseline
+- wiki content matches `PLAN.md`-aligned runtime behavior
+- remaining Pi-only validation gaps are documented explicitly
+- remote publication waits until Pi smoke confirmation closes the last validation gate
+
+Dependencies:
+- `R-009`
+- `R-010`
+- `R-011`
+- `R-012`
+
+---
+
+TASK ID: R-009
+Agent: Mouser
+Status: COMPLETE
+
+Objective:
+Re-lock the repo control plane to `PLAN.md`, replace stale rebuild coordination state, sequence the current work, and manage merge order across Rotor, Switchboard, and Sentinel.
+
+Allowed files:
+- `coordination/*`
+
+Forbidden files:
+- runtime code
+- `systemd/*`
+
+Deliverables:
+- updated coordination files
+- dependency-ordered execution tracking
+- merge gate decisions
+
+Acceptance criteria:
+- `PLAN.md` is recorded as the active source of truth
+- active blockers and assignments reflect the real repo state
+- merge order is explicit before cross-stream integration
 
 Dependencies:
 - none
 
-TASK ID: R-001  
-Agent: Relay  
+---
+
+TASK ID: R-010
+Agent: Rotor
 Status: COMPLETE
 
 Objective:
-Continue decomposing `display_rotator.py` by extracting touch handling and screen-power control into internal rotator modules without changing the dashboards entrypoint contract.
+Repair the broken dashboards runtime by resolving committed merge-conflict residue in the rotator path while preserving current runtime contracts, including backoff/quarantine behavior and long-press return to the shell.
 
 Allowed files:
 - `display_rotator.py`
+- `display_layout.py`
+- `modules/trams/display.py`
 - `rotator/*`
 - `tests/test_display_rotator.py`
-
-Forbidden files:
-- `boot/*`
-- `systemd/*`
-- `modules/photos/*`
-- non-rotator modules
-
-Deliverables:
-- implementation
-- hardware-free validation results
-- summary of compatibility impact
-
-Acceptance criteria:
-- touch logic no longer lives inline in the main rotator control path
-- screen-power logic no longer lives inline in the main rotator control path
-- `display_rotator.py` remains the supported dashboards entrypoint
-- behavior remains compatible with existing dashboard launch and navigation flow
-
-Dependencies:
-- `616c169`
-
-TASK ID: R-002  
-Agent: Iris  
-Status: COMPLETE
-
-Objective:
-Finish consolidating framebuffer and RGB565 handling by migrating remaining image-producing paths to `framebuffer.py` and removing duplicate conversion helpers.
-
-Allowed files:
-- `framebuffer.py`
-- `modules/*`
-- `tests/test_framebuffer.py`
-
-Forbidden files:
-- `boot/*`
-- `systemd/*`
-- `display_rotator.py`
-
-Deliverables:
-- implementation
-- migration summary
-- hardware-free validation results
-
-Acceptance criteria:
-- framebuffer write helpers are single-source for supported module paths
-- duplicate RGB565 helpers are removed or reduced to compatibility wrappers only where required
-- tests cover payload correctness and basic write-path validation
-
-Dependencies:
-- `616c169`
-
-TASK ID: R-003  
-Agent: Forge  
-Status: COMPLETE
-
-Objective:
-Audit and harden service/runtime boundaries so refresh jobs do not depend on obsolete foreground-service assumptions, the service privilege model is explicit, and shell-facing integration follows the operator-selected stop/reclaim and request-file contracts.
-
-Allowed files:
-- `systemd/*`
-- `README.md`
-
-Forbidden files:
-- `boot/*`
-- `display_rotator.py`
-- `modules/*`
-
-Deliverables:
-- implementation
-- service interaction notes
-- rollback notes
-
-Acceptance criteria:
-- refresh/update services do not depend on legacy foreground runtime assumptions
-- normal foreground ownership remains explicit and non-competing
-- service-user and device-access expectations are documented if changed
-
-Dependencies:
-- `R-001`
-- `D-006`
-- `D-007`
-
-TASK ID: R-004  
-Agent: Quill  
-Status: COMPLETE
-
-Objective:
-Bring the docs in line with the remediation rebuild by documenting the shell-first baseline, extracted rotator architecture, framebuffer layer, validation strategy, and remaining risks.
-
-Allowed files:
-- `README.md`
-- `AGENTS.md`
 - `coordination/*`
 
 Forbidden files:
-- runtime code
-- tests
+- `boot/*`
 - `systemd/*`
+- unrelated module trees
 
 Deliverables:
-- documentation updates
-- validation matrix
-- operator guidance
+- conflict-free runtime files
+- restored rotator touch contract for `MAIN_MENU`
+- bounded regression coverage for repaired rotator behavior
+
+Validation:
+- `C:\Users\Default.DESKTOP-MR88P09\AppData\Local\Programs\Python\Python313\python.exe -m py_compile display_rotator.py display_layout.py modules\trams\display.py rotator\touch.py tests\test_display_rotator.py`
+- `C:\Users\Default.DESKTOP-MR88P09\AppData\Local\Programs\Python\Python313\python.exe -m unittest tests.test_display_rotator`
+- `C:\Users\Default.DESKTOP-MR88P09\AppData\Local\Programs\Python\Python313\python.exe modules\trams\display.py --self-test`
 
 Acceptance criteria:
-- docs describe the real current runtime and the remediation roadmap
-- validation guidance matches reviewed code, not speculative behavior
-- feature ideas remain clearly out of scope
+- no merge markers remain in the allowed files
+- `display_rotator.py` imports cleanly again
+- long-press return path is preserved
+- non-zero early exits still feed backoff/quarantine accounting
 
 Dependencies:
-- `R-001`
-- `R-002`
-- `R-003`
+- `R-009`
 
-TASK ID: R-005  
-Agent: Atlas  
-Status: COMPLETE  
+---
+
+TASK ID: R-011
+Agent: Switchboard
+Status: COMPLETE
 
 Objective:
-Lock down the shell app registry, lifecycle contract, and mode-switch interface so downstream streams can depend on stable Shell A contracts without regressing existing entrypoint behavior.
+Replace the old paged shell selector with the theme-backed screen-state shell described in `PLAN.md` while preserving shell ownership, mode switching, and child lifecycle contracts.
 
 Allowed files:
 - `boot/boot_selector.py`
-- coordination/decisions.md
+- shell-local helper files if created under `boot/`
+- `coordination/*`
 
 Forbidden files:
 - `display_rotator.py`
+- `systemd/*`
 - `modules/*`
+
+Deliverables:
+- theme discovery and validation
+- theme-backed routing/state model
+- immediate theme persistence and in-session root-page restore
+
+Acceptance criteria:
+- shell uses real assets from `themes/*`
+- `menu`, `dashboards`, `photos`, and `night` mode requests still work
+- old generic selector assets are no longer required for runtime routing
+- NASA ISS remains a shell-owned placeholder
+
+Dependencies:
+- `R-009`
+- `R-010`
+
+---
+
+TASK ID: R-012
+Agent: Sentinel
+Status: COMPLETE
+
+Objective:
+Add regression coverage for the repaired rotator path and the rebuilt selector/router so the new shell and dashboard contracts stop drifting silently.
+
+Allowed files:
+- `tests/*`
+- `coordination/*`
+
+Forbidden files:
+- runtime code except narrow test seams approved by Mouser
 - `systemd/*`
 
 Deliverables:
-- documented shell app registry schema (fields + validation) embedded near `AppSpec` or exported helper
-- documented shell lifecycle expectations (start/stop, home gesture handling, child reclaim)
-- documented shell mode-switch request interface (modes, storage path, fallback behavior)
-- delta summary and suggested follow-up blockers/decisions if any contract gaps remain
+- rotator regression tests
+- selector/router/theme tests
+- asset validation assertions
 
 Acceptance criteria:
-- `AppSpec` fields match the required shell registry contract and there is code/comments to enforce them
-- Lifecycle behavior is articulated in code/comments, and helper functions connect those behaviors to actual control flow without altering existing paths
-- Mode-switch interface (request file semantics, `SHELL_MODES`, `handle_mode_request`) is fully described and exercised via existing logic; no new modes are introduced
-- Atlas confirms no additional shell-owned apps beyond the known ones and documents how shell-owned vs child apps behave
+- tests cover `MAIN_MENU`, screen toggle, failure reset, and early-exit failure handling
+- tests cover theme discovery, root-page strip switching, themed routing, credits/keypad flows, and shared `stats.png` behavior
+- tests run without Pi hardware
 
 Dependencies:
-- `R-000`
-- `D-006`
-- `D-007`
+- `R-010`
+- `R-011`
 
+---
+
+## Archive Note
+
+- Previous-team task records are archive material only.
+- They do not define scope, contracts, or acceptance criteria for this run.

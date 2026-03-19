@@ -15,6 +15,7 @@ from pathlib import Path
 import touch_calibration
 
 DOUBLE_TAP_WINDOW_SECS = 0.25
+HOLD_TO_SELECTOR_SECS = float(os.environ.get("ROTATOR_HOLD_TO_SELECTOR_SECS", "3.0"))
 
 # linux/input-event-codes.h
 EV_SYN = 0x00
@@ -214,11 +215,18 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
     last_x = device_touch_min + (device_touch_width // 2)
     last_y = 0
     touch_down = False
+    touch_started_at = 0.0
     last_tap_ts = None
     last_emit = 0.0
 
     def emit_tap(raw_x: int, raw_y: int, now: float) -> None:
         nonlocal last_tap_ts, last_emit
+        if (now - touch_started_at) >= HOLD_TO_SELECTOR_SECS:
+            cmd_q.put("MAIN_MENU")
+            last_tap_ts = None
+            last_emit = now
+            return
+
         if use_calibration:
             relative_x, _screen_y = touch_calibration.map_to_screen(raw_x, raw_y, width=touch_width, height=1)
         else:
@@ -260,6 +268,7 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
                 elif ev_type == EV_KEY and ev_code == BTN_TOUCH:
                     if ev_value == 1:
                         touch_down = True
+                        touch_started_at = time.monotonic()
                     elif ev_value == 0 and touch_down:
                         touch_down = False
                         emit_tap(last_x, last_y, time.monotonic())
@@ -269,6 +278,7 @@ def touch_worker(cmd_q: "queue.Queue[str]", stop_evt: threading.Event, touch_wid
                         emit_tap(last_x, last_y, time.monotonic())
                     elif ev_value >= 0:
                         touch_down = True
+                        touch_started_at = time.monotonic()
                 elif ev_type == EV_SYN:
                     continue
     except Exception as exc:

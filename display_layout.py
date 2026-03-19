@@ -12,15 +12,9 @@ CANVAS_HEIGHT = 240
 HEADER_HEIGHT = 80
 ROW_HEIGHT = 32
 BODY_ROWS = 5
-<<<<<<< HEAD
-SIDE_MARGIN = 20
-BODY_WIDTH = CANVAS_WIDTH - (SIDE_MARGIN * 2)
-TEXT_INSET = 10
-=======
 SIDE_MARGIN = 15
 BODY_WIDTH = CANVAS_WIDTH - (SIDE_MARGIN * 2)
 RIGHT_EXTRA_INSET = 10
->>>>>>> origin/main
 
 
 @dataclass(frozen=True)
@@ -79,25 +73,19 @@ def centred_text_y(font, text: str, centre_y: int) -> int:
 
 
 def _inner_bounds(column: Column) -> tuple[int, int]:
-    inner_width = max(0, column.width - (TEXT_INSET * 2))
-    inner_left = column.left + TEXT_INSET
+    inner_width = max(0, column.width - (RIGHT_EXTRA_INSET * 2))
+    inner_left = column.left + RIGHT_EXTRA_INSET
     return inner_left, inner_left + inner_width
 
 
 def aligned_text_x(column: Column, font, text: str, align: CanvasAlign) -> int:
     width = text_width(font, text)
-    inner_left, inner_right = _inner_bounds(column)
+    inner_left, _inner_right = _inner_bounds(column)
     if align == "left":
         return inner_left
     if align == "right":
-<<<<<<< HEAD
-        return inner_right - width
-    inner_centre = inner_left + ((inner_right - inner_left) // 2)
-    return inner_centre - (width // 2)
-=======
         return column.right - width - RIGHT_EXTRA_INSET
     return column.centre_x - (width // 2)
->>>>>>> origin/main
 
 
 def fit_font(text: str, *, width_limit: int, preferred_size: int, min_size: int, loader, **loader_kwargs):

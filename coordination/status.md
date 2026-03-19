@@ -1,47 +1,51 @@
 # Project Status
 
-Last updated: 2026-03-18
+Last updated: 2026-03-19
 
-## Current Software State
+`PLAN.md` is the only execution source of truth. This file is a current-run status summary only.
 
-- The active execution plan is `rebuild-plan.md`; `PLAN.md` is historical only.
-- The software baseline is shell-first:
-  - `boot/boot_selector.py` is the long-running shell
-  - `display_rotator.py` remains the dashboards entrypoint
-  - `modules/photos/slideshow.py` remains the Photos entrypoint
-- Shared framebuffer logic exists in `framebuffer.py`.
-- Rotator internals have been split out into `rotator/*`, including touch, power, config, backoff, discovery, and defaults.
-- Rebuild documentation and operator guidance have been refreshed to describe the remediation architecture rather than the older migration.
+## Current Execution State
 
-## Rebuild Work Already Landed
+- The active execution plan is `PLAN.md`.
+- `boot/boot_selector.py` remains the parent shell.
+- `display_rotator.py` remains the dashboards child entrypoint.
+- `modules/photos/slideshow.py` remains the Photos child entrypoint.
+- Shell modes remain `menu`, `dashboards`, `photos`, and `night`.
 
-- `R-000` control-plane cleanup is complete.
-- `R-001` rotator touch and screen-power extraction is complete.
-- `R-002` framebuffer consolidation is complete.
-- `R-003` service-boundary hardening and documentation pass is complete.
-- `R-004` docs and validation guidance refresh is complete.
-- `R-005` shell contract documentation is complete.
+## Current Repo Reality
 
-## What Still Needs Looking At
+- The selector runtime now uses the theme-backed screen model from `PLAN.md`.
+- Real theme assets exist under `themes/default`, `themes/comic`, and `themes/steele`.
+- Shared non-theme boot assets remain `boot/startup.gif` and `boot/credits.gif`.
+- The rotator/dashboard conflict residue has been removed from `display_rotator.py`, `display_layout.py`, and `modules/trams/display.py`.
+- `rotator/touch.py` again emits `MAIN_MENU` on long press.
+- `boot/boot_selector.py` now discovers themes from `themes/*`, persists only the selected theme, and routes through explicit screen states instead of the old paged tile UI.
 
-- Failure semantics are still not normalized across the runtime. Genuine render and refresh failures do not yet fail consistently enough.
-- Pi validation is still required for hardware-owned behavior:
-  - dashboard launch flow
-  - Photos touch navigation and exit behavior
-  - screen-power behavior
-  - service interaction under the real selector/menu baseline
-- The current selector/menu baseline needs explicit review so the operator can separate accepted baseline behavior from future redesign work.
-- Service/runtime coupling should be rechecked on hardware even after the documentation hardening pass.
-- Some test coverage still needs extending where the extracted logic now makes that practical.
+## Active Workstreams
 
-## Operator-Sealed Decisions
+- `R-013` Curator: complete.
+- `R-009` Mouser: coordination reset, dependency tracking, merge control.
+- `R-010` Rotor: complete.
+- `R-011` Switchboard: complete.
+- `R-012` Sentinel: complete.
 
-- Shell child reclaim is graceful-then-kill, with framebuffer reclaim only after child exit.
-- Shell mode switching uses a request-file transport.
-- Full boot menu redesign is separate follow-up scope, not an implicit rebuild deliverable.
+## Merge Order
 
-## Scope Discipline
+1. `R-009` coordination sync
+2. `R-010` rotator/dashboard repair
+3. `R-011` shell rewrite
+4. `R-012` regression coverage
+5. Mouser integration pass
 
-- The rebuild is still a remediation and hardening pass, not feature expansion.
-- Feature ideas remain tracked in `coordination/ideas.md`.
-- New UI or selector redesign work should only start when explicitly promoted into its own task slice.
+## Validation Status
+
+- Rotator import/runtime validation passed after merge-conflict cleanup and long-press restoration.
+- Boot selector smoke checks passed for `py_compile` and `--dump-contracts --skip-gif --no-framebuffer`.
+- Hardware-free selector and rotator regression suites now pass.
+- Pi smoke testing is now in progress for touch hardware, framebuffer ownership, and real service interaction.
+- Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
+
+## Archive Note
+
+- Older coordination entries from the previous agent team are historical only.
+- If any archive text conflicts with `PLAN.md`, `PLAN.md` wins without exception.
