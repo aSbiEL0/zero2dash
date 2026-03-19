@@ -51,7 +51,7 @@
 - Modify: `coordination/status.md`
 - Modify: `coordination/decisions.md`
 - Modify: `coordination/blockers.md`
-- Create: `docs/plans/2026-03-19-shell-owned-apps-and-layout-stabilization.md`
+- Create: `docs/plans/shell-owned-apps-plan.md`
 
 **Step 1: Replace the archived active plan**
 
@@ -81,7 +81,7 @@ Add decisions for:
 **Step 4: Commit**
 
 ```bash
-git add PLAN.md docs/plans/2026-03-19-shell-owned-apps-and-layout-stabilization.md coordination/tasks.md coordination/status.md coordination/decisions.md coordination/blockers.md
+git add PLAN.md docs/plans/shell-owned-apps-plan.md coordination/tasks.md coordination/status.md coordination/decisions.md coordination/blockers.md
 git commit -m "docs: reopen planning for shell-owned app stabilization"
 ```
 
@@ -564,7 +564,7 @@ Use these files for layout tuning:
 - Currency local content width: `modules/currency/currency-rate.py`
 - Photos logo/crop tuning: `modules/photos/display.py`
 
-Plan complete and saved to `docs/plans/2026-03-19-shell-owned-apps-and-layout-stabilization.md`. Two execution options:
+Plan complete and saved to `docs/plans/shell-owned-apps-plan.md`. Two execution options:
 
 **1. Subagent-Driven (this session)** - I dispatch a fresh subagent per implementation task, review between tasks, and integrate incrementally.
 

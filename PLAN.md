@@ -7,7 +7,7 @@ This file supersedes the archived shell-repair plan.
 
 The active execution plan is:
 
-- `docs/plans/2026-03-19-shell-owned-apps-and-layout-stabilization.md`
+- `docs/plans/shell-owned-apps-plan.md`
 
 ## Scope
 
