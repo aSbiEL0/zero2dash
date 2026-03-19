@@ -43,8 +43,8 @@ Last updated: 2026-03-19
 - Boot selector smoke checks passed for `py_compile` and `--dump-contracts --skip-gif --no-framebuffer`.
 - Hardware-free selector and rotator regression suites now pass.
 - Pi smoke testing is now in progress for touch hardware, framebuffer ownership, and real service interaction.
-- Current Pi note: the original GIF/framebuffer crash is fixed locally and Pi testing has advanced through successive shell-startup faults.
-- Latest Pi note: after the theme-persistence fix, a manual Pi run with `--skip-gif` exposed an undefined `_screen_image` call in the first shell render path. A follow-up hotfix now restores the helper and moves theme-state default storage to a user-scoped path instead of the shared temp file.
+- Current Pi note: the shell now boots to the themed main menu on device.
+- Latest Pi note: touch probe selects `/dev/input/event0` (`ADS7846 Touchscreen`), but the device reports `BTN_TOUCH=no`. A selector patch is now in place locally to accept `ABS_X/ABS_Y + EV_SYN` tap samples for this controller class.
 - Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
 
 ## Archive Note

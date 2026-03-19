@@ -55,6 +55,25 @@ class _WriteFrameOnlyFramebuffer:
         self.frames.append(image)
 
 
+class _FakeInputFile:
+    def __init__(self, events: list[tuple[int, int, int]]) -> None:
+        payload = bytearray()
+        for ev_type, ev_code, ev_value in events:
+            payload.extend(boot_selector.INPUT_EVENT_STRUCT.pack(0, 0, ev_type, ev_code, ev_value))
+        self._payload = bytes(payload)
+        self._offset = 0
+
+    def read(self, size: int) -> bytes:
+        if self._offset >= len(self._payload):
+            return b""
+        chunk = self._payload[self._offset : self._offset + size]
+        self._offset += size
+        return chunk
+
+    def close(self) -> None:
+        return None
+
+
 class BootSelectorTests(unittest.TestCase):
     def _touch_theme(self, root: Path, theme_id: str, *, missing: set[str] | None = None) -> Path:
         missing = missing or set()
@@ -218,6 +237,26 @@ class BootSelectorTests(unittest.TestCase):
         boot_selector.write_framebuffer_image(framebuffer, object())
 
         self.assertEqual(len(framebuffer.frames), 1)
+
+    def test_touch_reader_accepts_abs_syn_fallback_without_btn_touch(self) -> None:
+        fake_input = _FakeInputFile(
+            [
+                (boot_selector.EV_ABS, boot_selector.ABS_X, 10),
+                (boot_selector.EV_ABS, boot_selector.ABS_Y, 20),
+                (boot_selector.EV_SYN, 0, 0),
+            ]
+        )
+
+        with mock.patch.object(boot_selector, "touch_probe", return_value=("/dev/input/event0", "test")), \
+            mock.patch.object(boot_selector.touch_calibration, "applies_to", return_value=False), \
+            mock.patch.object(boot_selector, "detect_touch_width", return_value=(320, 0)), \
+            mock.patch.object(boot_selector.select, "select", side_effect=lambda *_args, **_kwargs: ([fake_input], [], [])), \
+            mock.patch("builtins.open", return_value=fake_input), \
+            mock.patch.object(boot_selector.time, "monotonic", return_value=1.0):
+            reader = boot_selector.TouchReader(320, 240)
+            action = reader.read_action(lambda x, y: f"{x},{y}", ready_after=0.0, touch_debounce_secs=0.0, timeout_secs=None)
+
+        self.assertEqual(action, "10,20")
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@ from rotator.touch import (
     BTN_TOUCH,
     EV_ABS,
     EV_KEY,
+    EV_SYN,
     INPUT_EVENT_STRUCT,
     detect_touch_width,
     touch_probe,
@@ -381,6 +382,8 @@ class TouchReader:
         last_y = self.screen_height // 2
         touch_down = False
         last_emit = 0.0
+        saw_explicit_touch_state = False
+        pending_abs_sample = False
         deadline = None if timeout_secs is None else time.monotonic() + timeout_secs
         while not STOP_REQUESTED:
             wait_secs = 0.2 if deadline is None else max(0.0, min(0.2, deadline - time.monotonic()))
@@ -397,11 +400,14 @@ class TouchReader:
             _sec, _usec, ev_type, ev_code, ev_value = INPUT_EVENT_STRUCT.unpack(raw)
             if ev_type == EV_ABS and ev_code in (ABS_X, ABS_MT_POSITION_X):
                 last_x = ev_value
+                pending_abs_sample = True
                 continue
             if ev_type == EV_ABS and ev_code in (ABS_Y, ABS_MT_POSITION_Y):
                 last_y = ev_value
+                pending_abs_sample = True
                 continue
             if ev_type == EV_KEY and ev_code == BTN_TOUCH:
+                saw_explicit_touch_state = True
                 if ev_value == 1:
                     touch_down = True
                 elif ev_value == 0 and touch_down:
@@ -415,6 +421,7 @@ class TouchReader:
                         return action
                 continue
             if ev_type == EV_ABS and ev_code == ABS_MT_TRACKING_ID:
+                saw_explicit_touch_state = True
                 if ev_value >= 0:
                     touch_down = True
                 elif touch_down:
@@ -426,6 +433,16 @@ class TouchReader:
                     if action is not None:
                         last_emit = now
                         return action
+                continue
+            if ev_type == EV_SYN and pending_abs_sample and not saw_explicit_touch_state:
+                pending_abs_sample = False
+                now = time.monotonic()
+                if now < ready_after or (now - last_emit) < touch_debounce_secs:
+                    continue
+                action = resolver(*self._map_coordinates(last_x, last_y))
+                if action is not None:
+                    last_emit = now
+                    return action
         return None
 
     def wait_for_home_gesture(self, region: TouchRegion, hold_secs: float, poll_timeout_secs: float) -> bool:

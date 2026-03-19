@@ -84,24 +84,30 @@ Raised by: Mouser
 Status: OPEN
 
 Problem:
-Pi smoke testing has exposed three real startup blockers on device: first a framebuffer API mismatch during GIF playback, then a hard failure when theme-state persistence cannot replace the shared temp-state file, and now an undefined `_screen_image` reference in the first shell render path.
+Pi smoke testing has cleared the shell startup blockers, but touch input is still non-responsive on the live menu. The remaining device-side blocker is now touch acquisition: no usable touch events are reaching the shell, or the wrong input device/calibration is being applied.
 
 Impact:
 - blocks closing Pi validation
 - blocks final wiki publication, because runtime confirmation on device is still incomplete
 
 Possible cause:
-The local shell rewrite assumed a framebuffer method name that does not match the repo's real `framebuffer.py` implementation used on the Pi, treated theme-state persistence as mandatory even when the state file is not writable by the current user, and shipped a render-path helper call without the helper implementation.
+Likely causes are:
+- touch probe is auto-selecting the wrong `/dev/input/event*` device
+- the service user cannot read the chosen input device
+- `touch_calibration.py` is bound to the wrong event device and is remapping coordinates incorrectly
+- the shell reader only emitted taps from `BTN_TOUCH` or multitouch tracking IDs, while the Pi probe selected an `ADS7846 Touchscreen` that reports `BTN_TOUCH=no`
 
 Suggested resolution:
-Deploy the selector hotfixes that:
-- write through a shell-local framebuffer compatibility helper accepting either `write_frame()` or `write_image()`
-- default theme persistence to a user-scoped state path and log-and-continue if persistence still fails
-- restore the missing `_screen_image()` helper used by the shell render loop
-Then restart `boot-selector.service` and repeat Pi smoke checks.
+Capture the touch probe result on the Pi, then confirm device permissions and calibration binding:
+- `/usr/bin/python3 -u boot/boot_selector.py --probe-touch`
+- `ls -l /dev/input/event*`
+- `grep -E 'TOUCH_DEVICE|ROTATOR_TOUCH_DEVICE' /etc/systemd/system/boot-selector.service /etc/systemd/system/boot-selector.service.d/* 2>/dev/null`
+If probe selects the wrong device, force the correct one with `TOUCH_DEVICE=/dev/input/eventX`.
+If the probe is correct and the device is `ADS7846`, deploy the selector patch that accepts `ABS_X/ABS_Y + EV_SYN` samples as taps when no explicit touch-state events are present.
 
 Notes:
-This is a Pi-only blocker. The failures are now concretely identified from Pi logs/manual runs:
-- `AttributeError: 'FramebufferWriter' object has no attribute 'write_image'. Did you mean: 'write_frame'?`
-- `PermissionError: [Errno 1] Operation not permitted: '/tmp/zero2dash-shell-theme.tmp' -> '/tmp/zero2dash-shell-theme'`
-- `NameError: name '_screen_image' is not defined`
+This is now a pure Pi-side touch blocker. The shell itself boots to the main menu successfully after the startup fixes. Touch debugging should focus on probe output, input-device permissions, and calibration binding.
+Latest Pi probe:
+- selected `/dev/input/event0`
+- name `ADS7846 Touchscreen`
+- `BTN_TOUCH=no`
