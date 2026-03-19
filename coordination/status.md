@@ -43,6 +43,8 @@ Last updated: 2026-03-19
 - Boot selector smoke checks passed for `py_compile` and `--dump-contracts --skip-gif --no-framebuffer`.
 - Hardware-free selector and rotator regression suites now pass.
 - Pi smoke testing is now in progress for touch hardware, framebuffer ownership, and real service interaction.
+- Current Pi note: `systemctl daemon-reload` plus `systemctl restart boot-selector.service` did not recover the shell on-device; reboot validation is in progress.
+- Latest Pi note: the shell is still not drawing at all after reboot; the device remains on a terminal screen, which points to an early service startup crash before the first framebuffer render.
 - Repo docs are updated, wiki-ready content is prepared under `docs/wiki/`, and remote publication is pending Pi smoke confirmation.
 
 ## Archive Note

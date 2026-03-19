@@ -78,3 +78,26 @@ None. The wiki remote was verified and cloned successfully.
 
 Notes:
 Remote publication is no longer blocked by access. It is intentionally held until Pi smoke confirmation finishes.
+
+BLOCKER ID: B-003
+Raised by: Mouser
+Status: OPEN
+
+Problem:
+Pi smoke testing hit a real service-recovery failure: `systemctl daemon-reload` followed by `systemctl restart boot-selector.service` did not restore the shell successfully.
+
+Impact:
+- blocks closing Pi validation
+- blocks final wiki publication, because runtime confirmation on device is still incomplete
+
+Possible cause:
+Unknown until reboot result and service logs are checked. Possible causes include service/unit drift, startup-time runtime error, or framebuffer/input ownership issues on device.
+
+Suggested resolution:
+Complete the reboot test. If the reboot does not restore the shell cleanly, capture:
+- `systemctl status boot-selector.service --no-pager`
+- `journalctl -u boot-selector.service -n 80 --no-pager`
+- the first failing line or traceback
+
+Notes:
+This is a Pi-only blocker. Hardware-free repo checks are still green. Latest symptom is no shell draw at all after reboot, suggesting an early startup crash.
