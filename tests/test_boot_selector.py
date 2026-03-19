@@ -46,6 +46,14 @@ class _FakeChildManager:
         self.shutdown_calls += 1
 
 
+class _WriteFrameOnlyFramebuffer:
+    def __init__(self) -> None:
+        self.frames = []
+
+    def write_frame(self, image) -> None:
+        self.frames.append(image)
+
+
 class BootSelectorTests(unittest.TestCase):
     def _touch_theme(self, root: Path, theme_id: str, *, missing: set[str] | None = None) -> Path:
         missing = missing or set()
@@ -186,6 +194,13 @@ class BootSelectorTests(unittest.TestCase):
             boot_selector.SHELL_MODE_MENU,
         )
         self.assertEqual(manager.started, [boot_selector.APP_ID_DASHBOARDS])
+
+    def test_write_framebuffer_image_accepts_write_frame_contract(self) -> None:
+        framebuffer = _WriteFrameOnlyFramebuffer()
+
+        boot_selector.write_framebuffer_image(framebuffer, object())
+
+        self.assertEqual(len(framebuffer.frames), 1)
 
 
 if __name__ == "__main__":

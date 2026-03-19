@@ -906,7 +906,7 @@ def playback_gif(
     for frame, duration in frames:
         if STOP_REQUESTED:
             return None
-        framebuffer.write_image(frame)
+        write_framebuffer_image(framebuffer, frame)
         deadline = time.monotonic() + duration
         while not STOP_REQUESTED:
             remaining = deadline - time.monotonic()
@@ -919,6 +919,18 @@ def playback_gif(
             if action is not None:
                 return action
     return None
+
+
+def write_framebuffer_image(framebuffer: FramebufferWriter, image: Image.Image) -> None:
+    write_frame = getattr(framebuffer, "write_frame", None)
+    if callable(write_frame):
+        write_frame(image)
+        return
+    write_image = getattr(framebuffer, "write_image", None)
+    if callable(write_image):
+        write_image(image)
+        return
+    raise AttributeError("Framebuffer object does not expose write_frame() or write_image()")
 
 
 def run_main_screen_shell(
@@ -982,14 +994,14 @@ def run_main_screen_shell(
             if pending_pin_shutdown:
                 child_manager.shutdown()
                 if framebuffer is not None:
-                    framebuffer.write_image(Image.new("RGB", (args.width, args.height), BG))
+                    write_framebuffer_image(framebuffer, Image.new("RGB", (args.width, args.height), BG))
                 return run_shutdown(args.shutdown_command)
             current_screen = session_root_page
             continue
 
         if current_screen in {NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS, ISS_PLACEHOLDER}:
             if framebuffer is not None:
-                framebuffer.write_image(draw_status_screen(shell_images.status_base, current_screen))
+                write_framebuffer_image(framebuffer, draw_status_screen(shell_images.status_base, current_screen))
             action, requested_mode = wait_for_shell_action_or_mode(
                 touch_reader,
                 f"{current_screen} selection",
@@ -1010,7 +1022,7 @@ def run_main_screen_shell(
             continue
 
         if framebuffer is not None:
-            framebuffer.write_image(_screen_image(shell_images, current_screen))
+            write_framebuffer_image(framebuffer, _screen_image(shell_images, current_screen))
         action, requested_mode = wait_for_shell_action_or_mode(
             touch_reader,
             f"{current_screen} selection",
@@ -1080,7 +1092,7 @@ def run_main_screen_shell(
             if action == "confirm":
                 child_manager.shutdown()
                 if framebuffer is not None:
-                    framebuffer.write_image(Image.new("RGB", (args.width, args.height), BG))
+                    write_framebuffer_image(framebuffer, Image.new("RGB", (args.width, args.height), BG))
                 return run_shutdown(args.shutdown_command)
             current_screen = ROOT_MENU_2
             session_root_page = ROOT_MENU_2

@@ -145,6 +145,28 @@ Supersedes:
 
 ---
 
+DECISION ID: D-011
+Status: ACTIVE
+
+Topic:
+Framebuffer API hotfix scope
+
+Decision:
+Keep the Pi startup fix shell-local in `boot/boot_selector.py` by adding a compatibility writer that accepts either `write_frame()` or legacy `write_image()` methods.
+
+Reason:
+The Pi failure is isolated to the selector startup/render path. The shared framebuffer module already exposes the correct `write_frame()` contract, so the smallest safe fix is to adapt the caller instead of widening the framebuffer surface during smoke testing.
+
+Implications:
+- unblocks Pi shell startup without changing `framebuffer.py`
+- preserves compatibility if any selector test doubles still expose `write_image()`
+- keeps the hotfix narrow and reversible
+
+Supersedes:
+None
+
+---
+
 ## Archive Note
 
 - Previous-team decision logs are archive material only.

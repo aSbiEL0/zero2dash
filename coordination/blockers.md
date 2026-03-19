@@ -84,20 +84,18 @@ Raised by: Mouser
 Status: OPEN
 
 Problem:
-Pi smoke testing hit a real service-recovery failure: `systemctl daemon-reload` followed by `systemctl restart boot-selector.service` did not restore the shell successfully.
+Pi smoke testing hit a real service startup failure: `boot_selector.py` crashes during startup GIF playback on the Pi because the shell calls `FramebufferWriter.write_image()`, but the real framebuffer contract only exposes `write_frame()`.
 
 Impact:
 - blocks closing Pi validation
 - blocks final wiki publication, because runtime confirmation on device is still incomplete
 
 Possible cause:
-Unknown until reboot result and service logs are checked. Possible causes include service/unit drift, startup-time runtime error, or framebuffer/input ownership issues on device.
+The local shell rewrite assumed a framebuffer method name that does not match the repo's real `framebuffer.py` implementation used on the Pi.
 
 Suggested resolution:
-Complete the reboot test. If the reboot does not restore the shell cleanly, capture:
-- `systemctl status boot-selector.service --no-pager`
-- `journalctl -u boot-selector.service -n 80 --no-pager`
-- the first failing line or traceback
+Deploy the selector hotfix that writes through a shell-local compatibility helper accepting either `write_frame()` or `write_image()`, then restart `boot-selector.service` and repeat Pi smoke checks.
 
 Notes:
-This is a Pi-only blocker. Hardware-free repo checks are still green. Latest symptom is no shell draw at all after reboot, suggesting an early startup crash.
+This is a Pi-only blocker. The failure is now concretely identified from Pi logs:
+`AttributeError: 'FramebufferWriter' object has no attribute 'write_image'. Did you mean: 'write_frame'?`
