@@ -1,15 +1,15 @@
 {
-  "altitude_km": null,
-  "country_code": "",
+  "altitude_km": 430.25407125016,
+  "country_code": "??",
   "country_name": "",
-  "details_timestamp": 1773935343,
-  "fetched_at": 1773935344,
-  "latitude": 48.6871,
-  "location_label": "International Waters",
-  "longitude": 32.9339,
-  "position_timestamp": 1773935343,
+  "details_timestamp": 1773993588,
+  "fetched_at": 1773993710,
+  "latitude": -43.5845,
+  "location_label": "??",
+  "longitude": -49.6581,
+  "position_timestamp": 1773993709,
   "source": "open-notify",
   "trail": [],
-  "velocity_kmh": null,
-  "visibility": "TBA"
+  "velocity_kmh": 27559.620574711,
+  "visibility": "Eclipsed"
 }

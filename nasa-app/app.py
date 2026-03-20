@@ -1205,6 +1205,7 @@ def render_single_page(page_name: str, pages: list[PageState]) -> Image.Image:
             return page.image
     return pages[0].image
 
+def validate_args(args: argparse.Namespace) -> int | None:
     if args.width <= 0 or args.height <= 0:
         print("Width and height must be positive integers.", file=sys.stderr)
         return 1
@@ -1254,8 +1255,8 @@ def run_self_test() -> int:
     print("[nasa] self-test passed", flush=True)
     return 0
 
-
 def run_preview(args: argparse.Namespace, observer: ObserverConfig, country_map: dict[str, str]) -> int:
+
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
     location, _location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)

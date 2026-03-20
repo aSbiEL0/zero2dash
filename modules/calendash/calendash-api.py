@@ -799,10 +799,10 @@ def render_image(
     bg = Image.open(background_path).convert("RGBA").resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS)
     draw = ImageDraw.Draw(bg)
 
-    font_event = load_font(22)
-    font_date = load_font(22)
-    font_message = load_font(22)
-    font_more = load_font(22)
+    font_event = load_font(21)
+    font_date = load_font(21)
+    font_message = load_font(21)
+    font_more = load_font(21)
     text_fill = (245, 245, 245, 255)
     muted_fill = (190, 190, 190, 255)
 
@@ -811,7 +811,7 @@ def render_image(
         tw = int(draw.textlength(message, font=font_message))
         x = max(LAYOUT_2_1.body.left, LAYOUT_2_1.body.centre_x - (tw // 2))
         y = centred_text_y(font_message, message, LAYOUT_2_1.row_centre_y(2))
-        draw.text((x, y), message, fill=muted_fill, font=font_message)
+        draw.text((x, y - 30 ), message, fill=muted_fill, font=font_message)
     else:
         entries = list(events)
         max_rows = max(1, BODY_ROWS - 1)
