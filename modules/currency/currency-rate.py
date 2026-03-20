@@ -303,7 +303,7 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         suffix_text = "zł"
 
         while True:
-            suffix_font = load_font(max(40, int(rate_size * 0.5)), bold=True)
+            suffix_font = load_font(max(45, int(rate_size * 0.7)), bold=True)
             rate_bbox = draw.textbbox((0, 0), rate_text, font=rate_font)
             suffix_bbox = draw.textbbox((0, 0), suffix_text, font=suffix_font)
             rate_w = rate_bbox[2] - rate_bbox[0]
