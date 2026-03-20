@@ -290,16 +290,16 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     pair_text = "GBP / PLN"
     content_left = (width - CONTENT_COLUMN_WIDTH) // 2
     content_column = type(LAYOUT_HALF.body)(content_left, CONTENT_COLUMN_WIDTH)
-    pair_font = _fit_font(draw, pair_text, width_limit=content_column.width, initial_size=22, bold=True)
-    date_font = _fit_font(draw, display_date, width_limit=content_column.width, initial_size=18, bold=True)
-    pair_y = centred_text_y(pair_font, pair_text, LAYOUT_HALF.row_centre_y(0))
+    pair_font = _fit_font(draw, pair_text, width_limit=content_column.width, initial_size=22, bold=True)         ### TOP ROW SIZE
+    date_font = _fit_font(draw, display_date, width_limit=content_column.width, initial_size=18, bold=True)      ### DATE SIZE 
+    pair_y = centred_text_y(pair_font, pair_text, LAYOUT_HALF.row_centre_y(0))  + 5                                ### TOP ROW POSITION VERTICAL
 
     if status == "ok" and snapshot is not None:
         rate_text = snapshot.display_rate()
-        value_centre_y = LAYOUT_HALF.row_top(1) + ROW_HEIGHT
+        value_centre_y = LAYOUT_HALF.row_top(1) + ROW_HEIGHT + 20
         rate_font = _fit_font(draw, rate_text, width_limit=content_column.width - 40, initial_size=62, bold=True)
-        gap = 0
-        rate_size = getattr(rate_font, "size", 30)
+        gap = 2
+        rate_size = getattr(rate_font, "size", 45)
         suffix_text = "zł"
 
         while True:
@@ -316,7 +316,7 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
 
         value_y = centred_text_y(rate_font, rate_text, value_centre_y)
         suffix_y = centred_text_y(suffix_font, suffix_text, value_centre_y)
-        date_y = centred_text_y(date_font, display_date, LAYOUT_HALF.row_centre_y(3))
+        date_y = centred_text_y(date_font, display_date, LAYOUT_HALF.row_centre_y(3)) + 25                  ### MAIN RATE TEXT POSITION
         start_x = content_column.centre_x - (total_w // 2)
         _draw_text_with_shadow(
             draw,
