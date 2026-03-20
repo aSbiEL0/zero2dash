@@ -291,13 +291,13 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
     content_left = (width - CONTENT_COLUMN_WIDTH) // 2
     content_column = type(LAYOUT_HALF.body)(content_left, CONTENT_COLUMN_WIDTH)
     pair_font = _fit_font(draw, pair_text, width_limit=content_column.width, initial_size=22, bold=True)         ### TOP ROW SIZE
-    date_font = _fit_font(draw, display_date, width_limit=content_column.width, initial_size=18, bold=True)      ### DATE SIZE 
+    date_font = _fit_font(draw, display_date, width_limit=content_column.width, initial_size=20, bold=False)      ### DATE SIZE 
     pair_y = centred_text_y(pair_font, pair_text, LAYOUT_HALF.row_centre_y(0))  + 5                                ### TOP ROW POSITION VERTICAL
 
     if status == "ok" and snapshot is not None:
         rate_text = snapshot.display_rate()
         value_centre_y = LAYOUT_HALF.row_top(1) + ROW_HEIGHT + 13
-        rate_font = _fit_font(draw, rate_text, width_limit=content_column.width - 40, initial_size=72, bold=True)
+        rate_font = _fit_font(draw, rate_text, width_limit=content_column.width - 40, initial_size=96, bold=True)
         gap = 2                                     # Letter spacing
         rate_size = getattr(rate_font, "size", 72)
         suffix_text = "zł"
