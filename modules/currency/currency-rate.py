@@ -296,10 +296,10 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
 
     if status == "ok" and snapshot is not None:
         rate_text = snapshot.display_rate()
-        value_centre_y = LAYOUT_HALF.row_top(1) + ROW_HEIGHT + 20
+        value_centre_y = LAYOUT_HALF.row_top(1) + ROW_HEIGHT + 13
         rate_font = _fit_font(draw, rate_text, width_limit=content_column.width - 40, initial_size=72, bold=True)
-        gap = 2
-        rate_size = getattr(rate_font, "size", 60)
+        gap = 2                                     # Letter spacing
+        rate_size = getattr(rate_font, "size", 72)
         suffix_text = "zł"
 
         while True:
