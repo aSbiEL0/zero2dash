@@ -28,6 +28,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
+import emoji
 import pytz
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
