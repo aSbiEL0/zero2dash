@@ -299,11 +299,11 @@ def render_currency_image(background_path: Path, output_path: Path, display_date
         value_centre_y = LAYOUT_HALF.row_top(1) + ROW_HEIGHT + 13
         rate_font = _fit_font(draw, rate_text, width_limit=content_column.width - 40, initial_size=96, bold=True)
         gap = 2                                     # Letter spacing
-        rate_size = getattr(rate_font, "size", 72)
+        rate_size = getattr(rate_font, "size", 30)
         suffix_text = "zł"
 
         while True:
-            suffix_font = load_font(max(18, int(rate_size * 0.42)), bold=True)
+            suffix_font = load_font(max(60, int(rate_size * 0.75)), bold=True)
             rate_bbox = draw.textbbox((0, 0), rate_text, font=rate_font)
             suffix_bbox = draw.textbbox((0, 0), suffix_text, font=suffix_font)
             rate_w = rate_bbox[2] - rate_bbox[0]
