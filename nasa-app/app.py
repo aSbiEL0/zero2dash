@@ -1205,6 +1205,7 @@ def render_single_page(page_name: str, pages: list[PageState]) -> Image.Image:
             return page.image
     return pages[0].image
 
+def validate_args(args: argparse.Namespace) -> int | None:
     if args.width <= 0 or args.height <= 0:
         print("Width and height must be positive integers.", file=sys.stderr)
         return 1
