@@ -282,8 +282,8 @@ def render_weather_frame(background: Image.Image, snapshot: WeatherSnapshot) -> 
     frame = background.copy()
     draw = ImageDraw.Draw(frame)
 
-    labels_font = _font(22, bold=False)
-    values_font = _font(22, bold=False)
+    labels_font = _font(21, bold=False)
+    values_font = _font(21, bold=False)
     location_font = _fit_font(snapshot.location, width_limit=LAYOUT_HALF.right.width, preferred_size=22, min_size=22)
 
     rows = [

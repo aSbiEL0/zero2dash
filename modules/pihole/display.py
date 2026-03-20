@@ -584,7 +584,7 @@ def _format_temp(temp_c: float | None) -> str:
 
 
 def _draw_stat_row(draw, *, y: int, label: str, value: str, label_x: int, value_right: int):
-    label_font = load_font(22, False)
+    label_font = load_font(21, False)
     value_font = fit_font(draw, value, preferred_size=22, min_size=22, bold=False, max_width=LAYOUT_2_1.right.width)
     label, value = truncate_pair(
         label,

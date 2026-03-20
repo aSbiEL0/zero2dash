@@ -1255,8 +1255,8 @@ def run_self_test() -> int:
     print("[nasa] self-test passed", flush=True)
     return 0
 
-
 def run_preview(args: argparse.Namespace, observer: ObserverConfig, country_map: dict[str, str]) -> int:
+
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
     location, _location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)

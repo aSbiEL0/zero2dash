@@ -2,77 +2,77 @@
   "crew": [
     {
       "agency": "Roscosmos",
-      "days_in_space_current": 301,
+      "days_in_space_current": 302,
       "days_in_space_prior": 189,
       "launched": 1764232077,
       "name": "Sergey Kud-Sverchkov",
       "role": "Commander",
-      "secondary": "Commander | 301d in space",
+      "secondary": "Commander | 302d in space",
       "spacecraft": "Soyuz MS-28"
     },
     {
       "agency": "Roscosmos",
-      "days_in_space_current": 112,
+      "days_in_space_current": 113,
       "days_in_space_prior": 0,
       "launched": 1764232077,
       "name": "Sergey Mikayev",
       "role": "Flight Engineer",
-      "secondary": "Flight Engineer | 112d in space",
+      "secondary": "Flight Engineer | 113d in space",
       "spacecraft": "Soyuz MS-28"
     },
     {
       "agency": "NASA",
-      "days_in_space_current": 112,
+      "days_in_space_current": 113,
       "days_in_space_prior": 0,
       "launched": 1764232077,
       "name": "Christoper Williams",
       "role": "Flight Engineer",
-      "secondary": "Flight Engineer | 112d in space",
+      "secondary": "Flight Engineer | 113d in space",
       "spacecraft": "Soyuz MS-28"
     },
     {
       "agency": "NASA",
-      "days_in_space_current": 238,
+      "days_in_space_current": 239,
       "days_in_space_prior": 204,
       "launched": 1770974155,
       "name": "Jessica Meir",
       "role": "Flight Engineer",
-      "secondary": "Flight Engineer | 238d in space",
+      "secondary": "Flight Engineer | 239d in space",
       "spacecraft": "Crew-12 Dragon"
     },
     {
       "agency": "NASA",
-      "days_in_space_current": 34,
+      "days_in_space_current": 35,
       "days_in_space_prior": 0,
       "launched": 1770974155,
       "name": "Jack Hathaway",
       "role": "Flight Engineer",
-      "secondary": "Flight Engineer | 34d in space",
+      "secondary": "Flight Engineer | 35d in space",
       "spacecraft": "Crew-12 Dragon"
     },
     {
       "agency": "ESA",
-      "days_in_space_current": 34,
+      "days_in_space_current": 35,
       "days_in_space_prior": 0,
       "launched": 1770974155,
       "name": "Sophie Adenot",
       "role": "Flight Engineer",
-      "secondary": "Flight Engineer | 34d in space",
+      "secondary": "Flight Engineer | 35d in space",
       "spacecraft": "Crew-12 Dragon"
     },
     {
       "agency": "Roscosmos",
-      "days_in_space_current": 34,
+      "days_in_space_current": 35,
       "days_in_space_prior": 0,
       "launched": 1770974155,
       "name": "Andrey Fedyaev",
       "role": "Flight Engineer",
-      "secondary": "Flight Engineer | 34d in space",
+      "secondary": "Flight Engineer | 35d in space",
       "spacecraft": "Crew-12 Dragon"
     }
   ],
   "expedition": "Expedition 74",
   "expedition_reason": "Expedition 74 | Commander",
-  "fetched_at": 1773935344,
+  "fetched_at": 1774006023,
   "source": "corquaid"
 }

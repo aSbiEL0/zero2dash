@@ -48,8 +48,8 @@ DEFAULT_TIMEZONE = os.environ.get("TRAM_TIMEZONE", "Europe/London")
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
 HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
-FRAME_DELAY_DEFAULT = 0.02
-TICKER_SPEED_DEFAULT = 24.0
+FRAME_DELAY_DEFAULT = 0.01
+TICKER_SPEED_DEFAULT = 20.0
 ALERT_ROTATION_SECS = 15
 WEEKDAY_NAMES = (
     "monday",
@@ -323,9 +323,9 @@ def render_static_frame(background: Image.Image, cache: dict[str, Any] | None, n
     white = (245, 245, 245)
     status = _cache_status(cache)
     departures = compute_upcoming_departures(cache or {}, now, limit=3) if status == "ok" else []
-    body_font = _fit_font("Rochdale Town Centre", width_limit=LAYOUT_2_1.left.width, initial_size=22, min_size=22)
-    mins_font = _fit_font("27min", width_limit=LAYOUT_2_1.right.width, initial_size=22, min_size=22)
-    message_font = _fit_font("Timetable unavailable", width_limit=LAYOUT_2_1.body.width, initial_size=22, min_size=22)
+    body_font = _fit_font("Rochdale Town Centre", width_limit=LAYOUT_2_1.left.width, initial_size=21, min_size=21)
+    mins_font = _fit_font("27min", width_limit=LAYOUT_2_1.right.width, initial_size=21, min_size=21)
+    message_font = _fit_font("Timetable unavailable", width_limit=LAYOUT_2_1.body.width, initial_size=21, min_size=21)
     message = _departure_message(status, departures)
     if message is not None:
         message = _ellipsize_text(message, message_font, LAYOUT_2_1.body.width)
@@ -364,7 +364,7 @@ def render_ticker_strip(base_frame: Image.Image, alerts_cache: dict[str, Any] | 
     white = (245, 245, 245)
     amber = (244, 198, 0)
     ticker_text = ticker_text_from_alerts(alerts_cache)
-    ticker_font = _fit_font(ticker_text, width_limit=LAYOUT_2_1.body.width, initial_size=22, min_size=22, italic=True)
+    ticker_font = _fit_font(ticker_text, width_limit=LAYOUT_2_1.body.width, initial_size=23, min_size=23, italic=True)
     text_y = centred_text_y(ticker_font, ticker_text, LAYOUT_2_1.row_centre_y(4)) - strip_top
     text_width = _text_width(ticker_text, ticker_font)
     ticker_fill = amber if ticker_text == "Alerts unavailable" else white
