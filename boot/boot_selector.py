@@ -819,11 +819,31 @@ def resolve_shutdown_action(screen_y: int, screen_height: int, invert_y: bool) -
     return "confirm" if screen_y < (screen_height // 2) else "cancel"
 
 
+THEME_BUTTON_ORDER = (
+    "carbon",
+    "brushed_steel",
+    "comic_book",
+    "frosty",
+)
+
 def theme_picker_targets(theme_ids: dict[str, ThemeAssets] | tuple[str, ...] | list[str]) -> tuple[str, ...]:
     if isinstance(theme_ids, dict):
-        ordered = sorted(theme_ids)
+        available = {str(theme_id) for theme_id in theme_ids.keys()}
     else:
-        ordered = sorted(str(theme_id) for theme_id in theme_ids)
+        available = {str(theme_id) for theme_id in theme_ids}
+
+    ordered: list[str] = []
+
+    # First, keep your fixed button assignments in the order A/B/C/D
+    for theme_id in THEME_BUTTON_ORDER:
+        if theme_id in available and theme_id not in ordered:
+            ordered.append(theme_id)
+
+    # Then append any newly discovered themes into the next free slots (E, F, etc.)
+    for theme_id in sorted(available):
+        if theme_id not in ordered:
+            ordered.append(theme_id)
+
     return tuple(ordered[:MAX_THEME_PICKER_ITEMS])
 
 
