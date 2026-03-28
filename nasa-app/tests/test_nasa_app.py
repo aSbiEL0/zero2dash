@@ -78,6 +78,29 @@ class NasaAppTests(unittest.TestCase):
         assert snapshot is not None
         self.assertEqual(snapshot.visibility, "eclipsed")
 
+    def test_deserialize_location_sanitizes_placeholder_location_fields(self) -> None:
+        payload = {
+            "source": "cache",
+            "fetched_at": 1,
+            "position_timestamp": 2,
+            "latitude": 10.0,
+            "longitude": 20.0,
+            "altitude_km": 408.0,
+            "velocity_kmh": 27600.0,
+            "country_code": "??",
+            "country_name": "unknown",
+            "location_label": "??",
+            "visibility": "eclipsed",
+            "trail": [],
+            "details_timestamp": 3,
+        }
+        snapshot = NASA_APP.deserialize_location(payload)
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.country_code, "")
+        self.assertEqual(snapshot.country_name, "")
+        self.assertEqual(snapshot.location_label, "")
+
     def test_parse_corquaid_crew_builds_expedition_reason(self) -> None:
         payload = {
             "expedition": "72",
@@ -126,6 +149,10 @@ class NasaAppTests(unittest.TestCase):
         )
         international_waters = self.build_location(country_code="", country_name="", location_label="")
         self.assertEqual(NASA_APP.location_display_name(international_waters), "International Waters")
+
+    def test_location_display_name_ignores_placeholder_values(self) -> None:
+        placeholder_location = self.build_location(country_code="??", country_name="??", location_label="??")
+        self.assertEqual(NASA_APP.location_display_name(placeholder_location), "International Waters")
 
     def test_details_page_renders_with_location_display_name_fallback(self) -> None:
         location = self.build_location(country_name="", location_label="North Sea")

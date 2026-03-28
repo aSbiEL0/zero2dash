@@ -623,6 +623,15 @@ def write_json_file(path: Path, payload: dict[str, Any]) -> None:
     temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temp_path.replace(path)
 
+
+def clean_location_text(value: Any, *, uppercase: bool = False) -> str:
+    text = str(value or "").strip()
+    lowered = text.lower()
+    if lowered in {"", "?", "??", "-", "--", "n/a", "na", "unknown", "tba", "none", "null"}:
+        return ""
+    return text.upper() if uppercase else text
+
+
 def deserialize_location(payload: dict[str, Any]) -> LocationSnapshot | None:
     try:
         trail_payload = payload.get("trail", [])
@@ -631,6 +640,9 @@ def deserialize_location(payload: dict[str, Any]) -> LocationSnapshot | None:
             for point in trail_payload
             if isinstance(point, dict)
         ]
+        country_code = clean_location_text(payload.get("country_code", ""), uppercase=True)
+        country_name = clean_location_text(payload.get("country_name", ""))
+        location_label = clean_location_text(payload.get("location_label", ""))
         return LocationSnapshot(
             source=str(payload["source"]),
             fetched_at=int(payload["fetched_at"]),
@@ -639,9 +651,9 @@ def deserialize_location(payload: dict[str, Any]) -> LocationSnapshot | None:
             longitude=float(payload["longitude"]),
             altitude_km=float(payload["altitude_km"]) if payload.get("altitude_km") is not None else None,
             velocity_kmh=float(payload["velocity_kmh"]) if payload.get("velocity_kmh") is not None else None,
-            country_code=str(payload.get("country_code", "")),
-            country_name=str(payload.get("country_name", "")),
-            location_label=str(payload.get("location_label", "")),
+            country_code=country_code,
+            country_name=country_name,
+            location_label=location_label,
             visibility=str(payload.get("visibility", payload.get("flyover_status", "TBA"))).strip() or "TBA",
             trail=trail,
             details_timestamp=int(payload.get("details_timestamp", payload["position_timestamp"])),
@@ -772,12 +784,12 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
 
     try:
         geocode = fetch_json(WTIA_COORDS_URL.format(lat=latitude, lon=longitude))
-        country_code = str(geocode.get("country_code", "")).upper()
+        country_code = clean_location_text(geocode.get("country_code", ""), uppercase=True)
         country_name = iso_country_name(country_code, country_map)
     except Exception:
         if cached is not None:
-            country_code = cached.country_code
-            country_name = cached.country_name
+            country_code = clean_location_text(cached.country_code, uppercase=True)
+            country_name = clean_location_text(cached.country_name)
             details_stale = True
             details_timestamp = cached.details_timestamp
 
@@ -788,7 +800,7 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
         if trail:
             map_stale = True
 
-    location_label = country_name or ("International Waters" if not country_code else country_code)
+    location_label = country_name or country_code or "International Waters"
     if not country_name and not country_code:
         location_label = "International Waters"
 
@@ -1090,12 +1102,15 @@ def wrap_text_lines(draw: ImageDraw.ImageDraw, text: str, font, width_limit: int
 
 
 def location_display_name(location: LocationSnapshot) -> str:
-    if location.country_name.strip():
-        return location.country_name.strip()
-    if location.location_label.strip():
-        return location.location_label.strip()
-    if location.country_code.strip():
-        return location.country_code.strip().upper()
+    country_name = clean_location_text(location.country_name)
+    location_label = clean_location_text(location.location_label)
+    country_code = clean_location_text(location.country_code, uppercase=True)
+    if country_name:
+        return country_name
+    if location_label:
+        return location_label
+    if country_code:
+        return country_code
     return "International Waters"
 
 

@@ -36,6 +36,7 @@ Live status: ACTIVE
   - plotting moved to explicit configured map bounds
   - operator-editable layout/font controls centralized in `nasa-app/app.py`
   - crew page now renders a visible page badge
+  - `Currently over` now sanitizes placeholder cache values like `??` instead of treating them as valid location data
   Remaining:
   - pass/flyover restoration
   - startup speed/loading improvements
@@ -43,6 +44,7 @@ Live status: ACTIVE
   Completed in the current slice:
   - duplicate NASA test-module execution removed
   - deterministic render-path tests added for map asset routing, details display-name use, crew badge labeling, and overflow sequencing
+  - regression tests now cover placeholder-location sanitization and `Currently over` fallback handling
   Remaining:
   - run the automated checks in a working Python environment
   - add tests for later pass/flyover and loading behavior after those features land
