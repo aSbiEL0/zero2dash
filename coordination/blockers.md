@@ -61,6 +61,12 @@ Workaround:
 Unblock condition:
 - the app shows a useful first frame quickly from cache or a loading screen, with reduced blocking startup work
 
+Resolution notes:
+- `nasa-app/app.py` now renders a loading frame immediately on hardware paths
+- startup now prefers usable cached location over Open Notify after a live-location failure
+- crew loading is deferred until after the first usable frame
+- blocker stays open until device validation confirms the startup experience is now acceptable
+
 ---
 
 BLOCKER ID: B-006
@@ -84,8 +90,8 @@ Unblock condition:
 - only one crew page renders at a time and page position is clear
 
 Resolution notes:
-- the crew renderer now draws a visible `page/total` badge
-- the first runtime slice was review-cleaned after the renderer/layout changes
+- the crew renderer now draws both a visible `page/total` badge and a stronger `Crew x/y` header
+- crew row spacing was widened so sequential pages read as separate screens instead of one overdrawn layout
 
 ## Logging Rule
 

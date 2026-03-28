@@ -47,6 +47,7 @@ DETAILS_TEMPLATE_PATH = ASSETS_DIR / "iss-background.png"
 CREW_TEMPLATE_PATH = ASSETS_DIR / "people-background.png"
 CREW_STALE_TEMPLATE_PATH = ASSETS_DIR / "people-error.png"
 ERROR_TEMPLATE_PATH = ASSETS_DIR / "error-background.png"
+LOADING_TEMPLATE_PATH = ASSETS_DIR / "loading.png"
 
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
@@ -127,13 +128,16 @@ CREW_DETAIL_FONT_SIZE = 11
 CREW_CONTENT_X = 30
 CREW_CONTENT_WIDTH = 260
 CREW_PAGE_BADGE_X = 228
-CREW_PAGE_BADGE_Y = 34
+CREW_PAGE_BADGE_Y = 28
 CREW_PAGE_BADGE_WIDTH = 58
 CREW_PAGE_BADGE_HEIGHT = 18
+CREW_HEADER_FONT_NAME = DETAILS_TITLE_FONT_NAME
+CREW_HEADER_FONT_SIZE = 17
+CREW_HEADER_Y = 31
 # Edit these centre points to move each visible crew row vertically.
-CREW_SLOT_NAME_CENTRES = (47, 108, 169)
-CREW_SLOT_DETAIL_1_CENTRES = (67, 128, 189)
-CREW_SLOT_DETAIL_2_CENTRES = (84, 145, 206)
+CREW_SLOT_NAME_CENTRES = (74, 127, 180)
+CREW_SLOT_DETAIL_1_CENTRES = (92, 145, 198)
+CREW_SLOT_DETAIL_2_CENTRES = (106, 159, 212)
 
 @dataclass(frozen=True)
 class OrbitPoint:
@@ -859,6 +863,8 @@ def resolve_location(country_map: dict[str, str], cache_path: Path, offline: boo
         return live, True, map_stale, details_stale
     except Exception:
         pass
+    if cached is not None:
+        return cached, True, True, True
     try:
         fallback, map_stale, details_stale = build_fallback_location(cached)
         write_json_file(cache_path, serialize_location(fallback))
@@ -1179,9 +1185,13 @@ def render_details_page(location: LocationSnapshot, expedition_reason: str, *, s
 def render_crew_page(crew_page: list[CrewMember], page_number: int, total_pages: int, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(CREW_STALE_TEMPLATE_PATH if stale else CREW_TEMPLATE_PATH, CREW_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
+    header_font = load_font(CREW_HEADER_FONT_SIZE, bold=True, name=CREW_HEADER_FONT_NAME)
     name_font = load_font(CREW_NAME_FONT_SIZE, bold=True, name=CREW_NAME_FONT_NAME)
     detail_font = load_font(CREW_DETAIL_FONT_SIZE, bold=False, name=CREW_DETAIL_FONT_NAME)
     page_label = f"{page_number}/{total_pages}"
+    header_text = f"Crew {page_label}"
+    header_x = (CANVAS_WIDTH - draw.textbbox((0, 0), header_text, font=header_font)[2]) // 2
+    draw.text((header_x, centred_text_y(header_font, header_text, CREW_HEADER_Y)), header_text, font=header_font, fill=TEXT_RGB)
     draw_badge(
         draw,
         overlay_bounds(CREW_PAGE_BADGE_X, CREW_PAGE_BADGE_Y, CREW_PAGE_BADGE_WIDTH, CREW_PAGE_BADGE_HEIGHT),
@@ -1197,11 +1207,13 @@ def render_crew_page(crew_page: list[CrewMember], page_number: int, total_pages:
     slots = tuple(zip(CREW_SLOT_NAME_CENTRES, CREW_SLOT_DETAIL_1_CENTRES, CREW_SLOT_DETAIL_2_CENTRES))
     for item, (name_y, detail_y1, detail_y2) in zip(crew_page, slots):
         name_text = ellipsize_text(item.name, name_font, CREW_CONTENT_WIDTH)
-        detail_lines = wrap_text_lines(draw, item.secondary or item.role or "ISS crew", detail_font, CREW_CONTENT_WIDTH, 2)
+        detail_source = item.secondary or item.role or "ISS crew"
+        detail_lines = wrap_text_lines(draw, detail_source, detail_font, CREW_CONTENT_WIDTH, 1)
+        agency_line = compact_text(item.agency or item.spacecraft or "ISS crew", limit=40)
         name_x = CREW_CONTENT_X + max(0, (CREW_CONTENT_WIDTH - draw.textbbox((0, 0), name_text, font=name_font)[2]) // 2)
         draw.text((name_x, centred_text_y(name_font, name_text, name_y)), name_text, font=name_font, fill=TEXT_RGB)
         line_1 = detail_lines[0] if detail_lines else ""
-        line_2 = detail_lines[1] if len(detail_lines) > 1 else ""
+        line_2 = agency_line
         if line_1:
             line_1_x = CREW_CONTENT_X + max(0, (CREW_CONTENT_WIDTH - draw.textbbox((0, 0), line_1, font=detail_font)[2]) // 2)
             draw.text((line_1_x, centred_text_y(detail_font, line_1, detail_y1)), line_1, font=detail_font, fill=(225, 225, 230))
@@ -1221,6 +1233,21 @@ def render_error_page() -> Image.Image:
     draw.text((49, 122), "No live ISS data and no usable", font=body_font, fill=TEXT_RGB)
     draw.text((64, 140), "cache was found.", font=body_font, fill=TEXT_RGB)
     draw.text((91, 159), "Retry later.", font=body_font, fill=(255, 198, 148))
+    return image
+
+
+def render_loading_page() -> Image.Image:
+    image = load_asset_candidates(LOADING_TEMPLATE_PATH, MAP_TEMPLATE_PATH, DETAILS_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
+    draw = ImageDraw.Draw(image)
+    title_font = load_font(18, bold=True, name=DETAILS_TITLE_FONT_NAME)
+    body_font = load_font(12, bold=False)
+    draw.rounded_rectangle((34, 82, CANVAS_WIDTH - 34, 176), radius=16, fill=(14, 18, 38), outline=(120, 148, 192), width=2)
+    title = "Loading ISS data"
+    body = "Preparing the latest location"
+    foot = "Crew details follow next"
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 100), title, font=title_font, fill=(245, 245, 252))
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 130), body, font=body_font, fill=(228, 230, 238))
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 148), foot, font=body_font, fill=(228, 230, 238))
     return image
 
 
@@ -1311,30 +1338,7 @@ def run_preview(args: argparse.Namespace, country_map: dict[str, str]) -> int:
 def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
-    location, location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
-    crew_snapshot, crew_stale = resolve_crew(crew_path, args.offline)
-    if not location_ok or location is None:
-        image = render_error_page()
-        save_preview(image, args.output)
-        if args.no_framebuffer:
-            return 1
-        if not Path(args.fbdev).exists():
-            print(f"Framebuffer {args.fbdev} not found.", file=sys.stderr)
-            return 1
-        framebuffer = FramebufferWriter(args.fbdev, args.width, args.height)
-        framebuffer.open()
-        try:
-            framebuffer.write_frame(image.resize((args.width, args.height), RESAMPLING_LANCZOS))
-            while not _STOP_REQUESTED:
-                time.sleep(0.25)
-        finally:
-            framebuffer.close()
-        return 1
-
-    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
-    if args.output and args.no_framebuffer:
-        save_preview(pages[0].image, args.output)
-        return 0
+    cached_crew = deserialize_crew(load_json_file(crew_path) or {})
 
     framebuffer = None
     if not args.no_framebuffer:
@@ -1343,6 +1347,30 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
             return 1
         framebuffer = FramebufferWriter(args.fbdev, args.width, args.height)
         framebuffer.open()
+        framebuffer.write_frame(render_loading_page().resize((args.width, args.height), RESAMPLING_LANCZOS))
+
+    location, location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
+    if not location_ok or location is None:
+        image = render_error_page()
+        save_preview(image, args.output)
+        if args.no_framebuffer:
+            return 1
+        try:
+            assert framebuffer is not None
+            framebuffer.write_frame(image.resize((args.width, args.height), RESAMPLING_LANCZOS))
+            while not _STOP_REQUESTED:
+                time.sleep(0.25)
+        finally:
+            if framebuffer is not None:
+                framebuffer.close()
+        return 1
+
+    crew_snapshot = cached_crew
+    crew_stale = crew_snapshot is not None
+    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+    if args.output and args.no_framebuffer:
+        save_preview(pages[0].image, args.output)
+        return 0
 
     touch_reader = TouchReader(args.width, args.height)
     page_index = 0
@@ -1350,6 +1378,7 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
     ready_after = time.monotonic() + TOUCH_SETTLE_SECS
     next_refresh_at = time.monotonic() + LOCATION_REFRESH_SECS
     next_page_at = time.monotonic() + PAGE_CYCLE_SECS
+    next_crew_refresh_at = time.monotonic()
 
     try:
         while not _STOP_REQUESTED:
@@ -1360,6 +1389,13 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
                 last_rendered_index = page_index
 
             now = time.monotonic()
+            if now >= next_crew_refresh_at:
+                crew_snapshot, crew_stale = resolve_crew(crew_path, args.offline)
+                pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+                page_index = min(page_index, len(pages) - 1)
+                last_rendered_index = -1
+                next_crew_refresh_at = now + LOCATION_REFRESH_SECS
+
             if now >= next_refresh_at:
                 location, _location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
                 pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
@@ -1371,7 +1407,7 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
                 page_index = (page_index + 1) % len(pages)
                 next_page_at = now + PAGE_CYCLE_SECS
 
-            wait_timeout = max(0.05, min(next_refresh_at - now, next_page_at - now, 0.25))
+            wait_timeout = max(0.05, min(next_refresh_at - now, next_page_at - now, next_crew_refresh_at - now, 0.25))
             if touch_reader.is_available() and now >= ready_after:
                 action = touch_reader.read_action(wait_timeout)
                 if action in {"EXIT", "HOLD"}:

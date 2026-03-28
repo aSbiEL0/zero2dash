@@ -3,6 +3,7 @@ import sys
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+import tempfile
 
 MODULE_PATH = Path(__file__).resolve().parent.parent / "app.py"
 SPEC = importlib.util.spec_from_file_location("nasa_app_module", MODULE_PATH)
@@ -203,6 +204,21 @@ class NasaAppTests(unittest.TestCase):
         self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
         location_display_name.assert_called_once_with(location)
 
+    def test_render_loading_page_uses_loading_asset_candidates(self) -> None:
+        with patch.object(
+            NASA_APP,
+            "load_asset_candidates",
+            return_value=NASA_APP.Image.new("RGB", (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT)),
+        ) as load_asset_candidates:
+            image = NASA_APP.render_loading_page()
+        self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
+        load_asset_candidates.assert_called_once_with(
+            NASA_APP.LOADING_TEMPLATE_PATH,
+            NASA_APP.MAP_TEMPLATE_PATH,
+            NASA_APP.DETAILS_TEMPLATE_PATH,
+            NASA_APP.ERROR_TEMPLATE_PATH,
+        )
+
     def test_render_crew_page_changes_with_page_badge(self) -> None:
         crew_page = self.build_crew_snapshot(count=4).crew[:3]
         page_one = NASA_APP.render_crew_page(crew_page, 1, 2, stale=False)
@@ -229,6 +245,23 @@ class NasaAppTests(unittest.TestCase):
             crew_stale=False,
         )
         self.assertEqual([page.kind for page in pages], ["map", "details", "crew", "crew"])
+
+    def test_resolve_location_prefers_cache_before_open_notify_fallback(self) -> None:
+        cached = self.build_location(country_name="", location_label="")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "location.json"
+            cache_path.write_text(NASA_APP.json.dumps(NASA_APP.serialize_location(cached)), encoding="utf-8")
+            with patch.object(NASA_APP, "build_live_location", side_effect=RuntimeError("live down")):
+                with patch.object(NASA_APP, "build_fallback_location") as build_fallback_location:
+                    location, location_ok, map_stale, details_stale = NASA_APP.resolve_location({}, cache_path, False)
+        self.assertTrue(location_ok)
+        self.assertIsNotNone(location)
+        assert location is not None
+        self.assertEqual(location.latitude, cached.latitude)
+        self.assertEqual(location.longitude, cached.longitude)
+        self.assertTrue(map_stale)
+        self.assertTrue(details_stale)
+        build_fallback_location.assert_not_called()
 
 
 if __name__ == "__main__":

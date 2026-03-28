@@ -22,7 +22,7 @@ Live status: ACTIVE
 - The NASA app already supports safe preview and self-test modes.
 - The app already has separate location and crew caches.
 - The current app is partially stabilized, and the remaining defects are now narrower:
-  - startup is still too slow and lacks an immediate useful first frame
+  - startup still needs device confirmation after the new loading-and-cache-first fix
   - flyover/pass support still needs restoring
   - final automated validation is blocked locally by a broken Python install
 
@@ -39,15 +39,21 @@ Live status: ACTIVE
   - details and crew layouts now target the new guide-derived `260x180` text box at `x=30, y=30`
   - crew page now renders a visible page badge
   - `Currently over` now sanitizes placeholder cache values like `??` instead of treating them as valid location data
+  - startup now renders an immediate loading frame before live fetch work on hardware paths
+  - startup now prefers usable cached location over Open Notify as the first fallback after live failure
+  - crew is no longer part of the first-frame readiness gate; cached crew renders first and live crew refreshes after the first frame
+  - crew pages now render a stronger `Crew x/y` header and wider row spacing for clearer per-page separation
   Remaining:
   - pass/flyover restoration
-  - startup speed/loading improvements
+  - device validation for the new startup/loading and crew-page clarity pass
 - `N-004` NASA validation expansion: IN PROGRESS.
   Completed in the current slice:
   - duplicate NASA test-module execution removed
   - deterministic render-path tests added for map asset routing, details display-name use, crew badge labeling, and overflow sequencing
   - regression tests now cover placeholder-location sanitization and `Currently over` fallback handling
   - regression tests now cover the new map-band constants, anchor-point mapping, and guide-box constants
+  - regression tests now cover loading-screen asset selection
+  - regression tests now cover the cache-before-open-notify startup policy
   Remaining:
   - run the automated checks in a working Python environment
   - add tests for later pass/flyover and loading behavior after those features land

@@ -135,8 +135,8 @@ Progress notes:
     - new guide images are now present under `nasa-app/assets/`
 - still open in this task:
   - restored observer pass/flyover support
-  - startup speed/loading behavior
-  - stale-state tightening for those later runtime paths
+  - device confirmation for startup/loading behavior
+  - stale-state tightening for the later pass/flyover runtime path
 
 ---
 
@@ -179,7 +179,7 @@ Progress notes:
   - details/crew guide-box constant tests were added for the new `260x180` layout contract
 - still open in this task:
   - execution of automated checks in a working local Python environment
-  - coverage for later pass/flyover and loading/runtime branches after those features land
+  - coverage for later pass/flyover runtime branches after those features land
 
 ---
 
