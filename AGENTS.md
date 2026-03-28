@@ -104,6 +104,7 @@ Prefer hardware-safe validation first:
 When you change behaviour, you must:
 - update README/docs if there are user-visible changes
 - include a short “how to validate” section in your final summary
+- when a python environment is required use this path: C:\ISS\.venv\Scripts\python.exe
 
 ## Change style
 

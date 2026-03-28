@@ -142,12 +142,15 @@ class NasaAppTests(unittest.TestCase):
                 NASA_APP.DETAILS_CONTENT_X,
                 NASA_APP.DETAILS_CONTENT_Y,
                 NASA_APP.DETAILS_CONTENT_WIDTH,
-                NASA_APP.DETAILS_REASON_X,
-                NASA_APP.DETAILS_REASON_WIDTH,
+                NASA_APP.DETAILS_CONTENT_HEIGHT,
+                NASA_APP.DETAILS_LABEL_X,
+                NASA_APP.DETAILS_LABEL_WIDTH,
+                NASA_APP.DETAILS_VALUE_X,
+                NASA_APP.DETAILS_VALUE_WIDTH,
                 NASA_APP.CREW_CONTENT_X,
                 NASA_APP.CREW_CONTENT_WIDTH,
             ),
-            (30, 30, 260, 30, 260, 30, 260),
+            (30, 30, 260, 180, 30, 120, 170, 120, 30, 260),
         )
 
     def test_map_point_matches_new_full_width_band(self) -> None:
@@ -187,20 +190,31 @@ class NasaAppTests(unittest.TestCase):
             "North Sea",
         )
         international_waters = self.build_location(country_code="", country_name="", location_label="")
-        self.assertEqual(NASA_APP.location_display_name(international_waters), "International Waters")
+        self.assertEqual(NASA_APP.location_display_name(international_waters), "Unknown")
 
     def test_location_display_name_ignores_placeholder_values(self) -> None:
         placeholder_location = self.build_location(country_code="??", country_name="??", location_label="??")
-        self.assertEqual(NASA_APP.location_display_name(placeholder_location), "International Waters")
+        self.assertEqual(NASA_APP.location_display_name(placeholder_location), "Unknown")
+
+    def test_build_details_entries_match_requested_rows(self) -> None:
+        entries = NASA_APP.build_details_entries(self.build_location())
+        self.assertEqual(
+            [label for label, _value in entries],
+            ["Longitude:", "Latitude:", "Currently over:", "Altitude:", "Velocity:", "Day/Night:"],
+        )
+
+    def test_format_velocity_includes_rounded_orbits_per_day(self) -> None:
+        self.assertEqual(NASA_APP.format_velocity(self.build_location()), "27,600 km/h (15.5 orbits/day)")
+
+    def test_normalise_day_night_maps_visibility_to_simple_labels(self) -> None:
+        self.assertEqual(NASA_APP.normalise_day_night("Daylight"), "Day")
+        self.assertEqual(NASA_APP.normalise_day_night("eclipsed"), "Night")
+        self.assertEqual(NASA_APP.normalise_day_night(""), "Unknown")
 
     def test_details_page_renders_with_location_display_name_fallback(self) -> None:
         location = self.build_location(country_name="", location_label="North Sea")
         with patch.object(NASA_APP, "location_display_name", return_value="North Sea") as location_display_name:
-            image = NASA_APP.render_details_page(
-                location,
-                "Expedition 72 | Commander",
-                stale=True,
-            )
+            image = NASA_APP.render_details_page(location, stale=True)
         self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
         location_display_name.assert_called_once_with(location)
 
@@ -210,7 +224,7 @@ class NasaAppTests(unittest.TestCase):
             "load_asset_candidates",
             return_value=NASA_APP.Image.new("RGB", (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT)),
         ) as load_asset_candidates:
-            image = NASA_APP.render_loading_page()
+            image = NASA_APP.render_loading_page("crew")
         self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
         load_asset_candidates.assert_called_once_with(
             NASA_APP.LOADING_TEMPLATE_PATH,
@@ -234,11 +248,7 @@ class NasaAppTests(unittest.TestCase):
             "load_asset_candidates",
             return_value=NASA_APP.Image.new("RGB", (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT)),
         ) as load_asset_candidates:
-            image = NASA_APP.render_details_page(
-                self.build_location(),
-                "Expedition 72 | Commander",
-                stale=True,
-            )
+            image = NASA_APP.render_details_page(self.build_location(), stale=True)
         self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
         load_asset_candidates.assert_called_once_with(
             NASA_APP.DETAILS_TEMPLATE_PATH,
@@ -282,7 +292,7 @@ class NasaAppTests(unittest.TestCase):
         with patch.object(NASA_APP, "render_loading_page", return_value=loading_image) as render_loading_page:
             image = NASA_APP.render_single_page("loading", [])
         self.assertIs(image, loading_image)
-        render_loading_page.assert_called_once_with()
+        render_loading_page.assert_called_once_with("render")
 
     def test_resolve_location_prefers_open_notify_before_cache(self) -> None:
         cached = self.build_location(country_name="", location_label="")
@@ -306,7 +316,7 @@ class NasaAppTests(unittest.TestCase):
         healthy_position = (1.0, 2.0, 3)
         with patch.object(NASA_APP, "probe_open_notify_position", return_value=(NASA_APP.HealthCheckResult("open-notify-position", "healthy", "ok"), healthy_position)):
             with patch.object(NASA_APP, "probe_wtia_satellite", return_value=(NASA_APP.HealthCheckResult("wheretheiss-satellite", "healthy", "ok"), {"latitude": 1.0, "longitude": 2.0, "timestamp": 3})):
-                with patch.object(NASA_APP, "probe_wtia_coords", return_value=NASA_APP.HealthCheckResult("wheretheiss-coords", "healthy", "ok")):
+                with patch.object(NASA_APP, "probe_geoapify_reverse", return_value=NASA_APP.HealthCheckResult("geoapify-reverse", "healthy", "ok")):
                     with patch.object(NASA_APP, "probe_wtia_positions", return_value=NASA_APP.HealthCheckResult("wheretheiss-positions", "unavailable", "timeout")):
                         with patch.object(NASA_APP, "probe_crew_endpoint", side_effect=[
                             NASA_APP.HealthCheckResult("corquaid-crew", "healthy", "ok"),
