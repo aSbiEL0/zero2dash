@@ -34,13 +34,36 @@ from display_layout import LAYOUT_HALF, centred_text_y, ellipsize_text, fit_font
 import touch_calibration
 
 
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+load_env_file(REPO_ROOT / ".env")
+
+
 APP_NAME = "NASA ISS"
 ASSETS_DIR = SCRIPT_DIR / "assets"
 FONTS_DIR = SCRIPT_DIR / "fonts"
 COUNTRY_MAP_PATH = SCRIPT_DIR / "country_codes.json"
 LOCATION_CACHE_PATH = SCRIPT_DIR / "location_cache.json"
 CREW_CACHE_PATH = SCRIPT_DIR / "crew_cache.json"
-LEGACY_ERROR_ASSET_PATH = ASSETS_DIR / "nasa_error.png"
 MAP_TEMPLATE_PATH = ASSETS_DIR / "map.png"
 MAP_STALE_TEMPLATE_PATH = ASSETS_DIR / "map-error.png"
 DETAILS_TEMPLATE_PATH = ASSETS_DIR / "iss-background.png"
@@ -48,6 +71,7 @@ CREW_TEMPLATE_PATH = ASSETS_DIR / "people-background.png"
 CREW_STALE_TEMPLATE_PATH = ASSETS_DIR / "people-error.png"
 ERROR_TEMPLATE_PATH = ASSETS_DIR / "error-background.png"
 LOADING_TEMPLATE_PATH = ASSETS_DIR / "loading.png"
+DETAILS_GUIDE_PATH = ASSETS_DIR / "text-columns-guide.png"
 
 FBDEV_DEFAULT = os.environ.get("FB_DEVICE", "/dev/fb1")
 WIDTH_DEFAULT = int(os.environ.get("FB_WIDTH", "320"))
@@ -69,11 +93,12 @@ ACCENT_RGB = (255, 208, 64)
 BACKGROUND_RGB = (8, 16, 28)
 RESAMPLING_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 WTIA_SAT_URL = "https://api.wheretheiss.at/v1/satellites/25544"
-WTIA_COORDS_URL = "https://api.wheretheiss.at/v1/coordinates/{lat:.6f},{lon:.6f}"
 WTIA_POSITIONS_URL = "https://api.wheretheiss.at/v1/satellites/25544/positions"
 OPEN_NOTIFY_ISS_URL = "http://api.open-notify.org/iss-now.json"
 CORQUAID_CREW_URL = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json"
 OPEN_NOTIFY_CREW_URL = "http://api.open-notify.org/astros.json"
+GEOAPIFY_REVERSE_URL = "https://api.geoapify.com/v1/geocode/reverse"
+GEOAPIFY_API_KEY_ENV = "GEOAPIFY_API_KEY"
 USER_AGENT = 'zero2dash-nasa/1.0'
 DETAILS_TITLE_FONT_NAME = 'Stay On The Ground Distressed.ttf'
 
@@ -88,6 +113,29 @@ ABS_MT_POSITION_Y = 0x36
 ABS_MT_TRACKING_ID = 0x39
 BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
+EARTH_RADIUS_KM = 6371.0
+GEOAPIFY_AQUATIC_KEYWORDS = (
+    "ocean",
+    "sea",
+    "bay",
+    "gulf",
+    "strait",
+    "channel",
+    "lake",
+    "river",
+    "sound",
+    "bight",
+    "passage",
+    "waters",
+)
+LOADING_STAGE_MESSAGES: dict[str, tuple[str, str, str]] = {
+    "position": ("Fetching ISS position", "Contacting the live tracker", "Waiting for current coordinates"),
+    "location": ("Resolving current location", "Reverse geocoding the ISS point", "Matching coordinates to a country"),
+    "crew": ("Loading crew data", "Fetching the latest expedition roster", "Preparing the crew rotation pages"),
+    "render": ("Rendering pages", "Formatting map, details, and crew views", "Preparing the framebuffer output"),
+}
+# notes: change the strings above if you want different live loading-status
+# messages. To move the loading text box itself, edit `render_loading_page()`.
 
 
 # NASA operator layout controls.
@@ -100,25 +148,32 @@ MAP_OVERLAY_Y = 40
 MAP_OVERLAY_WIDTH = 320
 MAP_OVERLAY_HEIGHT = 160
 
-# `text-box.png` defines a 260x180 box at x=30, y=30 for details/crew text.
-# Edit these bounds if the guide image changes.
+# `text-columns-guide.png` defines a 260x180 details area at x=30, y=30:
+# left column 120px, gap 20px, right column 120px.
+# notes: move both text columns together by changing `DETAILS_CONTENT_X` and
+# `DETAILS_CONTENT_Y`. Move only the left labels with `DETAILS_LABEL_X`, only
+# the right values with `DETAILS_VALUE_X`, and spread/tighten the rows with
+# `DETAILS_ROW_HEIGHT`. If text clips, increase the matching `*_WIDTH` or
+# reduce the matching font size.
 DETAILS_CONTENT_X = 30
 DETAILS_CONTENT_Y = 30
 DETAILS_CONTENT_WIDTH = 260
-DETAILS_ROW_HEIGHT = 28
-DETAILS_LABEL_GAP = 8
-DETAILS_VALUE_WIDTH = 156
-DETAILS_LABEL_FONT_NAME = DETAILS_TITLE_FONT_NAME
-DETAILS_LABEL_FONT_SIZE = 11
+DETAILS_CONTENT_HEIGHT = 180
+DETAILS_ROW_HEIGHT = 30
+DETAILS_LABEL_X = 30
+DETAILS_LABEL_WIDTH = 120
+DETAILS_VALUE_X = 170
+DETAILS_VALUE_WIDTH = 120
+DETAILS_LABEL_FONT_NAME = "Stencil.ttf"
+DETAILS_LABEL_FONT_SIZE = 15
 DETAILS_VALUE_FONT_NAME = "NotoSans-Regular.ttf"
-DETAILS_VALUE_FONT_SIZE = 11
-DETAILS_BODY_FONT_NAME = "NotoSans-Regular.ttf"
-DETAILS_BODY_FONT_SIZE = 9
-DETAILS_REASON_X = 30
-DETAILS_REASON_Y = 170
-DETAILS_REASON_WIDTH = 260
-DETAILS_REASON_LINE_HEIGHT = 12
-DETAILS_REASON_MAX_LINES = 2
+DETAILS_VALUE_FONT_SIZE = 15
+# notes: the stale badge is independent from the two columns. Move it with
+# `DETAILS_STALE_BADGE_X` and `DETAILS_STALE_BADGE_Y`.
+DETAILS_STALE_BADGE_X = 228
+DETAILS_STALE_BADGE_Y = 28
+DETAILS_STALE_BADGE_WIDTH = 58
+DETAILS_STALE_BADGE_HEIGHT = 18
 
 # Crew page text block and page badge.
 CREW_NAME_FONT_NAME = DETAILS_TITLE_FONT_NAME
@@ -279,70 +334,20 @@ def load_font(size: int, *, bold: bool = False, name: str | None = None):
                 continue
     return ImageFont.load_default()
 
-def _continent(points: list[tuple[int, int]], width: int, height: int) -> list[tuple[int, int]]:
-    return [(int(width * x / 320), int(height * y / 240)) for x, y in points]
-
-
-def generate_world_map(path: Path, width: int = CANVAS_WIDTH, height: int = CANVAS_HEIGHT) -> None:
-    image = Image.new("RGB", (width, height), (13, 33, 52))
-    draw = ImageDraw.Draw(image)
-    for x in range(0, width, max(1, width // 12)):
-        draw.line((x, 0, x, height), fill=(20, 52, 76))
-    for y in range(0, height, max(1, height // 6)):
-        draw.line((0, y, width, y), fill=(20, 52, 76))
-    land_rgb = (78, 116, 72)
-    outlines = [
-        [(20, 52), (62, 36), (88, 42), (103, 66), (80, 88), (70, 110), (51, 118), (30, 95)],
-        [(86, 118), (106, 136), (116, 172), (96, 208), (77, 196), (69, 158)],
-        [(158, 42), (196, 36), (244, 48), (278, 62), (298, 88), (286, 112), (244, 104), (208, 106), (188, 96), (174, 78)],
-        [(170, 96), (188, 110), (198, 152), (182, 196), (158, 188), (146, 154), (156, 118)],
-        [(266, 148), (292, 162), (304, 190), (284, 206), (254, 192), (248, 164)],
-        [(92, 24), (106, 13), (122, 20), (118, 42), (100, 46)],
-        [(116, 205), (210, 202), (274, 212), (305, 224), (296, 235), (104, 232)],
-    ]
-    for polygon in outlines:
-        draw.polygon(_continent(polygon, width, height), fill=land_rgb, outline=(117, 158, 110))
-    title_font = load_font(15, bold=True)
-    draw.rounded_rectangle((10, 8, width - 10, 30), radius=10, fill=(6, 18, 32))
-    draw.text((16, centred_text_y(title_font, "World Map", 19)), "World Map", font=title_font, fill=(230, 240, 248))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path)
-
-
-def generate_error_image(path: Path, width: int = CANVAS_WIDTH, height: int = CANVAS_HEIGHT) -> None:
-    image = Image.new("RGB", (width, height), (19, 8, 14))
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((18, 18, width - 18, height - 18), radius=18, fill=(38, 14, 24), outline=(120, 42, 56), width=3)
-    title_font = load_font(20, bold=True)
-    body_font = load_font(14, bold=False)
-    draw.text((54, 54), "!", font=load_font(58, bold=True), fill=(255, 186, 72))
-    draw.text((102, 66), "NASA data unavailable", font=title_font, fill=(245, 230, 230))
-    draw.text((54, 122), "Startup failed and no", font=body_font, fill=(224, 210, 214))
-    draw.text((54, 144), "usable cache was found.", font=body_font, fill=(224, 210, 214))
-    draw.text((54, 178), "Retry later.", font=body_font, fill=(255, 186, 72))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path)
-
-
-def generate_loading_image(path: Path, width: int = CANVAS_WIDTH, height: int = CANVAS_HEIGHT) -> None:
-    image = Image.new("RGB", (width, height), (10, 22, 38))
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((20, 20, width - 20, height - 20), radius=18, fill=(15, 31, 52), outline=(120, 148, 192), width=3)
-    title_font = load_font(18, bold=True)
-    body_font = load_font(12, bold=False)
-    draw.text((54, 60), "ISS data loading", font=title_font, fill=(245, 245, 252))
-    draw.text((54, 108), "Checking live position", font=body_font, fill=(228, 230, 238))
-    draw.text((54, 130), "Preparing details and crew", font=body_font, fill=(228, 230, 238))
-    draw.text((54, 176), "Touch left edge to exit", font=body_font, fill=(192, 206, 226))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path)
-
-
 def ensure_assets() -> None:
-    if not LEGACY_ERROR_ASSET_PATH.exists() and not ERROR_TEMPLATE_PATH.exists():
-        generate_error_image(LEGACY_ERROR_ASSET_PATH)
-    if not LOADING_TEMPLATE_PATH.exists():
-        generate_loading_image(LOADING_TEMPLATE_PATH)
+    required_assets = (
+        MAP_TEMPLATE_PATH,
+        MAP_STALE_TEMPLATE_PATH,
+        DETAILS_TEMPLATE_PATH,
+        CREW_TEMPLATE_PATH,
+        CREW_STALE_TEMPLATE_PATH,
+        ERROR_TEMPLATE_PATH,
+        LOADING_TEMPLATE_PATH,
+        DETAILS_GUIDE_PATH,
+    )
+    missing = [str(path) for path in required_assets if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing required NASA assets: {', '.join(missing)}")
 
 
 
@@ -633,6 +638,22 @@ def fetch_json_list(url: str, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> lis
     return payload
 
 
+def fetch_geoapify_reverse_geocode(latitude: float, longitude: float, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> dict[str, Any]:
+    api_key = os.environ.get(GEOAPIFY_API_KEY_ENV, "").strip()
+    if not api_key:
+        raise RuntimeError(f"{GEOAPIFY_API_KEY_ENV} is not configured")
+    query = urllib.parse.urlencode(
+        {
+            "lat": f"{latitude:.6f}",
+            "lon": f"{longitude:.6f}",
+            "format": "json",
+            "lang": "en",
+            "apiKey": api_key,
+        }
+    )
+    return fetch_json(f"{GEOAPIFY_REVERSE_URL}?{query}", timeout_secs=timeout_secs)
+
+
 def retry_call(callable_obj, attempts: int = LIVE_FETCH_RETRIES):
     last_error: Exception | None = None
     for attempt in range(attempts):
@@ -770,6 +791,10 @@ def iso_country_name(country_code: str, country_map: dict[str, str]) -> str:
     return country_map.get(country_code.upper(), "")
 
 
+def coordinates_match(first: LocationSnapshot, second: LocationSnapshot, tolerance: float = 0.05) -> bool:
+    return abs(first.latitude - second.latitude) <= tolerance and abs(first.longitude - second.longitude) <= tolerance
+
+
 def compute_trail_timestamps(timestamp_value: int) -> list[int]:
     offsets = (-600, -450, -300, -150, 0, 150, 300, 450, 600)
     return [timestamp_value + offset for offset in offsets]
@@ -816,23 +841,95 @@ def build_open_notify_location(cached: LocationSnapshot | None) -> LocationSnaps
         velocity_kmh=cached.velocity_kmh if cached is not None else None,
         country_code=cached.country_code if cached is not None else "",
         country_name=cached.country_name if cached is not None else "",
-        location_label=cached.location_label if cached is not None else "International Waters",
+        location_label=cached.location_label if cached is not None else "",
         visibility=cached.visibility if cached is not None and cached.visibility else "TBA",
         trail=cached.trail if cached is not None else [],
         details_timestamp=cached.details_timestamp if cached is not None else timestamp_value,
     )
 
 
-def location_label_from_geocode(geocode: dict[str, Any], country_name: str, country_code: str) -> str:
-    for key in ("region", "state", "province", "city", "timezone_id"):
-        label = clean_location_text(geocode.get(key, ""))
-        if label:
-            return country_name or label
-    if country_name:
-        return country_name
-    if country_code:
-        return country_code
-    return "International Waters"
+def first_geoapify_result(payload: dict[str, Any]) -> dict[str, Any]:
+    results = payload.get("results")
+    if isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict):
+                return item
+    features = payload.get("features")
+    if isinstance(features, list):
+        for item in features:
+            if not isinstance(item, dict):
+                continue
+            properties = item.get("properties")
+            if isinstance(properties, dict):
+                return properties
+    raise ValueError("Geoapify response did not include a usable result")
+
+
+def extract_geoapify_water_label(properties: dict[str, Any]) -> str:
+    for key in ("formatted", "address_line1", "address_line2", "name"):
+        value = clean_location_text(properties.get(key, ""))
+        lowered = value.lower()
+        if value and any(keyword in lowered for keyword in GEOAPIFY_AQUATIC_KEYWORDS):
+            return value
+    return ""
+
+
+def resolve_geoapify_location(snapshot: LocationSnapshot, country_map: dict[str, str], cached: LocationSnapshot | None) -> tuple[str, str, str, bool]:
+    try:
+        geocode = retry_call(lambda: fetch_geoapify_reverse_geocode(snapshot.latitude, snapshot.longitude))
+        properties = first_geoapify_result(geocode)
+        country_code = clean_location_text(properties.get("country_code", ""), uppercase=True)
+        country_name = clean_location_text(properties.get("country", "")) or iso_country_name(country_code, country_map)
+        return country_code, country_name, extract_geoapify_water_label(properties), False
+    except Exception:
+        if cached is not None and coordinates_match(snapshot, cached):
+            return (
+                clean_location_text(cached.country_code, uppercase=True),
+                clean_location_text(cached.country_name),
+                clean_location_text(cached.location_label),
+                True,
+            )
+        return "", "", "", True
+
+
+def normalise_day_night(value: Any) -> str:
+    lowered = str(value or "").strip().lower()
+    if "day" in lowered:
+        return "Day"
+    if "night" in lowered or "eclips" in lowered:
+        return "Night"
+    return "Unknown"
+
+
+def orbits_per_day(velocity_kmh: float | None, altitude_km: float | None) -> float | None:
+    if velocity_kmh is None or velocity_kmh <= 0:
+        return None
+    orbit_radius_km = EARTH_RADIUS_KM + max(0.0, altitude_km or 408.0)
+    circumference_km = 2 * 3.141592653589793 * orbit_radius_km
+    if circumference_km <= 0:
+        return None
+    raw_orbits = (velocity_kmh * 24.0) / circumference_km
+    return round(raw_orbits * 2.0) / 2.0
+
+
+def format_velocity(location: LocationSnapshot) -> str:
+    if location.velocity_kmh is None:
+        return "Unknown"
+    rounded_orbits = orbits_per_day(location.velocity_kmh, location.altitude_km)
+    if rounded_orbits is None:
+        return f"{location.velocity_kmh:,.0f} km/h"
+    return f"{location.velocity_kmh:,.0f} km/h ({rounded_orbits:.1f} orbits/day)"
+
+
+def build_details_entries(location: LocationSnapshot) -> list[tuple[str, str]]:
+    return [
+        ("Longitude:", f"{location.longitude:.5f}"),
+        ("Latitude:", f"{location.latitude:.5f}"),
+        ("Currently over:", location_display_name(location)),
+        ("Altitude:", f"{location.altitude_km:.0f} km" if location.altitude_km is not None else "Unknown"),
+        ("Velocity:", format_velocity(location)),
+        ("Day/Night:", normalise_day_night(location.visibility)),
+    ]
 
 
 def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | None) -> tuple[LocationSnapshot, bool, bool]:
@@ -858,7 +955,7 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
             velocity_kmh=None,
             country_code=cached.country_code if cached is not None else "",
             country_name=cached.country_name if cached is not None else "",
-            location_label=cached.location_label if cached is not None else "International Waters",
+            location_label=cached.location_label if cached is not None else "",
             visibility=cached.visibility if cached is not None and cached.visibility else "TBA",
             trail=cached.trail if cached is not None else [],
             details_timestamp=cached.details_timestamp if cached is not None else timestamp_value,
@@ -866,7 +963,7 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
 
     country_code = ""
     country_name = ""
-    location_label = "International Waters"
+    location_label = ""
     map_stale = False
     details_stale = False
 
@@ -892,19 +989,9 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
     if not visibility:
         visibility = "TBA"
 
-    try:
-        geocode = fetch_json(WTIA_COORDS_URL.format(lat=snapshot.latitude, lon=snapshot.longitude))
-        country_code = clean_location_text(geocode.get("country_code", ""), uppercase=True)
-        country_name = clean_location_text(geocode.get("country", "") or geocode.get("country_name", "")) or iso_country_name(country_code, country_map)
-        location_label = location_label_from_geocode(geocode, country_name, country_code)
-    except Exception:
-        if cached is not None:
-            country_code = clean_location_text(cached.country_code, uppercase=True)
-            country_name = clean_location_text(cached.country_name)
-            location_label = clean_location_text(cached.location_label) or (country_name or country_code or "International Waters")
-            details_stale = True
-        else:
-            location_label = "International Waters"
+    country_code, country_name, location_label, geocode_stale = resolve_geoapify_location(snapshot, country_map, cached)
+    if geocode_stale:
+        details_stale = True
 
     try:
         trail = fetch_trail(snapshot.position_timestamp)
@@ -1191,14 +1278,11 @@ def wrap_text_lines(draw: ImageDraw.ImageDraw, text: str, font, width_limit: int
 def location_display_name(location: LocationSnapshot) -> str:
     country_name = clean_location_text(location.country_name)
     location_label = clean_location_text(location.location_label)
-    country_code = clean_location_text(location.country_code, uppercase=True)
     if country_name:
         return country_name
     if location_label:
         return location_label
-    if country_code:
-        return country_code
-    return "International Waters"
+    return "Unknown"
 
 
 def draw_badge(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label: str, *, fill: tuple[int, int, int], text_fill: tuple[int, int, int]) -> None:
@@ -1238,52 +1322,30 @@ def render_map_page(location: LocationSnapshot, *, stale: bool) -> Image.Image:
     return image
 
 
-def render_details_page(location: LocationSnapshot, expedition_reason: str, *, stale: bool) -> Image.Image:
+def render_details_page(location: LocationSnapshot, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(DETAILS_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    line_font = load_font(DETAILS_LABEL_FONT_SIZE, bold=True, name=DETAILS_LABEL_FONT_NAME)
+    line_font = load_font(DETAILS_LABEL_FONT_SIZE, bold=False, name=DETAILS_LABEL_FONT_NAME)
     value_font = load_font(DETAILS_VALUE_FONT_SIZE, bold=False, name=DETAILS_VALUE_FONT_NAME)
-    body_font = load_font(DETAILS_BODY_FONT_SIZE, bold=False, name=DETAILS_BODY_FONT_NAME)
 
     if stale:
         draw_badge(
             draw,
-            overlay_bounds(228, 28, 58, 18),
+            overlay_bounds(DETAILS_STALE_BADGE_X, DETAILS_STALE_BADGE_Y, DETAILS_STALE_BADGE_WIDTH, DETAILS_STALE_BADGE_HEIGHT),
             "STALE",
             fill=(88, 64, 20),
             text_fill=TEXT_RGB,
         )
 
-    entries = [
-        ("Lon/Lat:", f"{location.longitude:.5f}, {location.latitude:.5f}"),
-        ("Currently over:", location_display_name(location)),
-        ("Visibility:", location.visibility or "TBA"),
-        ("Velocity(km/h):", f"{location.velocity_kmh:,.0f}km/h" if location.velocity_kmh is not None else "Unknown"),
-        ("Altitude:", f"{location.altitude_km:.0f}km" if location.altitude_km is not None else "Unknown"),
-    ]
+    entries = build_details_entries(location)
     row_centres = tuple(DETAILS_CONTENT_Y + (DETAILS_ROW_HEIGHT // 2) + (DETAILS_ROW_HEIGHT * index) for index in range(len(entries)))
 
     for (label, value), centre_y in zip(entries, row_centres):
-        label_text = label
+        label_text = ellipsize_text(label, line_font, DETAILS_LABEL_WIDTH)
         value_text = ellipsize_text(str(value), value_font, DETAILS_VALUE_WIDTH)
         label_width = draw.textbbox((0, 0), label_text, font=line_font)[2]
-        value_width = draw.textbbox((0, 0), value_text, font=value_font)[2]
-        total_width = label_width + DETAILS_LABEL_GAP + value_width
-        centred_x = DETAILS_CONTENT_X + max(0, (DETAILS_CONTENT_WIDTH - total_width) // 2)
-        start_x = max(DETAILS_CONTENT_X, centred_x)
-        draw.text((start_x, centred_text_y(line_font, label_text, centre_y)), label_text, font=line_font, fill=TEXT_RGB)
-        draw.text((start_x + label_width + DETAILS_LABEL_GAP, centred_text_y(value_font, value_text, centre_y)), value_text, font=value_font, fill=TEXT_RGB)
-
-    reason_label = "Expedition Reason:"
-    reason_label_width = draw.textbbox((0, 0), reason_label, font=line_font)[2]
-    draw.text((DETAILS_REASON_X + max(0, (DETAILS_REASON_WIDTH - reason_label_width) // 2), centred_text_y(line_font, reason_label, DETAILS_REASON_Y + 8)), reason_label, font=line_font, fill=TEXT_RGB)
-
-    wrapped = wrap_text_lines(draw, expedition_reason or "TBA", body_font, DETAILS_REASON_WIDTH, DETAILS_REASON_MAX_LINES)
-    reason_y = DETAILS_REASON_Y + 20
-    for line in wrapped:
-        width = draw.textbbox((0, 0), line, font=body_font)[2]
-        draw.text((DETAILS_REASON_X + max(0, (DETAILS_REASON_WIDTH - width) // 2), reason_y), line, font=body_font, fill=(225, 225, 230))
-        reason_y += DETAILS_REASON_LINE_HEIGHT
+        draw.text((DETAILS_LABEL_X + DETAILS_LABEL_WIDTH - label_width, centred_text_y(line_font, label_text, centre_y)), label_text, font=line_font, fill=TEXT_RGB)
+        draw.text((DETAILS_VALUE_X, centred_text_y(value_font, value_text, centre_y)), value_text, font=value_font, fill=TEXT_RGB)
     return image
 
 def render_crew_page(crew_page: list[CrewMember], page_number: int, total_pages: int, *, stale: bool) -> Image.Image:
@@ -1329,7 +1391,7 @@ def render_crew_page(crew_page: list[CrewMember], page_number: int, total_pages:
 
 
 def render_error_page() -> Image.Image:
-    image = load_asset_candidates(ERROR_TEMPLATE_PATH, LEGACY_ERROR_ASSET_PATH)
+    image = load_asset_candidates(ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
     title_font = load_font(16, bold=True)
     body_font = load_font(12, bold=False)
@@ -1341,15 +1403,14 @@ def render_error_page() -> Image.Image:
     return image
 
 
-def render_loading_page() -> Image.Image:
+def render_loading_page(stage: str = "position") -> Image.Image:
     image = load_asset_candidates(LOADING_TEMPLATE_PATH, MAP_TEMPLATE_PATH, DETAILS_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
     title_font = load_font(18, bold=True, name=DETAILS_TITLE_FONT_NAME)
     body_font = load_font(12, bold=False)
+    title, body, foot = LOADING_STAGE_MESSAGES.get(stage, LOADING_STAGE_MESSAGES["position"])
+    # notes: change this rectangle to move or resize the loading text box.
     draw.rounded_rectangle((34, 82, CANVAS_WIDTH - 34, 176), radius=16, fill=(14, 18, 38), outline=(120, 148, 192), width=2)
-    title = "Loading ISS data"
-    body = "Preparing the latest location"
-    foot = "Crew details follow next"
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 100), title, font=title_font, fill=(245, 245, 252))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 130), body, font=body_font, fill=(228, 230, 238))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 148), foot, font=body_font, fill=(228, 230, 238))
@@ -1363,7 +1424,7 @@ def build_pages(location: LocationSnapshot | None, crew_snapshot: CrewSnapshot |
     total_crew_pages = max(1, len(crew_pages))
     pages = [
         PageState(image=render_map_page(location, stale=map_stale), kind="map", stale=map_stale),
-        PageState(image=render_details_page(location, crew_snapshot.expedition_reason if crew_snapshot is not None else "TBA", stale=details_stale), kind="details", stale=details_stale),
+        PageState(image=render_details_page(location, stale=details_stale), kind="details", stale=details_stale),
     ]
     for index, crew_page in enumerate(crew_pages, start=1):
         pages.append(PageState(image=render_crew_page(crew_page, index, total_crew_pages, stale=crew_stale), kind="crew", stale=crew_stale))
@@ -1374,7 +1435,7 @@ def render_single_page(page_name: str, pages: list[PageState]) -> Image.Image:
     if page_name == "error":
         return render_error_page()
     if page_name == "loading":
-        return render_loading_page()
+        return render_loading_page("render")
     for page in pages:
         if page.kind == page_name:
             return page.image
@@ -1415,16 +1476,19 @@ def probe_wtia_satellite() -> tuple[HealthCheckResult, dict[str, Any] | None]:
         return build_health_check_result("wheretheiss-satellite", "unavailable", str(exc)), None
 
 
-def probe_wtia_coords(latitude: float, longitude: float) -> HealthCheckResult:
+def probe_geoapify_reverse(latitude: float, longitude: float) -> HealthCheckResult:
     try:
-        payload = fetch_json(WTIA_COORDS_URL.format(lat=latitude, lon=longitude))
-        country_code = clean_location_text(payload.get("country_code", ""), uppercase=True)
-        country_name = clean_location_text(payload.get("country", "") or payload.get("country_name", ""))
-        if country_code or country_name:
-            return build_health_check_result("wheretheiss-coords", "healthy", "geocode fields available")
-        return build_health_check_result("wheretheiss-coords", "degraded", "endpoint responded without country fields")
+        payload = fetch_geoapify_reverse_geocode(latitude, longitude)
+        properties = first_geoapify_result(payload)
+        country_name = clean_location_text(properties.get("country", ""))
+        water_label = extract_geoapify_water_label(properties)
+        if country_name:
+            return build_health_check_result("geoapify-reverse", "healthy", f"country available: {country_name}")
+        if water_label:
+            return build_health_check_result("geoapify-reverse", "healthy", f"water label available: {water_label}")
+        return build_health_check_result("geoapify-reverse", "degraded", "response missing country and water label")
     except Exception as exc:
-        return build_health_check_result("wheretheiss-coords", "unavailable", str(exc))
+        return build_health_check_result("geoapify-reverse", "unavailable", str(exc))
 
 
 def probe_wtia_positions(timestamp_value: int) -> HealthCheckResult:
@@ -1467,9 +1531,9 @@ def run_health_check() -> int:
         timestamp_value = safe_int(sat_payload.get("timestamp")) or current_unix_time()
 
     if latitude is not None and longitude is not None:
-        results.append(probe_wtia_coords(latitude, longitude))
+        results.append(probe_geoapify_reverse(latitude, longitude))
     else:
-        results.append(build_health_check_result("wheretheiss-coords", "unavailable", "no usable live coordinates available"))
+        results.append(build_health_check_result("geoapify-reverse", "unavailable", "no usable live coordinates available"))
 
     if timestamp_value is not None:
         results.append(probe_wtia_positions(timestamp_value))
@@ -1538,7 +1602,7 @@ def run_self_test() -> int:
 
 def run_preview(args: argparse.Namespace, country_map: dict[str, str]) -> int:
     if args.page == "loading":
-        save_preview(render_loading_page(), args.output)
+        save_preview(render_loading_page("render"), args.output)
         return 0
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
@@ -1553,7 +1617,6 @@ def run_preview(args: argparse.Namespace, country_map: dict[str, str]) -> int:
 def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
-    cached_crew = deserialize_crew(load_json_file(crew_path) or {})
 
     framebuffer = None
     if not args.no_framebuffer:
@@ -1562,11 +1625,16 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
             return 1
         framebuffer = FramebufferWriter(args.fbdev, args.width, args.height)
         framebuffer.open()
-        framebuffer.write_frame(render_loading_page().resize((args.width, args.height), RESAMPLING_LANCZOS))
+        framebuffer.write_frame(render_loading_page("position").resize((args.width, args.height), RESAMPLING_LANCZOS))
 
+    if framebuffer is not None:
+        framebuffer.write_frame(render_loading_page("location").resize((args.width, args.height), RESAMPLING_LANCZOS))
     location, location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
-    crew_snapshot = cached_crew
-    crew_stale = crew_snapshot is not None
+    if framebuffer is not None:
+        framebuffer.write_frame(render_loading_page("crew").resize((args.width, args.height), RESAMPLING_LANCZOS))
+    crew_snapshot, crew_stale = resolve_crew(crew_path, args.offline)
+    if framebuffer is not None:
+        framebuffer.write_frame(render_loading_page("render").resize((args.width, args.height), RESAMPLING_LANCZOS))
     if not location_ok or location is None:
         pages = [PageState(image=render_error_page(), kind="error", stale=True)]
     else:
