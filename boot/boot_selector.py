@@ -14,7 +14,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,12 +74,22 @@ POLL_TIMEOUT_SECS = 0.2
 MENU_STRIP_WIDTH = 20
 MAX_THEME_PICKER_ITEMS = 6
 THEME_PICKER_MAX_COLUMNS = 3
+# Edit these values to move or resize Settings/status text layout.
 STATUS_TITLE_X = 20
 STATUS_TITLE_Y = 18
+STATUS_TITLE_WIDTH = 260
+STATUS_TITLE_HEIGHT = 24
+STATUS_TITLE_FONT_PATH = os.environ.get("BOOT_SELECTOR_STATUS_TITLE_FONT", "")
+STATUS_TITLE_FONT_SIZE = int(os.environ.get("BOOT_SELECTOR_STATUS_TITLE_FONT_SIZE", "18"))
+
 STATUS_BODY_X = 20
 STATUS_BODY_Y = 54
-STATUS_LINE_SPACING = 14
-STATUS_WRAP_WIDTH = 38
+STATUS_BODY_WIDTH = 260
+STATUS_BODY_HEIGHT = 156
+STATUS_BODY_FONT_PATH = os.environ.get("BOOT_SELECTOR_STATUS_BODY_FONT", "")
+STATUS_BODY_FONT_SIZE = int(os.environ.get("BOOT_SELECTOR_STATUS_BODY_FONT_SIZE", "14"))
+STATUS_LINE_SPACING = 18
+STATUS_BOTTOM_MARGIN = 12
 
 ROOT_MENU_1 = "main_menu_1"
 ROOT_MENU_2 = "main_menu_2"
@@ -779,10 +788,82 @@ def build_status_text(screen_name: str, *, day_service: str = DEFAULT_DAY_SERVIC
     return _default_status_text(screen_name)
 
 
-def _wrap_status_lines(body: str) -> list[str]:
+def _load_ui_font(font_path: str, font_size: int) -> ImageFont.ImageFont:
+    resolved_size = max(8, font_size)
+    for candidate in (font_path.strip(), "DejaVuSans.ttf"):
+        if not candidate:
+            continue
+        try:
+            return ImageFont.truetype(candidate, resolved_size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _fit_status_title(draw: ImageDraw.ImageDraw, title: str, font: ImageFont.ImageFont, max_width: int) -> str:
+    if max_width <= 0:
+        return title
+    if draw.textbbox((0, 0), title, font=font)[2] <= max_width:
+        return title
+    ellipsis = "..."
+    trimmed = title
+    while trimmed:
+        candidate = f"{trimmed}{ellipsis}"
+        if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+            return candidate
+        trimmed = trimmed[:-1]
+    return ellipsis
+
+
+def _wrap_status_lines(
+    draw: ImageDraw.ImageDraw,
+    body: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+    max_lines: int,
+) -> list[str]:
+    if max_lines <= 0:
+        return []
+
     lines: list[str] = []
+    ellipsis = "..."
+
+    def append_wrapped_line(raw_line: str) -> None:
+        pending = raw_line.strip()
+        if not pending:
+            lines.append("")
+            return
+
+        words = pending.split()
+        current = words.pop(0)
+        while words:
+            candidate = f"{current} {words[0]}"
+            if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+                current = candidate
+                words.pop(0)
+                continue
+            lines.append(current)
+            if len(lines) >= max_lines:
+                return
+            current = words.pop(0)
+        lines.append(current)
+
     for raw_line in body.splitlines() or [""]:
-        lines.extend(textwrap.wrap(raw_line, width=STATUS_WRAP_WIDTH) or [""])
+        append_wrapped_line(raw_line)
+        if len(lines) >= max_lines:
+            break
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+
+    if not lines:
+        return [""]
+
+    if len(lines) == max_lines:
+        final_line = lines[-1].rstrip()
+        while final_line and draw.textbbox((0, 0), f"{final_line}{ellipsis}", font=font)[2] > max_width:
+            final_line = final_line[:-1].rstrip()
+        lines[-1] = f"{final_line}{ellipsis}" if final_line else ellipsis
     return lines
 
 
@@ -791,11 +872,20 @@ def draw_status_screen(base_image: Image.Image, screen_name: str, status_text: s
     draw = ImageDraw.Draw(frame)
     title = _status_title(screen_name)
     body = status_text or build_status_text(screen_name)
-    font = ImageFont.load_default()
-    draw.text((STATUS_TITLE_X, STATUS_TITLE_Y), title, font=font, fill=ACCENT)
+    title_font = _load_ui_font(STATUS_TITLE_FONT_PATH, STATUS_TITLE_FONT_SIZE)
+    body_font = _load_ui_font(STATUS_BODY_FONT_PATH, STATUS_BODY_FONT_SIZE)
+    max_body_lines = max(1, min(
+        STATUS_BODY_HEIGHT // max(1, STATUS_LINE_SPACING),
+        max(1, (frame.height - STATUS_BODY_Y - STATUS_BOTTOM_MARGIN) // max(1, STATUS_LINE_SPACING)),
+    ))
+    title_text = _fit_status_title(draw, title, title_font, STATUS_TITLE_WIDTH)
+    draw.text((STATUS_TITLE_X, STATUS_TITLE_Y), title_text, font=title_font, fill=ACCENT)
     fill = WARN if body == _default_status_text(screen_name) else FG
-    for index, line in enumerate(_wrap_status_lines(body)):
-        draw.text((STATUS_BODY_X, STATUS_BODY_Y + (index * STATUS_LINE_SPACING)), line, font=font, fill=fill)
+    for index, line in enumerate(_wrap_status_lines(draw, body, body_font, STATUS_BODY_WIDTH, max_body_lines)):
+        body_y = STATUS_BODY_Y + (index * STATUS_LINE_SPACING)
+        if body_y > frame.height - STATUS_BOTTOM_MARGIN:
+            break
+        draw.text((STATUS_BODY_X, body_y), line, font=body_font, fill=fill)
     return frame
 
 

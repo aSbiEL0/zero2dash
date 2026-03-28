@@ -42,16 +42,13 @@ Live status: ACTIVE
   - `comic`
   - `frosty`
   - `steele`
-- The current code therefore still contains a naming mismatch between fixed theme button assignments and discovered theme ids.
-- Shell back/return routing is still left-sided in `resolve_screen_action()` via `screen_x < MENU_STRIP_WIDTH`.
-- Settings status rendering currently exposes these code constants:
-  - `STATUS_TITLE_X = 20`
-  - `STATUS_TITLE_Y = 18`
-  - `STATUS_BODY_X = 20`
-  - `STATUS_BODY_Y = 54`
-  - `STATUS_LINE_SPACING = 14`
-  - `STATUS_WRAP_WIDTH = 38`
-- Settings status rendering still uses `ImageFont.load_default()`, so font path/choice and font size are not yet operator-tunable in code.
+- Theme routing has been corrected locally and confirmed on hardware.
+- Shell back/return routing now uses the rightmost `20px` strip and has been confirmed on hardware.
+- Settings status rendering now exposes an explicit code-side tuning block for:
+  - title `x`, `y`, width, height, font path, and font size
+  - body `x`, `y`, width, height, font path, and font size
+  - line spacing and bottom margin
+- Settings status rendering now uses explicit font loading and pixel-width wrapping/truncation instead of `ImageFont.load_default()` plus character-count wrapping.
 - No checked-in `tests/test_boot_selector.py` source file exists locally or on the device; only compiled `__pycache__` artifacts are present.
 
 ## Active Segments
@@ -61,18 +58,17 @@ Live status: ACTIVE
   Evidence:
   - actual installed theme ids verified from filesystem and `--dump-contracts`
   - actual button-order mismatch identified in code
-- `S-003` Themes plus right-side back stripe implementation: IN PROGRESS.
+- `S-003` Themes plus right-side back stripe implementation: COMPLETE.
   Completed in this segment:
   - `THEME_BUTTON_ORDER` now uses live ids and swaps `steele` and `frosty` while leaving the other working theme assignments intact
   - on-device confirmation received that the Themes swap works correctly
   - shell routing now treats the rightmost `20px` as the strip hit area and uses the remaining `300px` as the active content width for stripe-based screens
-  Remaining work:
-  - on-device confirmation that the right-side stripe matches the new touch-mapping references
+  - on-device confirmation received that the right-side stripe matches the updated touch-mapping references
 - `S-004` Settings layout stabilization and code-side tuning surface: OPEN.
-  Verified remaining work:
-  - improve text layout beyond current position-only constants
-  - expose font choice/path and font size in code
-  - make text area dimensions explicit
+  Current state:
+  - local code now exposes the Settings/status layout knobs in `boot/boot_selector.py`
+  - local code now uses explicit title/body widths and heights plus font path/size controls
+  - hardware confirmation is still pending
 - `S-005` validation and closeout: OPEN.
   Verified remaining work:
   - determine whether test source files must be restored or created before meaningful regression coverage can be updated
@@ -83,6 +79,7 @@ Live status: ACTIVE
 - Local `PLAN.md` now reflects actual code findings instead of the stale markdown-only story.
 - Local `AGENTS.md` has been narrowed to the active shell slice.
 - The old supporting plan file has been removed locally to avoid split guidance.
+- Segment `S-004` is now in active implementation with local code changes ready for device verification.
 - Device control-plane files remain outdated relative to the local control plane.
 
 ## Validation Snapshot
@@ -93,6 +90,6 @@ Live status: ACTIVE
 
 ## Open Notes
 
-- The key code-level issue for Themes is not theme discovery; it is the mismatch between discovered ids and the fixed preferred button-order ids.
-- The key code-level issue for the back stripe is straightforward: all relevant shell screens still use the left edge.
-- The key code-level issue for Settings is that position constants exist, but font and text-area tuning are still not surfaced cleanly.
+- The remaining open runtime question is whether the new Settings layout defaults look correct on hardware.
+- If further tuning is needed, the values to edit now live together near the top of `boot/boot_selector.py`.
+- Regression source files for shell behavior are still missing, so final validation remains partly device-led.
