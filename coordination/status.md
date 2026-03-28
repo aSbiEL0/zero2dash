@@ -64,8 +64,10 @@ Live status: ACTIVE
 - `S-003` Themes plus right-side back stripe implementation: IN PROGRESS.
   Completed in this segment:
   - `THEME_BUTTON_ORDER` now uses live ids and swaps `steele` and `frosty` while leaving the other working theme assignments intact
+  - on-device confirmation received that the Themes swap works correctly
+  - shell routing now treats the rightmost `20px` as the strip hit area and uses the remaining `300px` as the active content width for stripe-based screens
   Remaining work:
-  - move the back stripe from left to right in shell routing
+  - on-device confirmation that the right-side stripe matches the new touch-mapping references
 - `S-004` Settings layout stabilization and code-side tuning surface: OPEN.
   Verified remaining work:
   - improve text layout beyond current position-only constants
