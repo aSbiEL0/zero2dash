@@ -813,6 +813,18 @@ def root_strip_action(screen_name: str) -> str:
     return ROOT_MENU_2 if screen_name == ROOT_MENU_1 else ROOT_MENU_1
 
 
+def strip_left_edge(screen_width: int) -> int:
+    return max(0, screen_width - MENU_STRIP_WIDTH)
+
+
+def is_strip_tap(screen_x: int, screen_width: int) -> bool:
+    return screen_x >= strip_left_edge(screen_width)
+
+
+def usable_content_width(screen_width: int) -> int:
+    return max(1, screen_width - MENU_STRIP_WIDTH)
+
+
 def resolve_shutdown_action(screen_y: int, screen_height: int, invert_y: bool) -> str:
     if invert_y:
         screen_y = screen_height - screen_y
@@ -857,12 +869,12 @@ def resolve_theme_picker_action(
     targets = theme_picker_targets(theme_ids or ())
     if not targets:
         return None
-    usable_width = max(1, screen_width - MENU_STRIP_WIDTH)
+    usable_width = usable_content_width(screen_width)
     column_count = min(THEME_PICKER_MAX_COLUMNS, len(targets))
     row_count = 1 if len(targets) <= THEME_PICKER_MAX_COLUMNS else 2
     column_width = usable_width / float(column_count)
     row_height = screen_height / float(row_count)
-    relative_x = max(0, screen_x - MENU_STRIP_WIDTH)
+    relative_x = min(max(0, screen_x), usable_width - 1)
     column = min(column_count - 1, max(0, int(relative_x / column_width)))
     row = min(row_count - 1, max(0, int(screen_y / row_height)))
     index = (row * column_count) + column
@@ -887,9 +899,9 @@ def resolve_screen_action(
     theme_ids: tuple[str, ...] | None = None,
 ) -> str | None:
     if screen_name in {ROOT_MENU_1, ROOT_MENU_2}:
-        if screen_x < MENU_STRIP_WIDTH:
+        if is_strip_tap(screen_x, screen_width):
             return root_strip_action(screen_name)
-        half_w = screen_width // 2
+        half_w = usable_content_width(screen_width) // 2
         half_h = screen_height // 2
         if screen_name == ROOT_MENU_1:
             if screen_x < half_w and screen_y < half_h:
@@ -907,11 +919,11 @@ def resolve_screen_action(
             return "settings"
         return "shutdown"
     if screen_name == DASHBOARDS_MENU:
-        if screen_x < MENU_STRIP_WIDTH:
+        if is_strip_tap(screen_x, screen_width):
             return ROOT_MENU_1
         return "dashboards" if screen_y < (screen_height // 2) else "night"
     if screen_name == SETTINGS_MENU:
-        if screen_x < MENU_STRIP_WIDTH:
+        if is_strip_tap(screen_x, screen_width):
             return ROOT_MENU_2
         third = screen_height // 3
         if screen_y < third:
@@ -920,19 +932,19 @@ def resolve_screen_action(
             return "pi_stats"
         return "logs"
     if screen_name == SHUTDOWN_CONFIRM:
-        if screen_x < MENU_STRIP_WIDTH:
+        if is_strip_tap(screen_x, screen_width):
             return "cancel"
         return resolve_shutdown_action(screen_y, screen_height, False)
     if screen_name == THEMES_MENU:
-        if screen_x < MENU_STRIP_WIDTH:
+        if is_strip_tap(screen_x, screen_width):
             return ROOT_MENU_2
         return resolve_theme_picker_action(screen_x, screen_y, screen_width, screen_height, theme_ids)
     if screen_name == PIN_KEYPAD:
         return resolve_keypad_action(screen_x, screen_y, screen_width, screen_height)
     if screen_name in {NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS}:
-        return SETTINGS_MENU if screen_x < MENU_STRIP_WIDTH else None
+        return SETTINGS_MENU if is_strip_tap(screen_x, screen_width) else None
     if screen_name == ISS_PLACEHOLDER:
-        return ROOT_MENU_1 if screen_x < MENU_STRIP_WIDTH else None
+        return ROOT_MENU_1 if is_strip_tap(screen_x, screen_width) else None
     return None
 
 
