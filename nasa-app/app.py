@@ -135,9 +135,9 @@ CREW_HEADER_FONT_NAME = DETAILS_TITLE_FONT_NAME
 CREW_HEADER_FONT_SIZE = 17
 CREW_HEADER_Y = 31
 # Edit these centre points to move each visible crew row vertically.
-CREW_SLOT_NAME_CENTRES = (74, 127, 180)
-CREW_SLOT_DETAIL_1_CENTRES = (92, 145, 198)
-CREW_SLOT_DETAIL_2_CENTRES = (106, 159, 212)
+CREW_SLOT_NAME_CENTRES = (88, 160)
+CREW_SLOT_DETAIL_1_CENTRES = (108, 180)
+CREW_SLOT_DETAIL_2_CENTRES = (124, 196)
 
 @dataclass(frozen=True)
 class OrbitPoint:
@@ -1029,7 +1029,7 @@ def format_timestamp(timestamp_value: int | None) -> str:
     return datetime.fromtimestamp(timestamp_value, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def paginate_crew(crew: list[CrewMember], page_size: int = 3) -> list[list[CrewMember]]:
+def paginate_crew(crew: list[CrewMember], page_size: int = 2) -> list[list[CrewMember]]:
     if not crew:
         return [[]]
     return [crew[index : index + page_size] for index in range(0, len(crew), page_size)]
@@ -1317,7 +1317,7 @@ def run_self_test() -> int:
     if deserialize_location(serialize_location(sample_location)) is None or deserialize_crew(serialize_crew(sample_crew)) is None:
         print("[nasa] self-test failed: cache round-trip failed", file=sys.stderr)
         return 1
-    if paginate_crew(sample_crew.crew, 3)[1][0].name != "Dina Example":
+    if paginate_crew(sample_crew.crew, 2)[1][1].name != "Dina Example":
         print("[nasa] self-test failed: crew pagination mismatch", file=sys.stderr)
         return 1
     print("[nasa] self-test passed", flush=True)
@@ -1350,24 +1350,12 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
         framebuffer.write_frame(render_loading_page().resize((args.width, args.height), RESAMPLING_LANCZOS))
 
     location, location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
-    if not location_ok or location is None:
-        image = render_error_page()
-        save_preview(image, args.output)
-        if args.no_framebuffer:
-            return 1
-        try:
-            assert framebuffer is not None
-            framebuffer.write_frame(image.resize((args.width, args.height), RESAMPLING_LANCZOS))
-            while not _STOP_REQUESTED:
-                time.sleep(0.25)
-        finally:
-            if framebuffer is not None:
-                framebuffer.close()
-        return 1
-
     crew_snapshot = cached_crew
     crew_stale = crew_snapshot is not None
-    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+    if not location_ok or location is None:
+        pages = [PageState(image=render_loading_page(), kind="loading", stale=True)]
+    else:
+        pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
     if args.output and args.no_framebuffer:
         save_preview(pages[0].image, args.output)
         return 0
@@ -1391,14 +1379,18 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
             now = time.monotonic()
             if now >= next_crew_refresh_at:
                 crew_snapshot, crew_stale = resolve_crew(crew_path, args.offline)
-                pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+                if location is not None:
+                    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
                 page_index = min(page_index, len(pages) - 1)
                 last_rendered_index = -1
                 next_crew_refresh_at = now + LOCATION_REFRESH_SECS
 
             if now >= next_refresh_at:
-                location, _location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
-                pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+                location, location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
+                if location_ok and location is not None:
+                    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+                else:
+                    pages = [PageState(image=render_loading_page(), kind="loading", stale=True)]
                 page_index = min(page_index, len(pages) - 1)
                 last_rendered_index = -1
                 next_refresh_at = now + LOCATION_REFRESH_SECS

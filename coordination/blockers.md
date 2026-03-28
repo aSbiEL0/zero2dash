@@ -65,6 +65,7 @@ Resolution notes:
 - `nasa-app/app.py` now renders a loading frame immediately on hardware paths
 - startup now prefers usable cached location over Open Notify after a live-location failure
 - crew loading is deferred until after the first usable frame
+- if no usable location is available yet, the live app now stays in loading/retry instead of dropping to the error background
 - blocker stays open until device validation confirms the startup experience is now acceptable
 
 ---
@@ -91,7 +92,7 @@ Unblock condition:
 
 Resolution notes:
 - the crew renderer now draws both a visible `page/total` badge and a stronger `Crew x/y` header
-- crew row spacing was widened so sequential pages read as separate screens instead of one overdrawn layout
+- crew pagination now shows one crew member per page, matching the single text panel in `people-background.png`
 
 ## Logging Rule
 

@@ -42,7 +42,8 @@ Live status: ACTIVE
   - startup now renders an immediate loading frame before live fetch work on hardware paths
   - startup now prefers usable cached location over Open Notify as the first fallback after live failure
   - crew is no longer part of the first-frame readiness gate; cached crew renders first and live crew refreshes after the first frame
-  - crew pages now render a stronger `Crew x/y` header and wider row spacing for clearer per-page separation
+  - crew pagination now matches the background contract: one crew member per page with a stronger `Crew x/y` header
+  - live launch now stays on the loading screen and keeps retrying when no usable location is available yet, instead of dropping to the error background
   Remaining:
   - pass/flyover restoration
   - device validation for the new startup/loading and crew-page clarity pass

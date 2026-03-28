@@ -220,14 +220,14 @@ class NasaAppTests(unittest.TestCase):
         )
 
     def test_render_crew_page_changes_with_page_badge(self) -> None:
-        crew_page = self.build_crew_snapshot(count=4).crew[:3]
+        crew_page = self.build_crew_snapshot(count=4).crew[:2]
         page_one = NASA_APP.render_crew_page(crew_page, 1, 2, stale=False)
         page_two = NASA_APP.render_crew_page(crew_page, 2, 2, stale=False)
         self.assertEqual(page_one.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
         self.assertNotEqual(page_one.tobytes(), page_two.tobytes())
 
     def test_render_crew_page_passes_page_badge_label(self) -> None:
-        crew_page = self.build_crew_snapshot(count=4).crew[:3]
+        crew_page = self.build_crew_snapshot(count=4).crew[:2]
         with patch.object(NASA_APP, "draw_badge") as draw_badge:
             image = NASA_APP.render_crew_page(crew_page, 2, 5, stale=False)
         self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
@@ -245,6 +245,11 @@ class NasaAppTests(unittest.TestCase):
             crew_stale=False,
         )
         self.assertEqual([page.kind for page in pages], ["map", "details", "crew", "crew"])
+
+    def test_paginate_crew_uses_two_people_per_page(self) -> None:
+        crew_pages = NASA_APP.paginate_crew(self.build_crew_snapshot(count=4).crew)
+        self.assertEqual(len(crew_pages), 2)
+        self.assertTrue(all(len(page) == 2 for page in crew_pages))
 
     def test_resolve_location_prefers_cache_before_open_notify_fallback(self) -> None:
         cached = self.build_location(country_name="", location_label="")
