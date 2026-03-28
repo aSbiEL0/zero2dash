@@ -191,6 +191,13 @@ class PageState:
     stale: bool
 
 
+@dataclass(frozen=True)
+class HealthCheckResult:
+    name: str
+    status: str
+    detail: str
+
+
 def request_stop(_signum: int, _frame: object) -> None:
     global _STOP_REQUESTED
     _STOP_REQUESTED = True
@@ -204,10 +211,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--location-cache", default=str(LOCATION_CACHE_PATH), help=f"Location/details cache path (default: {LOCATION_CACHE_PATH})")
     parser.add_argument("--crew-cache", default=str(CREW_CACHE_PATH), help=f"Crew cache path (default: {CREW_CACHE_PATH})")
     parser.add_argument("--output", help="Optional output PNG path for local verification.")
-    parser.add_argument("--page", choices=("map", "details", "crew", "error"), help="Render a single page and exit.")
+    parser.add_argument("--page", choices=("map", "details", "crew", "loading", "error"), help="Render a single page and exit.")
     parser.add_argument("--offline", action="store_true", help="Skip live API calls and use cache/error paths only.")
     parser.add_argument("--no-framebuffer", action="store_true", help="Skip framebuffer writes for safe verification.")
     parser.add_argument("--self-test", action="store_true", help="Run inline smoke tests and exit.")
+    parser.add_argument("--health-check", action="store_true", help="Probe live NASA app endpoints and report endpoint health.")
     return parser.parse_args()
 
 
@@ -316,9 +324,25 @@ def generate_error_image(path: Path, width: int = CANVAS_WIDTH, height: int = CA
     image.save(path)
 
 
+def generate_loading_image(path: Path, width: int = CANVAS_WIDTH, height: int = CANVAS_HEIGHT) -> None:
+    image = Image.new("RGB", (width, height), (10, 22, 38))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((20, 20, width - 20, height - 20), radius=18, fill=(15, 31, 52), outline=(120, 148, 192), width=3)
+    title_font = load_font(18, bold=True)
+    body_font = load_font(12, bold=False)
+    draw.text((54, 60), "ISS data loading", font=title_font, fill=(245, 245, 252))
+    draw.text((54, 108), "Checking live position", font=body_font, fill=(228, 230, 238))
+    draw.text((54, 130), "Preparing details and crew", font=body_font, fill=(228, 230, 238))
+    draw.text((54, 176), "Touch left edge to exit", font=body_font, fill=(192, 206, 226))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path)
+
+
 def ensure_assets() -> None:
     if not LEGACY_ERROR_ASSET_PATH.exists() and not ERROR_TEMPLATE_PATH.exists():
         generate_error_image(LEGACY_ERROR_ASSET_PATH)
+    if not LOADING_TEMPLATE_PATH.exists():
+        generate_loading_image(LOADING_TEMPLATE_PATH)
 
 
 
@@ -589,12 +613,23 @@ def expand_path(value: str) -> Path:
     return candidate if candidate.is_absolute() else (SCRIPT_DIR / candidate).resolve()
 
 
-def fetch_json(url: str, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> dict[str, Any]:
+def fetch_json_value(url: str, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> Any:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT}, method="GET")
     with urllib.request.urlopen(request, timeout=timeout_secs) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_json(url: str, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> dict[str, Any]:
+    payload = fetch_json_value(url, timeout_secs=timeout_secs)
     if not isinstance(payload, dict):
         raise ValueError("API response was not a JSON object")
+    return payload
+
+
+def fetch_json_list(url: str, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> list[Any]:
+    payload = fetch_json_value(url, timeout_secs=timeout_secs)
+    if not isinstance(payload, list):
+        raise ValueError("API response was not a JSON list")
     return payload
 
 
@@ -742,8 +777,13 @@ def compute_trail_timestamps(timestamp_value: int) -> list[int]:
 
 def fetch_trail(timestamp_value: int) -> list[OrbitPoint]:
     query = urllib.parse.urlencode({"timestamps": ",".join(str(item) for item in compute_trail_timestamps(timestamp_value))})
-    payload = fetch_json(f"{WTIA_POSITIONS_URL}?{query}")
-    points_raw = payload.get("positions", payload.get("data", payload))
+    payload = fetch_json_value(f"{WTIA_POSITIONS_URL}?{query}")
+    if isinstance(payload, dict):
+        points_raw = payload.get("positions", payload.get("data", payload))
+    elif isinstance(payload, list):
+        points_raw = payload
+    else:
+        raise ValueError("trail payload was neither a JSON object nor a list")
     trail: list[OrbitPoint] = []
     if isinstance(points_raw, list):
         for item in points_raw:
@@ -758,84 +798,15 @@ def fetch_trail(timestamp_value: int) -> list[OrbitPoint]:
     return trail
 
 
-def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | None) -> tuple[LocationSnapshot, bool, bool]:
-    now_ts = current_unix_time()
-    sat_payload = retry_call(lambda: fetch_json(WTIA_SAT_URL))
-    latitude = safe_float(sat_payload.get("latitude"))
-    longitude = safe_float(sat_payload.get("longitude"))
-    timestamp_value = safe_int(sat_payload.get("timestamp")) or now_ts
-    altitude_km = safe_float(sat_payload.get("altitude"))
-    velocity_kmh = safe_float(sat_payload.get("velocity"))
-    visibility = str(sat_payload.get("visibility", "")).strip().title()
-    if latitude is None or longitude is None:
-        raise ValueError("live location payload is missing latitude/longitude")
-
-    country_code = ""
-    country_name = ""
-    details_timestamp = timestamp_value
-    map_stale = False
-    details_stale = False
-    if altitude_km is None and cached is not None and cached.altitude_km is not None:
-        altitude_km = cached.altitude_km
-        details_stale = True
-    if velocity_kmh is None and cached is not None and cached.velocity_kmh is not None:
-        velocity_kmh = cached.velocity_kmh
-        details_stale = True
-    if not visibility and cached is not None and cached.visibility:
-        visibility = cached.visibility
-        details_stale = True
-    if not visibility:
-        visibility = "TBA"
-
-    try:
-        geocode = fetch_json(WTIA_COORDS_URL.format(lat=latitude, lon=longitude))
-        country_code = clean_location_text(geocode.get("country_code", ""), uppercase=True)
-        country_name = iso_country_name(country_code, country_map)
-    except Exception:
-        if cached is not None:
-            country_code = clean_location_text(cached.country_code, uppercase=True)
-            country_name = clean_location_text(cached.country_name)
-            details_stale = True
-            details_timestamp = cached.details_timestamp
-
-    try:
-        trail = fetch_trail(timestamp_value)
-    except Exception:
-        trail = cached.trail if cached is not None else []
-        if trail:
-            map_stale = True
-
-    location_label = country_name or country_code or "International Waters"
-    if not country_name and not country_code:
-        location_label = "International Waters"
-
-    snapshot = LocationSnapshot(
-        source="wheretheiss",
-        fetched_at=now_ts,
-        position_timestamp=timestamp_value,
-        latitude=latitude,
-        longitude=longitude,
-        altitude_km=altitude_km,
-        velocity_kmh=velocity_kmh,
-        country_code=country_code,
-        country_name=country_name,
-        location_label=location_label,
-        visibility=visibility,
-        trail=trail,
-        details_timestamp=details_timestamp,
-    )
-    return snapshot, map_stale, details_stale
-
-
-def build_fallback_location(cached: LocationSnapshot | None) -> tuple[LocationSnapshot, bool, bool]:
+def build_open_notify_location(cached: LocationSnapshot | None) -> LocationSnapshot:
     payload = retry_call(lambda: fetch_json(OPEN_NOTIFY_ISS_URL))
     position = payload.get("iss_position", {})
     latitude = safe_float(position.get("latitude"))
     longitude = safe_float(position.get("longitude"))
     timestamp_value = safe_int(payload.get("timestamp")) or current_unix_time()
     if latitude is None or longitude is None:
-        raise ValueError("fallback location payload is missing latitude/longitude")
-    snapshot = LocationSnapshot(
+        raise ValueError("open-notify payload is missing latitude/longitude")
+    return LocationSnapshot(
         source="open-notify",
         fetched_at=current_unix_time(),
         position_timestamp=timestamp_value,
@@ -850,6 +821,118 @@ def build_fallback_location(cached: LocationSnapshot | None) -> tuple[LocationSn
         trail=cached.trail if cached is not None else [],
         details_timestamp=cached.details_timestamp if cached is not None else timestamp_value,
     )
+
+
+def location_label_from_geocode(geocode: dict[str, Any], country_name: str, country_code: str) -> str:
+    for key in ("region", "state", "province", "city", "timezone_id"):
+        label = clean_location_text(geocode.get(key, ""))
+        if label:
+            return country_name or label
+    if country_name:
+        return country_name
+    if country_code:
+        return country_code
+    return "International Waters"
+
+
+def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | None) -> tuple[LocationSnapshot, bool, bool]:
+    now_ts = current_unix_time()
+    sat_payload: dict[str, Any] | None = None
+
+    try:
+        snapshot = build_open_notify_location(cached)
+    except Exception:
+        sat_payload = retry_call(lambda: fetch_json(WTIA_SAT_URL))
+        latitude = safe_float(sat_payload.get("latitude"))
+        longitude = safe_float(sat_payload.get("longitude"))
+        timestamp_value = safe_int(sat_payload.get("timestamp")) or now_ts
+        if latitude is None or longitude is None:
+            raise ValueError("live location payload is missing latitude/longitude")
+        snapshot = LocationSnapshot(
+            source="wheretheiss",
+            fetched_at=now_ts,
+            position_timestamp=timestamp_value,
+            latitude=latitude,
+            longitude=longitude,
+            altitude_km=None,
+            velocity_kmh=None,
+            country_code=cached.country_code if cached is not None else "",
+            country_name=cached.country_name if cached is not None else "",
+            location_label=cached.location_label if cached is not None else "International Waters",
+            visibility=cached.visibility if cached is not None and cached.visibility else "TBA",
+            trail=cached.trail if cached is not None else [],
+            details_timestamp=cached.details_timestamp if cached is not None else timestamp_value,
+        )
+
+    country_code = ""
+    country_name = ""
+    location_label = "International Waters"
+    map_stale = False
+    details_stale = False
+
+    if sat_payload is None:
+        try:
+            sat_payload = retry_call(lambda: fetch_json(WTIA_SAT_URL))
+        except Exception:
+            sat_payload = None
+
+    altitude_km = safe_float(sat_payload.get("altitude")) if sat_payload is not None else None
+    velocity_kmh = safe_float(sat_payload.get("velocity")) if sat_payload is not None else None
+    visibility = str(sat_payload.get("visibility", "")).strip().title() if sat_payload is not None else ""
+
+    if altitude_km is None and cached is not None and cached.altitude_km is not None:
+        altitude_km = cached.altitude_km
+        details_stale = True
+    if velocity_kmh is None and cached is not None and cached.velocity_kmh is not None:
+        velocity_kmh = cached.velocity_kmh
+        details_stale = True
+    if not visibility and cached is not None and cached.visibility:
+        visibility = cached.visibility
+        details_stale = True
+    if not visibility:
+        visibility = "TBA"
+
+    try:
+        geocode = fetch_json(WTIA_COORDS_URL.format(lat=snapshot.latitude, lon=snapshot.longitude))
+        country_code = clean_location_text(geocode.get("country_code", ""), uppercase=True)
+        country_name = clean_location_text(geocode.get("country", "") or geocode.get("country_name", "")) or iso_country_name(country_code, country_map)
+        location_label = location_label_from_geocode(geocode, country_name, country_code)
+    except Exception:
+        if cached is not None:
+            country_code = clean_location_text(cached.country_code, uppercase=True)
+            country_name = clean_location_text(cached.country_name)
+            location_label = clean_location_text(cached.location_label) or (country_name or country_code or "International Waters")
+            details_stale = True
+        else:
+            location_label = "International Waters"
+
+    try:
+        trail = fetch_trail(snapshot.position_timestamp)
+    except Exception:
+        trail = cached.trail if cached is not None else []
+        if trail:
+            map_stale = True
+
+    snapshot = LocationSnapshot(
+        source=snapshot.source,
+        fetched_at=snapshot.fetched_at,
+        position_timestamp=snapshot.position_timestamp,
+        latitude=snapshot.latitude,
+        longitude=snapshot.longitude,
+        altitude_km=altitude_km,
+        velocity_kmh=velocity_kmh,
+        country_code=country_code,
+        country_name=country_name,
+        location_label=location_label,
+        visibility=visibility,
+        trail=trail,
+        details_timestamp=now_ts if sat_payload is not None else snapshot.details_timestamp,
+    )
+    return snapshot, map_stale, details_stale
+
+
+def build_fallback_location(cached: LocationSnapshot | None) -> tuple[LocationSnapshot, bool, bool]:
+    snapshot = build_open_notify_location(cached)
     return snapshot, bool(cached is not None and cached.trail), True
 
 
@@ -863,8 +946,6 @@ def resolve_location(country_map: dict[str, str], cache_path: Path, offline: boo
         return live, True, map_stale, details_stale
     except Exception:
         pass
-    if cached is not None:
-        return cached, True, True, True
     try:
         fallback, map_stale, details_stale = build_fallback_location(cached)
         write_json_file(cache_path, serialize_location(fallback))
@@ -1046,7 +1127,6 @@ def load_asset(path: Path) -> Image.Image:
     return _load_asset_cached(path)
 
 
-@lru_cache(maxsize=16)
 def load_asset_candidates(*paths: Path) -> Image.Image:
     for path in paths:
         if path.exists():
@@ -1127,6 +1207,21 @@ def draw_badge(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label:
     draw.text((box[0] + 8, centred_text_y(font, label, (box[1] + box[3]) // 2)), label, font=font, fill=text_fill)
 
 
+def draw_page_dots(draw: ImageDraw.ImageDraw, *, page_number: int, total_pages: int) -> None:
+    if total_pages <= 1:
+        return
+    dot_diameter = 8
+    gap = 8
+    total_width = (total_pages * dot_diameter) + ((total_pages - 1) * gap)
+    start_x = (CANVAS_WIDTH - total_width) // 2
+    y = 214
+    for index in range(total_pages):
+        left = start_x + (index * (dot_diameter + gap))
+        top = y
+        fill = ACCENT_RGB if index + 1 == page_number else (70, 86, 108)
+        draw.ellipse((left, top, left + dot_diameter, top + dot_diameter), fill=fill)
+
+
 def render_map_page(location: LocationSnapshot, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(MAP_STALE_TEMPLATE_PATH if stale else MAP_TEMPLATE_PATH, MAP_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
@@ -1144,11 +1239,20 @@ def render_map_page(location: LocationSnapshot, *, stale: bool) -> Image.Image:
 
 
 def render_details_page(location: LocationSnapshot, expedition_reason: str, *, stale: bool) -> Image.Image:
-    image = load_asset_candidates(ERROR_TEMPLATE_PATH if stale else DETAILS_TEMPLATE_PATH, DETAILS_TEMPLATE_PATH)
+    image = load_asset_candidates(DETAILS_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
     line_font = load_font(DETAILS_LABEL_FONT_SIZE, bold=True, name=DETAILS_LABEL_FONT_NAME)
     value_font = load_font(DETAILS_VALUE_FONT_SIZE, bold=False, name=DETAILS_VALUE_FONT_NAME)
     body_font = load_font(DETAILS_BODY_FONT_SIZE, bold=False, name=DETAILS_BODY_FONT_NAME)
+
+    if stale:
+        draw_badge(
+            draw,
+            overlay_bounds(228, 28, 58, 18),
+            "STALE",
+            fill=(88, 64, 20),
+            text_fill=TEXT_RGB,
+        )
 
     entries = [
         ("Lon/Lat:", f"{location.longitude:.5f}, {location.latitude:.5f}"),
@@ -1199,6 +1303,7 @@ def render_crew_page(crew_page: list[CrewMember], page_number: int, total_pages:
         fill=(19, 31, 55),
         text_fill=TEXT_RGB,
     )
+    draw_page_dots(draw, page_number=page_number, total_pages=total_pages)
     if not crew_page:
         empty_text = "Crew data unavailable"
         width = draw.textbbox((0, 0), empty_text, font=detail_font)[2]
@@ -1268,10 +1373,118 @@ def build_pages(location: LocationSnapshot | None, crew_snapshot: CrewSnapshot |
 def render_single_page(page_name: str, pages: list[PageState]) -> Image.Image:
     if page_name == "error":
         return render_error_page()
+    if page_name == "loading":
+        return render_loading_page()
     for page in pages:
         if page.kind == page_name:
             return page.image
     return pages[0].image
+
+
+def build_health_check_result(name: str, status: str, detail: str) -> HealthCheckResult:
+    return HealthCheckResult(name=name, status=status, detail=detail)
+
+
+def probe_open_notify_position() -> tuple[HealthCheckResult, tuple[float, float, int] | None]:
+    try:
+        payload = fetch_json(OPEN_NOTIFY_ISS_URL)
+        position = payload.get("iss_position", {})
+        latitude = safe_float(position.get("latitude"))
+        longitude = safe_float(position.get("longitude"))
+        timestamp_value = safe_int(payload.get("timestamp")) or current_unix_time()
+        if latitude is None or longitude is None:
+            return build_health_check_result("open-notify-position", "degraded", "response missing latitude/longitude"), None
+        return build_health_check_result("open-notify-position", "healthy", "current ISS position available"), (latitude, longitude, timestamp_value)
+    except Exception as exc:
+        return build_health_check_result("open-notify-position", "unavailable", str(exc)), None
+
+
+def probe_wtia_satellite() -> tuple[HealthCheckResult, dict[str, Any] | None]:
+    try:
+        payload = fetch_json(WTIA_SAT_URL)
+        latitude = safe_float(payload.get("latitude"))
+        longitude = safe_float(payload.get("longitude"))
+        altitude_km = safe_float(payload.get("altitude"))
+        velocity_kmh = safe_float(payload.get("velocity"))
+        if latitude is None or longitude is None:
+            return build_health_check_result("wheretheiss-satellite", "degraded", "response missing latitude/longitude"), payload
+        if altitude_km is None or velocity_kmh is None:
+            return build_health_check_result("wheretheiss-satellite", "degraded", "position available but altitude/velocity incomplete"), payload
+        return build_health_check_result("wheretheiss-satellite", "healthy", "position and enrichment fields available"), payload
+    except Exception as exc:
+        return build_health_check_result("wheretheiss-satellite", "unavailable", str(exc)), None
+
+
+def probe_wtia_coords(latitude: float, longitude: float) -> HealthCheckResult:
+    try:
+        payload = fetch_json(WTIA_COORDS_URL.format(lat=latitude, lon=longitude))
+        country_code = clean_location_text(payload.get("country_code", ""), uppercase=True)
+        country_name = clean_location_text(payload.get("country", "") or payload.get("country_name", ""))
+        if country_code or country_name:
+            return build_health_check_result("wheretheiss-coords", "healthy", "geocode fields available")
+        return build_health_check_result("wheretheiss-coords", "degraded", "endpoint responded without country fields")
+    except Exception as exc:
+        return build_health_check_result("wheretheiss-coords", "unavailable", str(exc))
+
+
+def probe_wtia_positions(timestamp_value: int) -> HealthCheckResult:
+    try:
+        trail = fetch_trail(timestamp_value)
+        if trail:
+            return build_health_check_result("wheretheiss-positions", "healthy", f"{len(trail)} trail points available")
+        return build_health_check_result("wheretheiss-positions", "degraded", "endpoint responded without usable trail points")
+    except Exception as exc:
+        return build_health_check_result("wheretheiss-positions", "unavailable", str(exc))
+
+
+def probe_crew_endpoint(name: str, fetcher) -> HealthCheckResult:
+    try:
+        crew, expedition, expedition_reason = fetcher()
+        if not crew:
+            return build_health_check_result(name, "degraded", "endpoint responded without ISS crew")
+        if expedition or expedition_reason:
+            return build_health_check_result(name, "healthy", f"{len(crew)} ISS crew entries available")
+        return build_health_check_result(name, "degraded", f"{len(crew)} ISS crew entries available without expedition metadata")
+    except Exception as exc:
+        return build_health_check_result(name, "unavailable", str(exc))
+
+
+def run_health_check() -> int:
+    results: list[HealthCheckResult] = []
+    open_notify_result, base_position = probe_open_notify_position()
+    results.append(open_notify_result)
+    satellite_result, sat_payload = probe_wtia_satellite()
+    results.append(satellite_result)
+
+    latitude: float | None = None
+    longitude: float | None = None
+    timestamp_value: int | None = None
+    if base_position is not None:
+        latitude, longitude, timestamp_value = base_position
+    elif sat_payload is not None:
+        latitude = safe_float(sat_payload.get("latitude"))
+        longitude = safe_float(sat_payload.get("longitude"))
+        timestamp_value = safe_int(sat_payload.get("timestamp")) or current_unix_time()
+
+    if latitude is not None and longitude is not None:
+        results.append(probe_wtia_coords(latitude, longitude))
+    else:
+        results.append(build_health_check_result("wheretheiss-coords", "unavailable", "no usable live coordinates available"))
+
+    if timestamp_value is not None:
+        results.append(probe_wtia_positions(timestamp_value))
+    else:
+        results.append(build_health_check_result("wheretheiss-positions", "unavailable", "no usable live timestamp available"))
+
+    results.append(probe_crew_endpoint("corquaid-crew", lambda: parse_corquaid_crew(fetch_json(CORQUAID_CREW_URL))))
+    results.append(probe_crew_endpoint("open-notify-crew", lambda: parse_open_notify_crew(fetch_json(OPEN_NOTIFY_CREW_URL))))
+
+    exit_code = 0
+    for result in results:
+        print(f"{result.name}: {result.status} - {result.detail}", flush=True)
+        if result.status == "unavailable":
+            exit_code = 1
+    return exit_code
 
 def validate_args(args: argparse.Namespace) -> int | None:
     if args.width <= 0 or args.height <= 0:
@@ -1324,7 +1537,9 @@ def run_self_test() -> int:
     return 0
 
 def run_preview(args: argparse.Namespace, country_map: dict[str, str]) -> int:
-
+    if args.page == "loading":
+        save_preview(render_loading_page(), args.output)
+        return 0
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
     location, _location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
@@ -1353,7 +1568,7 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
     crew_snapshot = cached_crew
     crew_stale = crew_snapshot is not None
     if not location_ok or location is None:
-        pages = [PageState(image=render_loading_page(), kind="loading", stale=True)]
+        pages = [PageState(image=render_error_page(), kind="error", stale=True)]
     else:
         pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
     if args.output and args.no_framebuffer:
@@ -1390,7 +1605,7 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
                 if location_ok and location is not None:
                     pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
                 else:
-                    pages = [PageState(image=render_loading_page(), kind="loading", stale=True)]
+                    pages = [PageState(image=render_error_page(), kind="error", stale=True)]
                 page_index = min(page_index, len(pages) - 1)
                 last_rendered_index = -1
                 next_refresh_at = now + LOCATION_REFRESH_SECS
@@ -1428,6 +1643,8 @@ def main() -> int:
 
     if args.self_test:
         return run_self_test()
+    if args.health_check:
+        return run_health_check()
 
     country_map = load_country_map()
     if args.page:

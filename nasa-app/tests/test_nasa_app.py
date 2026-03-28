@@ -219,6 +219,32 @@ class NasaAppTests(unittest.TestCase):
             NASA_APP.ERROR_TEMPLATE_PATH,
         )
 
+    def test_fetch_trail_supports_list_payloads(self) -> None:
+        payload = [
+            {"timestamp": 1, "latitude": 10.0, "longitude": 20.0},
+            {"timestamp": 2, "latitude": 11.0, "longitude": 21.0},
+        ]
+        with patch.object(NASA_APP, "fetch_json_value", return_value=payload):
+            trail = NASA_APP.fetch_trail(123)
+        self.assertEqual([(point.timestamp, point.latitude, point.longitude) for point in trail], [(1, 10.0, 20.0), (2, 11.0, 21.0)])
+
+    def test_render_details_page_keeps_details_background_when_stale(self) -> None:
+        with patch.object(
+            NASA_APP,
+            "load_asset_candidates",
+            return_value=NASA_APP.Image.new("RGB", (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT)),
+        ) as load_asset_candidates:
+            image = NASA_APP.render_details_page(
+                self.build_location(),
+                "Expedition 72 | Commander",
+                stale=True,
+            )
+        self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
+        load_asset_candidates.assert_called_once_with(
+            NASA_APP.DETAILS_TEMPLATE_PATH,
+            NASA_APP.ERROR_TEMPLATE_PATH,
+        )
+
     def test_render_crew_page_changes_with_page_badge(self) -> None:
         crew_page = self.build_crew_snapshot(count=4).crew[:2]
         page_one = NASA_APP.render_crew_page(crew_page, 1, 2, stale=False)
@@ -251,22 +277,43 @@ class NasaAppTests(unittest.TestCase):
         self.assertEqual(len(crew_pages), 2)
         self.assertTrue(all(len(page) == 2 for page in crew_pages))
 
-    def test_resolve_location_prefers_cache_before_open_notify_fallback(self) -> None:
+    def test_render_single_page_supports_loading_page(self) -> None:
+        loading_image = NASA_APP.Image.new("RGB", (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
+        with patch.object(NASA_APP, "render_loading_page", return_value=loading_image) as render_loading_page:
+            image = NASA_APP.render_single_page("loading", [])
+        self.assertIs(image, loading_image)
+        render_loading_page.assert_called_once_with()
+
+    def test_resolve_location_prefers_open_notify_before_cache(self) -> None:
         cached = self.build_location(country_name="", location_label="")
+        fallback = self.build_location(country_name="North Sea", location_label="North Sea")
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_path = Path(temp_dir) / "location.json"
             cache_path.write_text(NASA_APP.json.dumps(NASA_APP.serialize_location(cached)), encoding="utf-8")
             with patch.object(NASA_APP, "build_live_location", side_effect=RuntimeError("live down")):
-                with patch.object(NASA_APP, "build_fallback_location") as build_fallback_location:
+                with patch.object(NASA_APP, "build_fallback_location", return_value=(fallback, False, True)) as build_fallback_location:
                     location, location_ok, map_stale, details_stale = NASA_APP.resolve_location({}, cache_path, False)
         self.assertTrue(location_ok)
         self.assertIsNotNone(location)
         assert location is not None
-        self.assertEqual(location.latitude, cached.latitude)
-        self.assertEqual(location.longitude, cached.longitude)
-        self.assertTrue(map_stale)
+        self.assertEqual(location.latitude, fallback.latitude)
+        self.assertEqual(location.longitude, fallback.longitude)
+        self.assertFalse(map_stale)
         self.assertTrue(details_stale)
-        build_fallback_location.assert_not_called()
+        build_fallback_location.assert_called_once_with(cached)
+
+    def test_run_health_check_returns_failure_when_any_endpoint_is_unavailable(self) -> None:
+        healthy_position = (1.0, 2.0, 3)
+        with patch.object(NASA_APP, "probe_open_notify_position", return_value=(NASA_APP.HealthCheckResult("open-notify-position", "healthy", "ok"), healthy_position)):
+            with patch.object(NASA_APP, "probe_wtia_satellite", return_value=(NASA_APP.HealthCheckResult("wheretheiss-satellite", "healthy", "ok"), {"latitude": 1.0, "longitude": 2.0, "timestamp": 3})):
+                with patch.object(NASA_APP, "probe_wtia_coords", return_value=NASA_APP.HealthCheckResult("wheretheiss-coords", "healthy", "ok")):
+                    with patch.object(NASA_APP, "probe_wtia_positions", return_value=NASA_APP.HealthCheckResult("wheretheiss-positions", "unavailable", "timeout")):
+                        with patch.object(NASA_APP, "probe_crew_endpoint", side_effect=[
+                            NASA_APP.HealthCheckResult("corquaid-crew", "healthy", "ok"),
+                            NASA_APP.HealthCheckResult("open-notify-crew", "healthy", "ok"),
+                        ]):
+                            exit_code = NASA_APP.run_health_check()
+        self.assertEqual(exit_code, 1)
 
 
 if __name__ == "__main__":
