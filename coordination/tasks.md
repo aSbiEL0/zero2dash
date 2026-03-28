@@ -129,6 +129,10 @@ Progress notes:
   - operator-editable layout/font controls are centralized in `nasa-app/app.py`
   - crew page now renders a visible `page/total` badge
   - repo-local `.env` precedence work was completed, then the now-dead observer scaffolding was removed pending the later pass/flyover slice
+  - NASA asset-contract reset now aligns to the new `Downloads\\iss` pack:
+    - map band reset to `x=0, y=40, width=320, height=160`
+    - details and crew text boxes reset to the `260x180` guide contract at `x=30, y=30`
+    - new guide images are now present under `nasa-app/assets/`
 - still open in this task:
   - restored observer pass/flyover support
   - startup speed/loading behavior
@@ -171,6 +175,8 @@ Progress notes:
 - completed in this slice:
   - duplicate module execution was removed from `nasa-app/tests/test_nasa_app.py`
   - deterministic offline-safe tests were added for map asset routing, display-name rendering path, crew badge labeling, and overflow page sequencing
+  - map-band constant tests and anchor-point coverage were added for the new guide-derived geometry
+  - details/crew guide-box constant tests were added for the new `260x180` layout contract
 - still open in this task:
   - execution of automated checks in a working local Python environment
   - coverage for later pass/flyover and loading/runtime branches after those features land

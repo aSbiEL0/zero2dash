@@ -34,7 +34,9 @@ Live status: ACTIVE
   Completed in the current slice:
   - map assets switched to `map.png` / `map-error.png`
   - plotting moved to explicit configured map bounds
+  - map geometry now matches the new guide-derived contract: full-width band at `x=0, y=40, width=320, height=160`
   - operator-editable layout/font controls centralized in `nasa-app/app.py`
+  - details and crew layouts now target the new guide-derived `260x180` text box at `x=30, y=30`
   - crew page now renders a visible page badge
   - `Currently over` now sanitizes placeholder cache values like `??` instead of treating them as valid location data
   Remaining:
@@ -45,6 +47,7 @@ Live status: ACTIVE
   - duplicate NASA test-module execution removed
   - deterministic render-path tests added for map asset routing, details display-name use, crew badge labeling, and overflow sequencing
   - regression tests now cover placeholder-location sanitization and `Currently over` fallback handling
+  - regression tests now cover the new map-band constants, anchor-point mapping, and guide-box constants
   Remaining:
   - run the automated checks in a working Python environment
   - add tests for later pass/flyover and loading behavior after those features land
@@ -57,6 +60,7 @@ Live status: ACTIVE
 - `AGENTS.md` now points at NASA stabilization as current priority.
 - The first runtime correction slice in `nasa-app/app.py` is review-clean.
 - The first deterministic NASA test slice in `nasa-app/tests/test_nasa_app.py` is review-clean.
+- The asset-contract reset for the new `Downloads\\iss` pack is now implemented locally in code and assets, pending device validation.
 - NASA-specific control-plane decisions are now explicit:
   - `wheretheiss.at` remains primary telemetry
   - Corquaid remains primary crew source

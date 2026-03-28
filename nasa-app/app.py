@@ -40,7 +40,6 @@ FONTS_DIR = SCRIPT_DIR / "fonts"
 COUNTRY_MAP_PATH = SCRIPT_DIR / "country_codes.json"
 LOCATION_CACHE_PATH = SCRIPT_DIR / "location_cache.json"
 CREW_CACHE_PATH = SCRIPT_DIR / "crew_cache.json"
-WORLD_MAP_PATH = ASSETS_DIR / "world-map.png"
 LEGACY_ERROR_ASSET_PATH = ASSETS_DIR / "nasa_error.png"
 MAP_TEMPLATE_PATH = ASSETS_DIR / "map.png"
 MAP_STALE_TEMPLATE_PATH = ASSETS_DIR / "map-error.png"
@@ -94,15 +93,17 @@ INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 # Edit `*_X` / `*_Y` to move content, `*_WIDTH` / `*_HEIGHT` to resize the
 # usable area, `*_FONT_SIZE` to change text size, and `*_FONT_NAME` to swap
 # the font file used from `nasa-app/fonts/` without touching the render logic.
-MAP_OVERLAY_X = 9
-MAP_OVERLAY_Y = 29
-MAP_OVERLAY_WIDTH = 302
-MAP_OVERLAY_HEIGHT = 202
+# `map-guide.png` defines a full-width band with 40px top/bottom margins.
+MAP_OVERLAY_X = 0
+MAP_OVERLAY_Y = 40
+MAP_OVERLAY_WIDTH = 320
+MAP_OVERLAY_HEIGHT = 160
 
-# Details page text block.
-DETAILS_CONTENT_X = LEFT_STRIP_WIDTH + 8
-DETAILS_CONTENT_Y = 46
-DETAILS_CONTENT_WIDTH = 246
+# `text-box.png` defines a 260x180 box at x=30, y=30 for details/crew text.
+# Edit these bounds if the guide image changes.
+DETAILS_CONTENT_X = 30
+DETAILS_CONTENT_Y = 30
+DETAILS_CONTENT_WIDTH = 260
 DETAILS_ROW_HEIGHT = 28
 DETAILS_LABEL_GAP = 8
 DETAILS_VALUE_WIDTH = 156
@@ -112,9 +113,9 @@ DETAILS_VALUE_FONT_NAME = "NotoSans-Regular.ttf"
 DETAILS_VALUE_FONT_SIZE = 11
 DETAILS_BODY_FONT_NAME = "NotoSans-Regular.ttf"
 DETAILS_BODY_FONT_SIZE = 9
-DETAILS_REASON_X = 41
-DETAILS_REASON_Y = 188
-DETAILS_REASON_WIDTH = 238
+DETAILS_REASON_X = 30
+DETAILS_REASON_Y = 170
+DETAILS_REASON_WIDTH = 260
 DETAILS_REASON_LINE_HEIGHT = 12
 DETAILS_REASON_MAX_LINES = 2
 
@@ -123,8 +124,8 @@ CREW_NAME_FONT_NAME = DETAILS_TITLE_FONT_NAME
 CREW_NAME_FONT_SIZE = 16
 CREW_DETAIL_FONT_NAME = "NotoSans-Regular.ttf"
 CREW_DETAIL_FONT_SIZE = 11
-CREW_CONTENT_X = LEFT_STRIP_WIDTH + 8
-CREW_CONTENT_WIDTH = 255
+CREW_CONTENT_X = 30
+CREW_CONTENT_WIDTH = 260
 CREW_PAGE_BADGE_X = 228
 CREW_PAGE_BADGE_Y = 34
 CREW_PAGE_BADGE_WIDTH = 58

@@ -124,6 +124,44 @@ class NasaAppTests(unittest.TestCase):
         self.assertEqual(NASA_APP.MAP_TEMPLATE_PATH.name, "map.png")
         self.assertEqual(NASA_APP.MAP_STALE_TEMPLATE_PATH.name, "map-error.png")
 
+    def test_map_overlay_constants_match_new_map_guide(self) -> None:
+        self.assertEqual(
+            (
+                NASA_APP.MAP_OVERLAY_X,
+                NASA_APP.MAP_OVERLAY_Y,
+                NASA_APP.MAP_OVERLAY_WIDTH,
+                NASA_APP.MAP_OVERLAY_HEIGHT,
+            ),
+            (0, 40, 320, 160),
+        )
+
+    def test_text_box_constants_match_new_guide(self) -> None:
+        self.assertEqual(
+            (
+                NASA_APP.DETAILS_CONTENT_X,
+                NASA_APP.DETAILS_CONTENT_Y,
+                NASA_APP.DETAILS_CONTENT_WIDTH,
+                NASA_APP.DETAILS_REASON_X,
+                NASA_APP.DETAILS_REASON_WIDTH,
+                NASA_APP.CREW_CONTENT_X,
+                NASA_APP.CREW_CONTENT_WIDTH,
+            ),
+            (30, 30, 260, 30, 260, 30, 260),
+        )
+
+    def test_map_point_matches_new_full_width_band(self) -> None:
+        map_box = NASA_APP.overlay_bounds(
+            NASA_APP.MAP_OVERLAY_X,
+            NASA_APP.MAP_OVERLAY_Y,
+            NASA_APP.MAP_OVERLAY_WIDTH,
+            NASA_APP.MAP_OVERLAY_HEIGHT,
+        )
+        self.assertEqual(NASA_APP.map_point(0.0, 0.0, map_box), (160, 120))
+        self.assertEqual(NASA_APP.map_point(0.0, -180.0, map_box), (0, 120))
+        self.assertEqual(NASA_APP.map_point(0.0, 180.0, map_box), (320, 120))
+        self.assertEqual(NASA_APP.map_point(90.0, 0.0, map_box), (160, 40))
+        self.assertEqual(NASA_APP.map_point(-90.0, 0.0, map_box), (160, 200))
+
     def test_render_map_page_uses_map_asset_candidates(self) -> None:
         with patch.object(
             NASA_APP,
