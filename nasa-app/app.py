@@ -80,6 +80,8 @@ CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 LEFT_STRIP_WIDTH = 32
 PAGE_CYCLE_SECS = 10.0
+# notes: change `PAGE_CYCLE_SECS` to control how long each page stays on
+# screen before the app advances to the next page.
 LOCATION_REFRESH_SECS = 120.0
 TOUCH_SETTLE_SECS = 0.20
 TOUCH_DEBOUNCE_SECS = 0.20
@@ -113,7 +115,6 @@ ABS_MT_POSITION_Y = 0x36
 ABS_MT_TRACKING_ID = 0x39
 BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
-EARTH_RADIUS_KM = 6371.0
 GEOAPIFY_AQUATIC_KEYWORDS = (
     "ocean",
     "sea",
@@ -638,8 +639,25 @@ def fetch_json_list(url: str, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> lis
     return payload
 
 
+def geoapify_api_key() -> str:
+    raw_value = os.environ.get(GEOAPIFY_API_KEY_ENV, "").strip()
+    if not raw_value:
+        return ""
+    parsed = urllib.parse.urlparse(raw_value)
+    query = parsed.query if parsed.scheme or parsed.netloc else raw_value.lstrip("?")
+    if "apikey=" in query.lower():
+        values = urllib.parse.parse_qs(query)
+        for key_name in ("apiKey", "apikey"):
+            candidates = values.get(key_name)
+            if candidates:
+                candidate = candidates[0].strip()
+                if candidate:
+                    return candidate
+    return raw_value
+
+
 def fetch_geoapify_reverse_geocode(latitude: float, longitude: float, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> dict[str, Any]:
-    api_key = os.environ.get(GEOAPIFY_API_KEY_ENV, "").strip()
+    api_key = geoapify_api_key()
     if not api_key:
         raise RuntimeError(f"{GEOAPIFY_API_KEY_ENV} is not configured")
     query = urllib.parse.urlencode(
@@ -901,24 +919,10 @@ def normalise_day_night(value: Any) -> str:
     return "Unknown"
 
 
-def orbits_per_day(velocity_kmh: float | None, altitude_km: float | None) -> float | None:
-    if velocity_kmh is None or velocity_kmh <= 0:
-        return None
-    orbit_radius_km = EARTH_RADIUS_KM + max(0.0, altitude_km or 408.0)
-    circumference_km = 2 * 3.141592653589793 * orbit_radius_km
-    if circumference_km <= 0:
-        return None
-    raw_orbits = (velocity_kmh * 24.0) / circumference_km
-    return round(raw_orbits * 2.0) / 2.0
-
-
 def format_velocity(location: LocationSnapshot) -> str:
     if location.velocity_kmh is None:
         return "Unknown"
-    rounded_orbits = orbits_per_day(location.velocity_kmh, location.altitude_km)
-    if rounded_orbits is None:
-        return f"{location.velocity_kmh:,.0f} km/h"
-    return f"{location.velocity_kmh:,.0f} km/h ({rounded_orbits:.1f} orbits/day)"
+    return f"{location.velocity_kmh:,.0f} km/h"
 
 
 def build_details_entries(location: LocationSnapshot) -> list[tuple[str, str]]:
@@ -979,19 +983,14 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
 
     if altitude_km is None and cached is not None and cached.altitude_km is not None:
         altitude_km = cached.altitude_km
-        details_stale = True
     if velocity_kmh is None and cached is not None and cached.velocity_kmh is not None:
         velocity_kmh = cached.velocity_kmh
-        details_stale = True
     if not visibility and cached is not None and cached.visibility:
         visibility = cached.visibility
-        details_stale = True
     if not visibility:
         visibility = "TBA"
 
-    country_code, country_name, location_label, geocode_stale = resolve_geoapify_location(snapshot, country_map, cached)
-    if geocode_stale:
-        details_stale = True
+    country_code, country_name, location_label, _geocode_stale = resolve_geoapify_location(snapshot, country_map, cached)
 
     try:
         trail = fetch_trail(snapshot.position_timestamp)

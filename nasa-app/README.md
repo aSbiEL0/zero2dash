@@ -15,4 +15,4 @@ Notes:
 - Live position is sourced from Open Notify first; wheretheiss.at enriches velocity, altitude, visibility, and trail when available.
 - `Currently over:` is resolved from Geoapify reverse geocoding via `GEOAPIFY_API_KEY`.
 - The details page now shows `Longitude`, `Latitude`, `Currently over`, `Altitude`, `Velocity`, and `Day/Night`.
-- Layout tuning lives in the details-page constants near the top of `app.py`; `# notes:` comments there explain which values move the labels, values, rows, stale badge, and loading text box.
+- Layout tuning lives in the constants near the top of `app.py`; `# notes:` comments there explain which values move the labels, values, rows, stale badge, loading text box, and page display timing.

@@ -203,8 +203,17 @@ class NasaAppTests(unittest.TestCase):
             ["Longitude:", "Latitude:", "Currently over:", "Altitude:", "Velocity:", "Day/Night:"],
         )
 
-    def test_format_velocity_includes_rounded_orbits_per_day(self) -> None:
-        self.assertEqual(NASA_APP.format_velocity(self.build_location()), "27,600 km/h (15.5 orbits/day)")
+    def test_geoapify_api_key_accepts_raw_key(self) -> None:
+        with patch.dict(NASA_APP.os.environ, {NASA_APP.GEOAPIFY_API_KEY_ENV: "raw-test-key"}, clear=False):
+            self.assertEqual(NASA_APP.geoapify_api_key(), "raw-test-key")
+
+    def test_geoapify_api_key_extracts_key_from_full_url(self) -> None:
+        full_url = "https://api.geoapify.com/v1/geocode/reverse?lat=51.5&lon=-0.12&apiKey=test-key-123"
+        with patch.dict(NASA_APP.os.environ, {NASA_APP.GEOAPIFY_API_KEY_ENV: full_url}, clear=False):
+            self.assertEqual(NASA_APP.geoapify_api_key(), "test-key-123")
+
+    def test_format_velocity_returns_plain_speed_text(self) -> None:
+        self.assertEqual(NASA_APP.format_velocity(self.build_location()), "27,600 km/h")
 
     def test_normalise_day_night_maps_visibility_to_simple_labels(self) -> None:
         self.assertEqual(NASA_APP.normalise_day_night("Daylight"), "Day")
@@ -293,6 +302,35 @@ class NasaAppTests(unittest.TestCase):
             image = NASA_APP.render_single_page("loading", [])
         self.assertIs(image, loading_image)
         render_loading_page.assert_called_once_with("render")
+
+    def test_build_live_location_keeps_details_fresh_for_partial_enrichment_fallbacks(self) -> None:
+        cached = self.build_location()
+        live_position = NASA_APP.LocationSnapshot(
+            source="open-notify",
+            fetched_at=10,
+            position_timestamp=11,
+            latitude=51.5,
+            longitude=-0.12,
+            altitude_km=None,
+            velocity_kmh=None,
+            country_code="",
+            country_name="",
+            location_label="",
+            visibility="",
+            trail=[],
+            details_timestamp=11,
+        )
+        with patch.object(NASA_APP, "build_open_notify_location", return_value=live_position):
+            with patch.object(NASA_APP, "fetch_json", return_value={}):
+                with patch.object(NASA_APP, "resolve_geoapify_location", return_value=("GB", "United Kingdom", "", True)):
+                    with patch.object(NASA_APP, "fetch_trail", return_value=[]):
+                        location, map_stale, details_stale = NASA_APP.build_live_location({}, cached)
+        self.assertFalse(map_stale)
+        self.assertFalse(details_stale)
+        self.assertEqual(location.altitude_km, cached.altitude_km)
+        self.assertEqual(location.velocity_kmh, cached.velocity_kmh)
+        self.assertEqual(location.visibility, cached.visibility)
+        self.assertEqual(location.country_name, "United Kingdom")
 
     def test_resolve_location_prefers_open_notify_before_cache(self) -> None:
         cached = self.build_location(country_name="", location_label="")
