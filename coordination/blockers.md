@@ -1,6 +1,6 @@
 # Blockers
 
-Live status: OPENED on 2026-03-19.
+Live status: RESET on 2026-03-28.
 
 Rules:
 - Any agent may log a blocker.
@@ -11,31 +11,66 @@ Rules:
 
 ## Current State
 
-- No active blockers are recorded.
+- One active blocker is recorded.
 
 ---
 
-BLOCKER ID: B-001
+BLOCKER ID: B-002
+Status: RESOLVED
+
+Topic:
+Theme button order ids do not match live theme ids
+
+Details:
+- Verified in `boot/boot_selector.py`, `THEME_BUTTON_ORDER` is currently:
+  - `carbon`
+  - `brushed_steel`
+  - `comic_book`
+  - `frosty`
+- Verified from filesystem and `--dump-contracts`, the actual live/discovered theme ids are:
+  - `carbon`
+  - `comic`
+  - `frosty`
+  - `steele`
+
+Impact:
+- Fixed preferred button assignments could not map cleanly to the intended live themes.
+- This directly affected the remaining Themes selector correctness work.
+
+Workaround:
+- None was trustworthy enough for sign-off; the code ids needed to be reconciled.
+
+Unblock condition:
+- Theme ordering and touch-target logic use the real live ids or an explicit mapping layer that matches the actual installed themes.
+
+Resolution:
+- Local `boot/boot_selector.py` now sets `THEME_BUTTON_ORDER` to `carbon`, `steele`, `comic`, `frosty`, which preserves the working assignments and swaps only `steele` and `frosty` as requested.
+
+---
+
+BLOCKER ID: B-003
 Status: ACTIVE
 
 Topic:
-On-device Photos regression sign-off failure
+Regression source files for shell validation are missing
 
 Details:
-- On host `pihole`, `python3 -m unittest tests.test_boot_selector tests.test_photos` fails in `tests.test_photos`.
-- `test_touch_worker_emits_previous_next_and_menu_commands` patches `builtins.open` with `_FakeInputFile`, but `modules/photos/slideshow.py` uses `with open(...) as fd`, so the fake lacks the context-manager protocol and the worker exits before emitting events.
-- `test_run_slideshow_rewinds_and_advances_with_touch_queue` patches the helper module loaded in the test as `photos_display`, but `modules/photos/slideshow.py` imports `display as photos_display`; the patch misses the live dependency used by `run_slideshow`, so the assertions do not observe the render/select calls they are meant to cover.
+- No checked-in `tests/test_boot_selector.py` source file exists locally or on the device.
+- Filesystem inspection found only compiled `__pycache__` artifacts for the test module names.
 
 Impact:
-- `R-019` regression hardening is not sign-off ready.
-- Runtime smoke checks passed on host `pihole`, but the Photos regression layer cannot currently be trusted as evidence.
+- The current plan cannot honestly claim focused shell regression updates until the test source situation is resolved.
+- Validation is limited to code inspection and runtime checks unless new or restored test sources are provided.
 
-Next action requested:
-- Sentinel should repair `tests/test_photos.py` so the on-device unittest baseline passes before integration is signed off.
+Workaround:
+- Use code inspection and targeted runtime commands for interim verification.
+
+Unblock condition:
+- Restore or create the required checked-in test source files, or explicitly narrow validation expectations away from source-level regression edits.
 
 ## Logging Rule
 
 Only log a blocker here if it is one of:
-- a verified asset/path mismatch against the current theme or shell contract
-- a shell-child touch ownership conflict that cannot be resolved within the approved file scope
-- an on-device-only behavior gap that prevents local completion or sign-off
+- a verified asset/path mismatch against the current shell contract
+- a code-level routing or contract mismatch that blocks sign-off
+- a missing validation surface that prevents credible completion claims

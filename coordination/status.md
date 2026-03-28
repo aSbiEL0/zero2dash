@@ -1,87 +1,96 @@
 # Project Status
 
-Last updated: 2026-03-19
+Last updated: 2026-03-28
 
 Live status: ACTIVE
 
 ## Active Execution State
 
-- `PLAN.md` now points at the active shell-owned app stabilization plan.
-- Current remediation scope is Photos, Settings, Themes, and dashboard-layout guidance.
-- Dashboard is not in a rebuild stream; only minor layout tuning is in scope there.
+- The active slice is Themes finalization, right-side back stripe behavior, and Settings layout stabilization.
+- NASA app work is deferred until this slice is complete.
+- Photos is out of active implementation scope for this slice.
 - Shell-first runtime remains accepted:
   - `boot/boot_selector.py` is the parent shell
   - `display_rotator.py` is the dashboards child entrypoint
   - `modules/photos/slideshow.py` is the Photos child entrypoint
 
-## Active Workstreams
+## Device Snapshot
 
-- `R-015` Mouser: planning reset and live coordination reopen. COMPLETE.
-- `R-016` Pathfinder: verify theme/assets and Photos touch seams. COMPLETE.
-- `R-017` Photos Worker: add dashboard-style touch behavior to Photos. COMPLETE.
-- `R-018` Switchboard: implement the shell-side Photos handoff, Settings summaries, generated Themes picker, and shell layout knobs. COMPLETE.
-- `R-019` Sentinel: add regression coverage for Photos, Settings, and Themes. OPEN.
-- `R-020` Curator: update operator-facing docs after stabilization. OPEN.
+- Host checked: `pihole`
+- Repo path: `/home/pihole/zero2dash`
+- Branch: `main`
+- Commit: `f7f2a71`
+- Repo status: clean
+- Uptime at check: 5 days
+- Confirmed running service from quick scan: `pihole-FTL.service`
 
-## Sequencing
+## Verified Code Reality
 
-1. `R-015` coordination reset
-2. `R-016` verified contract scan
-3. `R-017` Photos child stream and `R-018` Switchboard shell stream in parallel
-4. `R-019` regression hardening
-5. Mouser integration verification
-6. `R-020` documentation pass
+- Device and local `boot/boot_selector.py` match in the key sections inspected for Themes routing, strip routing, and Settings status rendering.
+- The device `boot/boot_selector.py` contract dump reports:
+  - `theme_root`: `/home/pihole/zero2dash/themes`
+  - `default_theme`: `default`
+  - `active_theme`: `steele`
+  - discovered themes: `carbon`, `comic`, `frosty`, `steele`
+- `THEME_BUTTON_ORDER` in code is still:
+  - `carbon`
+  - `brushed_steel`
+  - `comic_book`
+  - `frosty`
+- Actual theme directory ids are:
+  - `carbon`
+  - `comic`
+  - `frosty`
+  - `steele`
+- The current code therefore still contains a naming mismatch between fixed theme button assignments and discovered theme ids.
+- Shell back/return routing is still left-sided in `resolve_screen_action()` via `screen_x < MENU_STRIP_WIDTH`.
+- Settings status rendering currently exposes these code constants:
+  - `STATUS_TITLE_X = 20`
+  - `STATUS_TITLE_Y = 18`
+  - `STATUS_BODY_X = 20`
+  - `STATUS_BODY_Y = 54`
+  - `STATUS_LINE_SPACING = 14`
+  - `STATUS_WRAP_WIDTH = 38`
+- Settings status rendering still uses `ImageFont.load_default()`, so font path/choice and font size are not yet operator-tunable in code.
+- No checked-in `tests/test_boot_selector.py` source file exists locally or on the device; only compiled `__pycache__` artifacts are present.
 
-## Current Session Progress
+## Active Segments
 
-- Mouser launched the `R-017` Photos child stream and `R-018` Switchboard shell stream in parallel.
-- Coordination file edits remain centralized in Mouser to avoid merge churn while implementation proceeds in disjoint write sets.
-- Photos child runtime now supports left/right navigation and hold-to-menu via the existing shell mode-request file contract.
-- The shell no longer claims the Photos home gesture, Settings now renders fallback-safe operator summaries, and Themes now derives deterministic touch mapping from discovered theme ids capped at 6 items.
-- Named shell status layout constants are now extracted in `boot/boot_selector.py`, and Pi Stats now includes uptime, load, temperature, memory, and disk summaries.
-- On host `pihole`, the checkout at `/home/pihole/zero2dash` entered a pull merge with local-only commit `0ab28e1` conflicting against `origin/codex/architectuer-remediate` commit `8862c29` on `display_layout.py`.
-- Mouser resolved the remote merge by restoring the incoming `display_layout.py` version and completing merge commit `a6fbce5`; the remote branch is now out of conflict and remains ahead of origin with two pre-existing untracked image files.
-- Mouser pushed remote branch `codex/architectuer-remediate` from host `pihole` to `origin`; `HEAD` and `origin/codex/architectuer-remediate` now both point to `a6fbce5`.
+- `S-001` control-plane reset: COMPLETE locally.
+- `S-002` Themes verification: COMPLETE.
+  Evidence:
+  - actual installed theme ids verified from filesystem and `--dump-contracts`
+  - actual button-order mismatch identified in code
+- `S-003` Themes plus right-side back stripe implementation: IN PROGRESS.
+  Completed in this segment:
+  - `THEME_BUTTON_ORDER` now uses live ids and swaps `steele` and `frosty` while leaving the other working theme assignments intact
+  Remaining work:
+  - move the back stripe from left to right in shell routing
+- `S-004` Settings layout stabilization and code-side tuning surface: OPEN.
+  Verified remaining work:
+  - improve text layout beyond current position-only constants
+  - expose font choice/path and font size in code
+  - make text area dimensions explicit
+- `S-005` validation and closeout: OPEN.
+  Verified remaining work:
+  - determine whether test source files must be restored or created before meaningful regression coverage can be updated
+  - record final `themes.png` deployment step on device
+
+## Current Progress
+
+- Local `PLAN.md` now reflects actual code findings instead of the stale markdown-only story.
+- Local `AGENTS.md` has been narrowed to the active shell slice.
+- The old supporting plan file has been removed locally to avoid split guidance.
+- Device control-plane files remain outdated relative to the local control plane.
 
 ## Validation Snapshot
 
-- `tests.test_boot_selector` passes under `C:\ISS\.venv\Scripts\python.exe`.
-- `py_compile` passes for the touched shell and Photos files under LibreOffice Python with `C:\ISS\.venv\Lib\site-packages` on `PYTHONPATH`.
-- `tests.test_photos` could not be executed locally because the available venv launcher points to an inaccessible base Python 3.13 interpreter, while LibreOffice Python 3.8 is too old for the installed Pillow build.
-- `tests.test_display_rotator` currently fails `test_touch_worker_accepts_abs_syn_fallback_without_btn_touch` in unchanged rotator code during this environment's validation pass; this appears outside the edited file set and remains for follow-up confirmation.
-- On host `pihole`, `python3 -m unittest tests.test_boot_selector tests.test_photos` fails in `tests.test_photos` while `tests.test_boot_selector` passes.
-- On host `pihole`, `python3 modules/photos/slideshow.py --self-test` passes, `python3 modules/photos/slideshow.py --advance-secs 0.01 --max-frames 2 --no-framebuffer --output /tmp/photos-review.png` passes, `python3 boot/boot_selector.py --dump-contracts --skip-gif --no-framebuffer` reports the expected Photos/Settings/Themes contracts, and `python3 boot/boot_selector.py --request-mode menu --mode-request-path /tmp/yura-mode-request` writes the expected mode request payload.
-
-## Current Repo Reality
-
-- The previous shell-repair slice is complete and archived.
-- Remaining functional work is concentrated in Photos, Settings, and Themes.
-- The operator confirmed the Dashboard app only needs minor layout/margin tuning.
-- Current installed valid themes are `comic`, `default`, and `steele`; `default` and `steele` also contain an extra unbound `1.png`.
-- The operator requested Photos to behave like Dashboard touch navigation:
-  - left tap previous
-  - right tap next
-  - hold exit
-- The operator requested Settings to show operator-summary content.
-- The operator clarified Themes should support a generated touch/path mapping and there will not be more than 6 themes active.
-- Historical planning-audit facts before `R-017` and `R-018` landed:
-  - `boot/boot_selector.py` still hardcodes `THEME_PICKER_COLUMNS = ("default", "steele", "comic")`
-  - `draw_status_screen()` still renders placeholder/env-driven status text only
-  - `modules/photos/slideshow.py` is still timer-driven and has no touch input seam yet
-
-## Validation Target
-
-- Hardware-free pass for:
-  - `tests/test_boot_selector.py`
-  - `tests/test_photos.py`
-  - `tests/test_display_rotator.py`
-- compile/import sanity for:
-  - `boot/boot_selector.py`
-  - `modules/photos/slideshow.py`
-  - `modules/photos/display.py`
+- Code inspection succeeded locally and on the device for the relevant `boot/boot_selector.py` sections.
+- Device `python3 boot/boot_selector.py --dump-contracts --skip-gif --no-framebuffer` succeeded and exposed the live theme ids and shell contract.
+- No new shell tests were run in this pass because the expected checked-in test source files are absent.
 
 ## Open Notes
 
-- No active technical blocker is recorded yet.
-- The implementation boundary is now explicit: `R-017` owns child-side Photos input, while `R-018` owns every `boot/boot_selector.py` change, including the Photos shell handoff.
-- Yura review note: regression sign-off is currently blocked by two failures in `tests.test_photos` on host `pihole`; runtime smoke checks passed, but the Photos regression layer is not yet trustworthy.
+- The key code-level issue for Themes is not theme discovery; it is the mismatch between discovered ids and the fixed preferred button-order ids.
+- The key code-level issue for the back stripe is straightforward: all relevant shell screens still use the left edge.
+- The key code-level issue for Settings is that position constants exist, but font and text-area tuning are still not surfaced cleanly.

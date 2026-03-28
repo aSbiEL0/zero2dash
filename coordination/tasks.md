@@ -1,27 +1,27 @@
 # Tasks
 
-Live status: OPENED on 2026-03-19 for shell-owned app stabilization.
+Live status: RESET on 2026-03-28 for themes, right-side back stripe, and Settings layout stabilization.
 
 Rules:
 - Mouser assigns and re-sequences tasks.
-- Engineers update status for their own stream.
 - Keep tasks bounded, merge-safe, and reversible.
-- Do not expand scope beyond `PLAN.md` without an operator decision.
+- Progress must match `PLAN.md`.
+- Do not reopen NASA or Photos scope without an explicit operator decision.
 
 ---
 
 ## Active Tasks
 
-TASK ID: R-015
+TASK ID: S-001
 Agent: Mouser
 Status: COMPLETE
 
 Objective:
-Replace the archived planning state with a live plan for Photos, Settings, Themes, and dashboard-layout guidance.
+Reset the control plane to the active segmented shell slice and remove stale NASA/Photos execution drift.
 
 Allowed files:
 - `PLAN.md`
-- `docs/plans/*`
+- `AGENTS.md`
 - `coordination/*`
 
 Forbidden files:
@@ -29,33 +29,31 @@ Forbidden files:
 - `systemd/*`
 
 Deliverables:
-- active `PLAN.md`
-- detailed execution plan
-- reopened coordination files
+- segmented active `PLAN.md`
+- repo-level `AGENTS.md` aligned to the active slice
+- coordination files reset to current work only
 
 Acceptance criteria:
-- `PLAN.md` no longer points at the archived shell-repair slice
-- the new plan names owners, dependencies, and merge order
-- coordination reflects the live workstream
+- active scope is Themes, right-side back stripe, and Settings layout
+- NASA is deferred
+- Photos is out of active implementation scope
 
 Dependencies:
 - none
 
 ---
 
-TASK ID: R-016
+TASK ID: S-002
 Agent: Pathfinder
-Status: COMPLETE
+Status: OPEN
 
 Objective:
-Verify the live asset, theme, and Photos touch contracts before implementation starts.
+Verify the remaining Themes contract on the device and in the repo before final selector changes proceed.
 
 Allowed files:
-- `themes/*`
 - `boot/boot_selector.py`
-- `modules/photos/*`
+- `themes/*`
 - `tests/test_boot_selector.py`
-- `tests/test_photos.py`
 - `coordination/status.md`
 - `coordination/decisions.md`
 
@@ -64,61 +62,27 @@ Forbidden files:
 - `systemd/*`
 
 Deliverables:
-- verified theme inventory
-- verified shell asset contract
-- verified Photos touch seam notes
+- verified live theme inventory
+- verified current theme target mapping notes
+- confirmed `themes.png` deployment follow-up status
+- note on whether regression source files need to be created before coverage can be updated
 
 Acceptance criteria:
-- coordination records only verified facts
-- theme count and path assumptions are explicit
-- Photos input/exit seam is documented for implementation agents
+- device theme inventory is explicitly recorded
+- any remaining mismatch between `THEME_BUTTON_ORDER` and actual theme ids is described concretely
+- the plan states whether a new `themes.png` upload is still pending
 
 Dependencies:
-- `R-015`
+- `S-001`
 
 ---
 
-TASK ID: R-017
-Agent: Photos Worker
-Status: COMPLETE
-
-Objective:
-Implement child-owned dashboard-parity touch behavior for Photos while preserving the existing child entrypoint and menu-request contracts.
-
-Allowed files:
-- `modules/photos/slideshow.py`
-- `modules/photos/display.py`
-- `tests/test_photos.py`
-- `coordination/status.md`
-
-Forbidden files:
-- `boot/boot_selector.py`
-- `display_rotator.py`
-- `systemd/*`
-- unrelated module trees
-
-Deliverables:
-- left/right/hold touch behavior in Photos
-- menu-request exit path from the child runtime
-- focused regression tests
-
-Acceptance criteria:
-- tap left selects previous photo
-- tap right selects next photo
-- hold requests menu exit
-- shell-boundary changes remain in `R-018`
-
-Dependencies:
-- `R-016`
-
----
-
-TASK ID: R-018
+TASK ID: S-003
 Agent: Switchboard
-Status: COMPLETE
+Status: OPEN
 
 Objective:
-Implement the shell-side Photos handoff, operator-summary Settings content, generated Themes mapping for up to 6 themes, and named shell layout knobs for status screens.
+Finish shell-side Themes behavior and move the back stripe to the right-hand side.
 
 Allowed files:
 - `boot/boot_selector.py`
@@ -131,78 +95,78 @@ Forbidden files:
 - unrelated module trees
 
 Deliverables:
-- shell-side Photos ownership handoff
-- real Settings summaries
-- generated theme picker mapping
-- named shell status layout constants
+- final Themes routing fixes
+- right-side back stripe
+- focused regression coverage for touched shell routing if test sources exist, otherwise explicit note that new test sources must be created
 
 Acceptance criteria:
-- Photos no longer leaves the parent shell consuming the same gesture path while the child is active
-- Network, Pi Stats, and Logs screens render fallback-safe summaries
-- theme picker derives touch mapping from discovered themes
-- up to 6 themes fit on one screen without paging
-- shell status text layout is adjustable via named constants
+- visible Themes targets map to the intended themes
+- the shell back stripe is right-sided on affected shell screens
+- no unrelated shell routing regresses in hardware-free checks
 
 Dependencies:
-- `R-016`
+- `S-002`
 
 ---
 
-TASK ID: R-019
+TASK ID: S-004
+Agent: Switchboard
+Status: OPEN
+
+Objective:
+Correct Settings text rendering and make manual code-side layout tuning obvious.
+
+Allowed files:
+- `boot/boot_selector.py`
+- `tests/test_boot_selector.py`
+- `coordination/status.md`
+
+Forbidden files:
+- `display_rotator.py`
+- `systemd/*`
+- UI/editor controls for layout tuning
+
+Deliverables:
+- corrected Settings text layout
+- clearly labeled code constants for x, y, area, and font tuning
+- a short code comment telling the operator what to edit
+
+Acceptance criteria:
+- Settings text renders acceptably
+- tuning values are easy to find in code, including font choice or path and font size
+- no layout editor UI is introduced
+
+Dependencies:
+- `S-003`
+
+---
+
+TASK ID: S-005
 Agent: Sentinel
 Status: OPEN
 
 Objective:
-Add regression coverage for Photos touch behavior, Settings summaries, and theme-grid mapping.
+Validate the remaining shell slice and record any device-only follow-up.
 
 Allowed files:
 - `tests/test_boot_selector.py`
-- `tests/test_photos.py`
 - `coordination/status.md`
-
-Forbidden files:
-- runtime code except approved narrow seams
-- `systemd/*`
-
-Deliverables:
-- focused hardware-free regressions
-- coverage for fallback behavior and deterministic theme mapping
-
-Acceptance criteria:
-- test suite covers Photos left/right/hold behavior
-- test suite covers non-empty Settings summaries with fallback states
-- test suite covers 1..6 theme mapping and in-place apply behavior
-
-Dependencies:
-- `R-017`
-- `R-018`
-
----
-
-TASK ID: R-020
-Agent: Curator
-Status: OPEN
-
-Objective:
-Update operator-facing docs after runtime behavior stabilizes.
-
-Allowed files:
+- `coordination/blockers.md`
 - `README.md`
-- `coordination/status.md`
 
 Forbidden files:
-- runtime code
+- broad runtime refactors
 - `systemd/*`
 
 Deliverables:
-- margin tuning documentation
-- Photos touch contract documentation
-- Settings and Themes behavior notes
+- focused validation notes for Themes, back stripe, and Settings layout
+- explicit record of any pending on-device `themes.png` upload
+- final segment status updates
 
 Acceptance criteria:
-- docs name the real files and knobs
-- docs match landed runtime behavior
+- local and/or device validation evidence exists for each active segment
+- unresolved device-only work is recorded plainly
+- progress tracking matches actual state
 
 Dependencies:
-- `R-019`
-
+- `S-004`

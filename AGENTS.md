@@ -6,7 +6,7 @@
 
 This AGENTS.md is the source of truth for AI coding agents working in this repository.
 
-Current priority: implement a new standalone NASA/ISS app under `~/zero2dash/nasa-app/` that launches from the main menu and renders directly to the framebuffer.
+Current priority: finish the active shell stabilization slice defined in `PLAN.md`.
 
 This work MUST preserve existing behaviours for:
 - dashboards / rotator
@@ -36,25 +36,17 @@ Core:
 - systemd units/timers: `systemd/`.
 - repo config: `.env` (template usually `.env.example`).
 
-NASA app (new):
-- App root directory: `nasa-app/` (must be self-contained).
-- App assets/fonts/cache: inside `nasa-app/` only.
-- App entrypoint: choose a single obvious script in `nasa-app/` (e.g. `nasa-app/app.py`) and wire the shell to launch it.
-
-Environment reuse:
-- Observer lat/lon for “next flyover” must reuse the same `.env` variables the weather module uses.
-  Inspect the weather module to confirm variable names and parsing conventions.
-
-## Module contracts (important)
+## Current slice contracts (important)
 
 Dashboards are module-based by default:
 - Each module typically lives under `modules/<name>/`.
 - The rotator typically expects `modules/<name>/display.py` as an entrypoint (unless configured otherwise).
 
-The NASA app is NOT a rotator module:
-- Do not add it to dashboard rotation.
-- Do not place it under `modules/`.
-- Do not edit `display_rotator.py` unless you find a genuine integration dependency (this is unlikely and must be justified).
+For the active shell stabilization slice:
+- keep `boot/boot_selector.py` as the shell parent
+- keep `display_rotator.py` out of scope except for explicit operator-approved follow-up
+- keep Photos out of active implementation scope unless `PLAN.md` reopens it
+- treat future NASA app work as deferred until this slice is complete
 
 ## Subagent delegation rules (Codex)
 
@@ -95,31 +87,15 @@ Ask-first boundaries (must get requester approval before doing any of these):
 - introducing network services that run persistently
 - broad refactors to shell/menu or rotator code
 
-## NASA app requirements reminder (summary)
-
-The NASA app must:
-- be standalone under `~/zero2dash/nasa-app/`
-- render directly to framebuffer
-- cycle pages every 10 seconds
-- refresh ISS location/details every 2 minutes while running
-- fetch crew once on launch
-- support overflow crew pages when needed
-- cache to JSON (location and crew caches separate)
-- show stale-data warnings only on affected pages
-- show a dedicated error screen if startup fails and no cache exists
-- integrate into main menu: page 1, bottom-left yellow tile
-- update global Home long-press from 3 seconds to 2 seconds
-- respect touch rule: left strip is back/exit everywhere except main menu (where left strip changes pages)
-
 ## Validation and safe testing habits
 
 Prefer hardware-safe validation first:
 - Provide a way to render pages without writing to framebuffer:
   - `--no-framebuffer`
-  - `--output /tmp/nasa_page.png`
+  - `--output <path>`
 - Provide a lightweight deterministic check:
-  - `--self-test` (for parsing/formatting, cache IO, API response handling)
-- When network calls are involved, ensure the app can start from cache and display stale warnings correctly.
+  - `--self-test` or the closest existing repo-safe equivalent
+- When changes affect touch routing or shell layout, prefer focused `unittest` coverage and compile/import sanity before device-only checks.
 
 When you change behaviour, you must:
 - update README/docs if there are user-visible changes
@@ -132,9 +108,9 @@ When you change behaviour, you must:
 - Avoid “cleanup” refactors unless requested.
 - Keep code readable and consistent with existing conventions.
 
-## Definition of done (for the NASA app task)
+## Definition of done (for the active shell slice)
 
-Done means the acceptance criteria in the NASA app prompt are met, AND:
+Done means the acceptance criteria in `PLAN.md` are met, AND:
 - no regressions to dashboards/Photos/systemd/autostart were introduced
-- the shell returns cleanly and no orphan child processes remain
-- validation flags work without requiring the real framebuffer
+- shell-owned behavior changes are validated hardware-free where possible
+- any device-only follow-up, such as final asset deployment, is recorded explicitly

@@ -821,8 +821,8 @@ def resolve_shutdown_action(screen_y: int, screen_height: int, invert_y: bool) -
 
 THEME_BUTTON_ORDER = (
     "carbon",
-    "brushed_steel",
-    "comic_book",
+    "steele",
+    "comic",
     "frosty",
 )
 
