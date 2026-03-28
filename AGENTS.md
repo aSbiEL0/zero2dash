@@ -6,7 +6,7 @@
 
 This AGENTS.md is the source of truth for AI coding agents working in this repository.
 
-Current priority: finish the active shell stabilization slice defined in `PLAN.md`.
+Current priority: finish the active NASA / ISS stabilization slice defined in `PLAN.md`.
 
 This work MUST preserve existing behaviours for:
 - dashboards / rotator
@@ -30,9 +30,10 @@ Key properties:
 You MUST locate the real paths in the repo before editing. Use this map as a guide.
 
 Core:
-- Shell/menu runtime entrypoint: `boot/boot_selector.py` (or whatever the shell entrypoint currently is).
+- Shell/menu runtime entrypoint: `boot/boot_selector.py`.
 - Dashboards rotator entrypoint: `display_rotator.py`.
-- Photos standalone app entrypoint: `modules/photos/slideshow.py` (or the repo’s current Photos app entrypoint).
+- Photos standalone app entrypoint: `modules/photos/slideshow.py`.
+- NASA standalone app entrypoint: `nasa-app/app.py`.
 - systemd units/timers: `systemd/`.
 - repo config: `.env` (template usually `.env.example`).
 
@@ -40,13 +41,15 @@ Core:
 
 Dashboards are module-based by default:
 - Each module typically lives under `modules/<name>/`.
-- The rotator typically expects `modules/<name>/display.py` as an entrypoint (unless configured otherwise).
+- The rotator typically expects `modules/<name>/display.py` as an entrypoint unless configured otherwise.
 
-For the active shell stabilization slice:
+For the active NASA slice:
 - keep `boot/boot_selector.py` as the shell parent
-- keep `display_rotator.py` out of scope except for explicit operator-approved follow-up
-- keep Photos out of active implementation scope unless `PLAN.md` reopens it
-- treat future NASA app work as deferred until this slice is complete
+- keep `display_rotator.py` out of scope unless the operator explicitly reopens it
+- keep Photos out of active implementation scope
+- keep NASA as a standalone child app under `nasa-app/`
+- prefer NASA-local edits over shell edits whenever both could solve the same issue
+- only touch shell routing or shell/theme assets if the current NASA launch/tile contract is actually wrong
 
 ## Subagent delegation rules (Codex)
 
@@ -55,13 +58,14 @@ This repo uses Codex subagents for parallel work.
 Rules:
 - The root “Project Manager” agent is the ONLY agent allowed to spawn subagents.
 - Subagents must NOT spawn additional subagents.
-- Use parallel subagents for read-heavy tasks (exploration, API research, review, validation planning).
-- Avoid parallel edits to the same files. If parallel work is needed, split work across disjoint directories/files or use isolated worktrees where supported.
+- Use parallel subagents for read-heavy tasks such as exploration, API verification, review, validation planning, and docs review.
+- Avoid parallel edits to the same files.
+- For the NASA slice, serialize writes to `nasa-app/app.py` and `nasa-app/tests/test_nasa_app.py`.
 
 When delegating, the PM must:
 - give each subagent a bounded task and an explicit output template
-- require summaries (no raw logs) unless logs are specifically requested
-- wait for all delegated results before starting implementation
+- require summaries unless raw logs are explicitly requested
+- wait for all delegated results before starting implementation when the work is discovery-dependent
 
 Recommended thread/depth settings (if configurable):
 - [agents] max_threads = 6
@@ -70,7 +74,7 @@ Recommended thread/depth settings (if configurable):
 ## Safety, permissions, and secrets
 
 Non-negotiables:
--NEVER, ABSOLUTELY NEVER DELETE ANY FILES, BRANCHES OR EVEN THINK ABOOUT DELETING ANYTHING WITHOUT A CLEAR AUTHORISATION!!!!!!!!
+- NEVER, ABSOLUTELY NEVER DELETE ANY FILES, BRANCHES OR EVEN THINK ABOOUT DELETING ANYTHING WITHOUT A CLEAR AUTHORISATION!!!!!!!!
 - NEVER commit `.env`, tokens, OAuth credentials, API keys, or cached personal data.
 - Redact secrets from logs, PR descriptions, and screenshots.
 - Treat device paths and privileges as high-risk:
@@ -90,12 +94,12 @@ Ask-first boundaries (must get requester approval before doing any of these):
 ## Validation and safe testing habits
 
 Prefer hardware-safe validation first:
-- Provide a way to render pages without writing to framebuffer:
+- provide a way to render pages without writing to framebuffer:
   - `--no-framebuffer`
   - `--output <path>`
-- Provide a lightweight deterministic check:
-  - `--self-test` or the closest existing repo-safe equivalent
-- When changes affect touch routing or shell layout, prefer focused `unittest` coverage and compile/import sanity before device-only checks.
+- provide a lightweight deterministic check:
+  - `--self-test`
+- for NASA work, prefer focused `unittest` coverage plus page-preview output before device-only checks
 
 When you change behaviour, you must:
 - update README/docs if there are user-visible changes
@@ -108,9 +112,10 @@ When you change behaviour, you must:
 - Avoid “cleanup” refactors unless requested.
 - Keep code readable and consistent with existing conventions.
 
-## Definition of done (for the active shell slice)
+## Definition of done (for the active NASA slice)
 
 Done means the acceptance criteria in `PLAN.md` are met, AND:
 - no regressions to dashboards/Photos/systemd/autostart were introduced
-- shell-owned behavior changes are validated hardware-free where possible
-- any device-only follow-up, such as final asset deployment, is recorded explicitly
+- NASA pages are validated hardware-free where possible
+- any device-only follow-up is recorded explicitly
+- shell edits remain minimal and justified by evidence

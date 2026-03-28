@@ -21,6 +21,7 @@
 - `rotator/touch.py` emits `MAIN_MENU` on long press
 - The shell reclaims control only after child shutdown
 - `menu` requests return to the last root page for the current session
+- The shell strip/back action now uses the rightmost `20px` on stripe-based screens
 - ADS7846 touch selection accepts `ABS_X`/`ABS_Y` plus `EV_SYN` fallback samples when explicit touch-state events are absent
 
 ## Assets
@@ -28,5 +29,13 @@
 - `mainmenu1.png` and `mainmenu2.png` are the root screens
 - `day-night.png`, `settings.png`, `themes.png`, `yes-no.png`, `keypad.png`, and `stats.png` drive child screens and placeholders
 - `credits.gif` and `startup.gif` remain shared boot assets
+- Verified installed theme directories are `carbon`, `comic`, `frosty`, and `steele`
 - `yes-no.png` maps `tick` to confirm and `red X` to cancel
 - `keypad.png` uses the real 4x3 layout, and only consecutive failed keypad submissions count toward shutdown
+
+## Settings Layout
+
+- Settings/status screens are rendered by `draw_status_screen()` in `boot/boot_selector.py`
+- The operator-tunable layout values now live near the top of `boot/boot_selector.py`
+- Title and body text each expose `x`, `y`, width, height, font path, and font size controls
+- Line spacing and bottom margin are also exposed in code

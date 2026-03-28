@@ -24,25 +24,17 @@ import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont
 
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    def load_dotenv(*_args: Any, **_kwargs: Any) -> bool:
-        return False
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from _config import get_env
 from display_layout import LAYOUT_HALF, centred_text_y, ellipsize_text, fit_font, truncate_pair
 
 import touch_calibration
 
 
 APP_NAME = "NASA ISS"
-DEFAULT_ROOT = Path("~/zero2dash").expanduser()
 ASSETS_DIR = SCRIPT_DIR / "assets"
 FONTS_DIR = SCRIPT_DIR / "fonts"
 COUNTRY_MAP_PATH = SCRIPT_DIR / "country_codes.json"
@@ -50,8 +42,8 @@ LOCATION_CACHE_PATH = SCRIPT_DIR / "location_cache.json"
 CREW_CACHE_PATH = SCRIPT_DIR / "crew_cache.json"
 WORLD_MAP_PATH = ASSETS_DIR / "world-map.png"
 LEGACY_ERROR_ASSET_PATH = ASSETS_DIR / "nasa_error.png"
-MAP_TEMPLATE_PATH = ASSETS_DIR / "iss-background.png"
-MAP_STALE_TEMPLATE_PATH = ASSETS_DIR / "location-error.png"
+MAP_TEMPLATE_PATH = ASSETS_DIR / "map.png"
+MAP_STALE_TEMPLATE_PATH = ASSETS_DIR / "map-error.png"
 DETAILS_TEMPLATE_PATH = ASSETS_DIR / "iss-background.png"
 CREW_TEMPLATE_PATH = ASSETS_DIR / "people-background.png"
 CREW_STALE_TEMPLATE_PATH = ASSETS_DIR / "people-error.png"
@@ -98,11 +90,49 @@ BTN_TOUCH = 0x14A
 INPUT_EVENT_STRUCT = struct.Struct("llHHI")
 
 
-@dataclass(frozen=True)
-class ObserverConfig:
-    lat: float | None
-    lon: float | None
+# NASA operator layout controls.
+# Edit `*_X` / `*_Y` to move content, `*_WIDTH` / `*_HEIGHT` to resize the
+# usable area, `*_FONT_SIZE` to change text size, and `*_FONT_NAME` to swap
+# the font file used from `nasa-app/fonts/` without touching the render logic.
+MAP_OVERLAY_X = 9
+MAP_OVERLAY_Y = 29
+MAP_OVERLAY_WIDTH = 302
+MAP_OVERLAY_HEIGHT = 202
 
+# Details page text block.
+DETAILS_CONTENT_X = LEFT_STRIP_WIDTH + 8
+DETAILS_CONTENT_Y = 46
+DETAILS_CONTENT_WIDTH = 246
+DETAILS_ROW_HEIGHT = 28
+DETAILS_LABEL_GAP = 8
+DETAILS_VALUE_WIDTH = 156
+DETAILS_LABEL_FONT_NAME = DETAILS_TITLE_FONT_NAME
+DETAILS_LABEL_FONT_SIZE = 11
+DETAILS_VALUE_FONT_NAME = "NotoSans-Regular.ttf"
+DETAILS_VALUE_FONT_SIZE = 11
+DETAILS_BODY_FONT_NAME = "NotoSans-Regular.ttf"
+DETAILS_BODY_FONT_SIZE = 9
+DETAILS_REASON_X = 41
+DETAILS_REASON_Y = 188
+DETAILS_REASON_WIDTH = 238
+DETAILS_REASON_LINE_HEIGHT = 12
+DETAILS_REASON_MAX_LINES = 2
+
+# Crew page text block and page badge.
+CREW_NAME_FONT_NAME = DETAILS_TITLE_FONT_NAME
+CREW_NAME_FONT_SIZE = 16
+CREW_DETAIL_FONT_NAME = "NotoSans-Regular.ttf"
+CREW_DETAIL_FONT_SIZE = 11
+CREW_CONTENT_X = LEFT_STRIP_WIDTH + 8
+CREW_CONTENT_WIDTH = 255
+CREW_PAGE_BADGE_X = 228
+CREW_PAGE_BADGE_Y = 34
+CREW_PAGE_BADGE_WIDTH = 58
+CREW_PAGE_BADGE_HEIGHT = 18
+# Edit these centre points to move each visible crew row vertically.
+CREW_SLOT_NAME_CENTRES = (47, 108, 169)
+CREW_SLOT_DETAIL_1_CENTRES = (67, 128, 189)
+CREW_SLOT_DETAIL_2_CENTRES = (84, 145, 206)
 
 @dataclass(frozen=True)
 class OrbitPoint:
@@ -159,20 +189,6 @@ class PageState:
 def request_stop(_signum: int, _frame: object) -> None:
     global _STOP_REQUESTED
     _STOP_REQUESTED = True
-
-
-def parse_lat(value: str) -> float:
-    parsed = float(value)
-    if parsed < -90.0 or parsed > 90.0:
-        raise ValueError("must be between -90 and 90")
-    return parsed
-
-
-def parse_lon(value: str) -> float:
-    parsed = float(value)
-    if parsed < -180.0 or parsed > 180.0:
-        raise ValueError("must be between -180 and 180")
-    return parsed
 
 
 def parse_args() -> argparse.Namespace:
@@ -566,21 +582,6 @@ class TouchReader:
 def expand_path(value: str) -> Path:
     candidate = Path(value).expanduser()
     return candidate if candidate.is_absolute() else (SCRIPT_DIR / candidate).resolve()
-
-
-def load_observer_config() -> ObserverConfig:
-    load_dotenv(DEFAULT_ROOT / ".env")
-    lat = None
-    lon = None
-    try:
-        lat = get_env("WEATHER_LAT", default=None, validator=parse_lat)
-    except ValueError:
-        lat = None
-    try:
-        lon = get_env("WEATHER_LON", default=None, validator=parse_lon)
-    except ValueError:
-        lon = None
-    return ObserverConfig(lat=lat, lon=lon)
 
 
 def fetch_json(url: str, *, timeout_secs: float = HTTP_TIMEOUT_SECS) -> dict[str, Any]:
@@ -1046,13 +1047,56 @@ def paste_rounded_panel(base: Image.Image, panel: Image.Image, box: tuple[int, i
     panel_image = panel.resize((width, height), RESAMPLING_LANCZOS)
     base.paste(panel_image, box[:2], rounded_panel_mask(width, height, radius))
 
+def overlay_bounds(x: int, y: int, width: int, height: int) -> tuple[int, int, int, int]:
+    return (x, y, x + width, y + height)
+
+
+def clamp_point(x: int, y: int, box: tuple[int, int, int, int]) -> tuple[int, int]:
+    left, top, right, bottom = box
+    return (max(left, min(right, x)), max(top, min(bottom, y)))
+
+
 def map_point(latitude: float, longitude: float, box: tuple[int, int, int, int]) -> tuple[int, int]:
     left, top, right, bottom = box
     width = max(1, right - left)
     height = max(1, bottom - top)
     x = left + int(((longitude + 180.0) / 360.0) * width)
     y = top + int(((90.0 - latitude) / 180.0) * height)
-    return x, y
+    return clamp_point(x, y, box)
+
+
+def wrap_text_lines(draw: ImageDraw.ImageDraw, text: str, font, width_limit: int, max_lines: int) -> list[str]:
+    words = (text.strip() or "TBA").split()
+    if not words:
+        return ["TBA"]
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        trial = word if not current else f"{current} {word}"
+        if draw.textbbox((0, 0), trial, font=font)[2] <= width_limit or not current:
+            current = trial
+            continue
+        lines.append(current)
+        current = word
+        if len(lines) == max_lines - 1:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if not lines:
+        lines = ["TBA"]
+    lines = lines[:max_lines]
+    lines[-1] = ellipsize_text(lines[-1], font, width_limit)
+    return lines
+
+
+def location_display_name(location: LocationSnapshot) -> str:
+    if location.country_name.strip():
+        return location.country_name.strip()
+    if location.location_label.strip():
+        return location.location_label.strip()
+    if location.country_code.strip():
+        return location.country_code.strip().upper()
+    return "International Waters"
 
 
 def draw_badge(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label: str, *, fill: tuple[int, int, int], text_fill: tuple[int, int, int]) -> None:
@@ -1064,7 +1108,7 @@ def draw_badge(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label:
 def render_map_page(location: LocationSnapshot, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(MAP_STALE_TEMPLATE_PATH if stale else MAP_TEMPLATE_PATH, MAP_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    map_box = (9, 29, CANVAS_WIDTH - 9, CANVAS_HEIGHT - 9)
+    map_box = overlay_bounds(MAP_OVERLAY_X, MAP_OVERLAY_Y, MAP_OVERLAY_WIDTH, MAP_OVERLAY_HEIGHT)
     if location.trail:
         previous = None
         for point in location.trail:
@@ -1077,96 +1121,77 @@ def render_map_page(location: LocationSnapshot, *, stale: bool) -> Image.Image:
     return image
 
 
-def render_details_page(location: LocationSnapshot, observer: ObserverConfig, expedition_reason: str, *, stale: bool) -> Image.Image:
-    _ = observer
+def render_details_page(location: LocationSnapshot, expedition_reason: str, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(ERROR_TEMPLATE_PATH if stale else DETAILS_TEMPLATE_PATH, DETAILS_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    line_font = load_font(11, bold=True, name=DETAILS_TITLE_FONT_NAME)
-    value_font = load_font(11, bold=False)
-    body_font = load_font(9, bold=False)
+    line_font = load_font(DETAILS_LABEL_FONT_SIZE, bold=True, name=DETAILS_LABEL_FONT_NAME)
+    value_font = load_font(DETAILS_VALUE_FONT_SIZE, bold=False, name=DETAILS_VALUE_FONT_NAME)
+    body_font = load_font(DETAILS_BODY_FONT_SIZE, bold=False, name=DETAILS_BODY_FONT_NAME)
 
     entries = [
         ("Lon/Lat:", f"{location.longitude:.5f}, {location.latitude:.5f}"),
-        ("Currently over:", location.country_name or location.location_label or "International Waters"),
+        ("Currently over:", location_display_name(location)),
         ("Visibility:", location.visibility or "TBA"),
         ("Velocity(km/h):", f"{location.velocity_kmh:,.0f}km/h" if location.velocity_kmh is not None else "Unknown"),
         ("Altitude:", f"{location.altitude_km:.0f}km" if location.altitude_km is not None else "Unknown"),
     ]
-    row_centres = (56, 84, 112, 140, 168)
+    row_centres = tuple(DETAILS_CONTENT_Y + (DETAILS_ROW_HEIGHT // 2) + (DETAILS_ROW_HEIGHT * index) for index in range(len(entries)))
 
     for (label, value), centre_y in zip(entries, row_centres):
         label_text = label
-        value_text = ellipsize_text(str(value), value_font, 150)
+        value_text = ellipsize_text(str(value), value_font, DETAILS_VALUE_WIDTH)
         label_width = draw.textbbox((0, 0), label_text, font=line_font)[2]
         value_width = draw.textbbox((0, 0), value_text, font=value_font)[2]
-        gap = 8
-        total_width = label_width + gap + value_width
-        start_x = max(LEFT_STRIP_WIDTH + 4, (CANVAS_WIDTH - total_width) // 2)
+        total_width = label_width + DETAILS_LABEL_GAP + value_width
+        centred_x = DETAILS_CONTENT_X + max(0, (DETAILS_CONTENT_WIDTH - total_width) // 2)
+        start_x = max(DETAILS_CONTENT_X, centred_x)
         draw.text((start_x, centred_text_y(line_font, label_text, centre_y)), label_text, font=line_font, fill=TEXT_RGB)
-        draw.text((start_x + label_width + gap, centred_text_y(value_font, value_text, centre_y)), value_text, font=value_font, fill=TEXT_RGB)
+        draw.text((start_x + label_width + DETAILS_LABEL_GAP, centred_text_y(value_font, value_text, centre_y)), value_text, font=value_font, fill=TEXT_RGB)
 
     reason_label = "Expedition Reason:"
     reason_label_width = draw.textbbox((0, 0), reason_label, font=line_font)[2]
-    draw.text(((CANVAS_WIDTH - reason_label_width) // 2, centred_text_y(line_font, reason_label, 196)), reason_label, font=line_font, fill=TEXT_RGB)
+    draw.text((DETAILS_REASON_X + max(0, (DETAILS_REASON_WIDTH - reason_label_width) // 2), centred_text_y(line_font, reason_label, DETAILS_REASON_Y + 8)), reason_label, font=line_font, fill=TEXT_RGB)
 
-    words = ((expedition_reason or "TBA").strip() or "TBA").split()
-    wrapped: list[str] = []
-    current = ""
-    for word in words:
-        trial = word if not current else f"{current} {word}"
-        if draw.textbbox((0, 0), trial, font=body_font)[2] <= 238 or not current:
-            current = trial
-        else:
-            wrapped.append(current)
-            current = word
-            if len(wrapped) == 2:
-                break
-    if len(wrapped) < 2 and current:
-        wrapped.append(current)
-    if wrapped:
-        wrapped[-1] = ellipsize_text(wrapped[-1], body_font, 238)
-    reason_y = 210
-    for line in wrapped[:2]:
+    wrapped = wrap_text_lines(draw, expedition_reason or "TBA", body_font, DETAILS_REASON_WIDTH, DETAILS_REASON_MAX_LINES)
+    reason_y = DETAILS_REASON_Y + 20
+    for line in wrapped:
         width = draw.textbbox((0, 0), line, font=body_font)[2]
-        draw.text(((CANVAS_WIDTH - width) // 2, reason_y), line, font=body_font, fill=(225, 225, 230))
-        reason_y += 12
+        draw.text((DETAILS_REASON_X + max(0, (DETAILS_REASON_WIDTH - width) // 2), reason_y), line, font=body_font, fill=(225, 225, 230))
+        reason_y += DETAILS_REASON_LINE_HEIGHT
     return image
 
 def render_crew_page(crew_page: list[CrewMember], page_number: int, total_pages: int, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(CREW_STALE_TEMPLATE_PATH if stale else CREW_TEMPLATE_PATH, CREW_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    name_font = load_font(16, bold=True, name=DETAILS_TITLE_FONT_NAME)
-    detail_font = load_font(11, bold=False)
+    name_font = load_font(CREW_NAME_FONT_SIZE, bold=True, name=CREW_NAME_FONT_NAME)
+    detail_font = load_font(CREW_DETAIL_FONT_SIZE, bold=False, name=CREW_DETAIL_FONT_NAME)
+    page_label = f"{page_number}/{total_pages}"
+    draw_badge(
+        draw,
+        overlay_bounds(CREW_PAGE_BADGE_X, CREW_PAGE_BADGE_Y, CREW_PAGE_BADGE_WIDTH, CREW_PAGE_BADGE_HEIGHT),
+        page_label,
+        fill=(19, 31, 55),
+        text_fill=TEXT_RGB,
+    )
     if not crew_page:
         empty_text = "Crew data unavailable"
         width = draw.textbbox((0, 0), empty_text, font=detail_font)[2]
         draw.text(((CANVAS_WIDTH - width) // 2, 108), empty_text, font=detail_font, fill=TEXT_RGB)
         return image
-    slots = ((47, 67, 84), (108, 128, 145), (169, 189, 206))
+    slots = tuple(zip(CREW_SLOT_NAME_CENTRES, CREW_SLOT_DETAIL_1_CENTRES, CREW_SLOT_DETAIL_2_CENTRES))
     for item, (name_y, detail_y1, detail_y2) in zip(crew_page, slots):
-        name_text = ellipsize_text(item.name, name_font, 255)
-        words = (item.secondary or item.role or "ISS crew").split()
-        line_1 = ""
-        line_2 = ""
-        current = ""
-        for word in words:
-            trial = word if not current else f"{current} {word}"
-            if draw.textbbox((0, 0), trial, font=detail_font)[2] <= 255 or not current:
-                current = trial
-            else:
-                line_1 = current
-                current = word
-                break
-        if not line_1:
-            line_1 = current
-            current = ""
-        if current:
-            line_2 = ellipsize_text(current, detail_font, 255)
-        draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), name_text, font=name_font)[2]) // 2, centred_text_y(name_font, name_text, name_y)), name_text, font=name_font, fill=TEXT_RGB)
+        name_text = ellipsize_text(item.name, name_font, CREW_CONTENT_WIDTH)
+        detail_lines = wrap_text_lines(draw, item.secondary or item.role or "ISS crew", detail_font, CREW_CONTENT_WIDTH, 2)
+        name_x = CREW_CONTENT_X + max(0, (CREW_CONTENT_WIDTH - draw.textbbox((0, 0), name_text, font=name_font)[2]) // 2)
+        draw.text((name_x, centred_text_y(name_font, name_text, name_y)), name_text, font=name_font, fill=TEXT_RGB)
+        line_1 = detail_lines[0] if detail_lines else ""
+        line_2 = detail_lines[1] if len(detail_lines) > 1 else ""
         if line_1:
-            draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), line_1, font=detail_font)[2]) // 2, centred_text_y(detail_font, line_1, detail_y1)), line_1, font=detail_font, fill=(225, 225, 230))
+            line_1_x = CREW_CONTENT_X + max(0, (CREW_CONTENT_WIDTH - draw.textbbox((0, 0), line_1, font=detail_font)[2]) // 2)
+            draw.text((line_1_x, centred_text_y(detail_font, line_1, detail_y1)), line_1, font=detail_font, fill=(225, 225, 230))
         if line_2:
-            draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), line_2, font=detail_font)[2]) // 2, centred_text_y(detail_font, line_2, detail_y2)), line_2, font=detail_font, fill=(225, 225, 230))
+            line_2_x = CREW_CONTENT_X + max(0, (CREW_CONTENT_WIDTH - draw.textbbox((0, 0), line_2, font=detail_font)[2]) // 2)
+            draw.text((line_2_x, centred_text_y(detail_font, line_2, detail_y2)), line_2, font=detail_font, fill=(225, 225, 230))
     return image
 
 
@@ -1183,14 +1208,14 @@ def render_error_page() -> Image.Image:
     return image
 
 
-def build_pages(location: LocationSnapshot | None, crew_snapshot: CrewSnapshot | None, observer: ObserverConfig, *, map_stale: bool, details_stale: bool, crew_stale: bool) -> list[PageState]:
+def build_pages(location: LocationSnapshot | None, crew_snapshot: CrewSnapshot | None, *, map_stale: bool, details_stale: bool, crew_stale: bool) -> list[PageState]:
     if location is None:
         return [PageState(image=render_error_page(), kind="error", stale=False)]
     crew_pages = paginate_crew(crew_snapshot.crew if crew_snapshot is not None else [])
     total_crew_pages = max(1, len(crew_pages))
     pages = [
         PageState(image=render_map_page(location, stale=map_stale), kind="map", stale=map_stale),
-        PageState(image=render_details_page(location, observer, crew_snapshot.expedition_reason if crew_snapshot is not None else "TBA", stale=details_stale), kind="details", stale=details_stale),
+        PageState(image=render_details_page(location, crew_snapshot.expedition_reason if crew_snapshot is not None else "TBA", stale=details_stale), kind="details", stale=details_stale),
     ]
     for index, crew_page in enumerate(crew_pages, start=1):
         pages.append(PageState(image=render_crew_page(crew_page, index, total_crew_pages, stale=crew_stale), kind="crew", stale=crew_stale))
@@ -1242,7 +1267,7 @@ def run_self_test() -> int:
         expedition="Expedition 72",
         expedition_reason="Expedition 72 | Commander",
     )
-    pages = build_pages(sample_location, sample_crew, ObserverConfig(lat=53.0, lon=-2.0), map_stale=False, details_stale=True, crew_stale=False)
+    pages = build_pages(sample_location, sample_crew, map_stale=False, details_stale=True, crew_stale=False)
     if len(pages) != 4:
         print(f"[nasa] self-test failed: expected 4 pages, found {len(pages)}", file=sys.stderr)
         return 1
@@ -1255,19 +1280,19 @@ def run_self_test() -> int:
     print("[nasa] self-test passed", flush=True)
     return 0
 
-def run_preview(args: argparse.Namespace, observer: ObserverConfig, country_map: dict[str, str]) -> int:
+def run_preview(args: argparse.Namespace, country_map: dict[str, str]) -> int:
 
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
     location, _location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
     crew_snapshot, crew_stale = resolve_crew(crew_path, args.offline)
-    pages = build_pages(location, crew_snapshot, observer, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
     image = render_single_page(args.page or "map", pages)
     save_preview(image, args.output)
     return 0
 
 
-def run_live(args: argparse.Namespace, observer: ObserverConfig, country_map: dict[str, str]) -> int:
+def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
     location, location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
@@ -1290,7 +1315,7 @@ def run_live(args: argparse.Namespace, observer: ObserverConfig, country_map: di
             framebuffer.close()
         return 1
 
-    pages = build_pages(location, crew_snapshot, observer, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
     if args.output and args.no_framebuffer:
         save_preview(pages[0].image, args.output)
         return 0
@@ -1321,7 +1346,7 @@ def run_live(args: argparse.Namespace, observer: ObserverConfig, country_map: di
             now = time.monotonic()
             if now >= next_refresh_at:
                 location, _location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
-                pages = build_pages(location, crew_snapshot, observer, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+                pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
                 page_index = min(page_index, len(pages) - 1)
                 last_rendered_index = -1
                 next_refresh_at = now + LOCATION_REFRESH_SECS
@@ -1360,11 +1385,10 @@ def main() -> int:
     if args.self_test:
         return run_self_test()
 
-    observer = load_observer_config()
     country_map = load_country_map()
     if args.page:
-        return run_preview(args, observer, country_map)
-    return run_live(args, observer, country_map)
+        return run_preview(args, country_map)
+    return run_live(args, country_map)
 
 
 if __name__ == "__main__":

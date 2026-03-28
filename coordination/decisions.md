@@ -8,111 +8,132 @@ Rules:
 
 ---
 
-DECISION ID: D-022
+DECISION ID: D-027
 Status: ACTIVE
 
 Topic:
-Active shell slice scope
+Active slice priority
 
 Decision:
-Treat Themes finalization, right-side back stripe behavior, and Settings layout stabilization as the only active implementation scope.
+Treat NASA / ISS app stabilization and delivery as the only active implementation slice.
 
 Reason:
-The operator confirmed Photos work is complete for now, and NASA app work will be handled in a later separate slice.
+The previous shell stabilization slice is complete, and the operator has now reopened NASA as the current priority.
 
 Implications:
-- do not reopen Photos implementation in this slice
-- do not treat NASA app work as current priority
-- keep `boot/boot_selector.py` as the main implementation surface
+- do not keep reporting the finished shell slice as active work
+- align the control plane around `nasa-app/`
+- preserve dashboards, Photos, and systemd/autostart unless explicitly reopened
 
 Supersedes:
-- older Photos/NASA-oriented active-slice wording
+- shell-slice-only active priority wording
 
 ---
 
-DECISION ID: D-023
+DECISION ID: D-028
 Status: ACTIVE
 
 Topic:
-Theme inventory source of truth
+NASA data stack
 
 Decision:
-Use the actual discovered theme ids from the filesystem and `--dump-contracts` output as the source of truth for theme mapping.
+Keep `wheretheiss.at` as primary ISS telemetry, keep Corquaid as primary crew metadata, and use Open Notify to restore observer pass/flyover behavior while retaining its narrow fallback role where helpful.
 
 Reason:
-Verified code inspection showed that the live theme ids are `carbon`, `comic`, `frosty`, and `steele`, while fixed preferred-order ids in code still reference `brushed_steel` and `comic_book`.
+`wheretheiss.at` and Corquaid provide the richer telemetry and crew metadata the current UI expects, while Open Notify is the best fit for restoring the original observer pass/flyover requirement.
 
 Implications:
-- remaining Themes work must reconcile fixed button order with real theme ids
-- progress tracking must stop referring to stale ids such as `default`
-- the current issue is a code/id mismatch, not a missing theme discovery system
+- do not switch the entire app to Open Notify as the primary source
+- restore pass/flyover support using observer coordinates
+- handle live pass lookup failure with cached stale pass data if available
 
 Supersedes:
-- stale coordination references to `default` as an installed theme
+- older wording that treated flyover as permanently removed
 
 ---
 
-DECISION ID: D-024
+DECISION ID: D-029
 Status: ACTIVE
 
 Topic:
-Back stripe ergonomics
+Map rendering contract
 
 Decision:
-Move the shell back stripe from the left-hand side to the right-hand side on the affected shell screens.
+The location page must use `map.png` and accurate plotting calibrated to the visible map art.
 
 Reason:
-The operator reported that the right edge is more ergonomic during actual device use, and code inspection verified that routing is still left-sided today.
+The operator reported that the current map page uses the wrong assets and that the current marker/trail placement does not appear relevant to the actual map image.
 
 Implications:
-- update `resolve_screen_action()` and any dependent routing assumptions
-- preserve non-strip tap behavior everywhere else
-- validate right-edge behavior explicitly after the change
+- switch away from the current `iss-background.png` map usage
+- calibrate the drawing bounds for the real map art
+- treat inaccurate plotting as a correctness bug, not a cosmetic issue
 
 Supersedes:
-- previous left-strip shell behavior for this slice
+- the current generic full-canvas plotting assumption
 
 ---
 
-DECISION ID: D-025
+DECISION ID: D-030
 Status: ACTIVE
 
 Topic:
-Settings layout tuning model
+Startup behavior
 
 Decision:
-Settings layout tuning remains code-only and must expose clear hand-editable values for position, area, and font controls.
+Improve startup speed and also provide a loading screen so the app never appears blank for long.
 
 Reason:
-The operator wants to adjust layout manually in code, not through a UI, and current code inspection shows only partial layout controls are exposed today.
+The operator reports 7-10 second startup latency, which is too slow even if some network work remains unavoidable.
 
 Implications:
-- keep the tuning surface in `boot/boot_selector.py`
-- expose font choice or path and font size alongside positional constants
-- add a short comment showing what to edit for manual tuning
-- do not add layout controls to the interface
+- render a useful first frame quickly from cache or a loading screen
+- defer non-critical fetches behind the first visible frame where safe
+- treat a long blank wait as a shipped bug
 
 Supersedes:
-- any ambiguous interpretation that a UI editor might be added
+- the current fully blocking startup experience
 
 ---
 
-DECISION ID: D-026
+DECISION ID: D-031
 Status: ACTIVE
 
 Topic:
-Regression evidence baseline
+Operator-tunable layout controls
 
 Decision:
-Do not assume checked-in regression source files exist; verify the test surface before promising shell regression coverage updates.
+NASA page text/layout/font controls remain code-only and must be clearly marked and briefly explained in code.
 
 Reason:
-Actual filesystem inspection on both local and device showed no checked-in `tests/test_boot_selector.py` source file, only compiled cache artifacts.
+The operator wants to hand-tune text placement, sizing, and fonts directly in code rather than through a UI.
 
 Implications:
-- validation planning must account for absent test sources
-- if regression coverage is required, test source files may need to be restored or created first
-- progress reports must distinguish code inspection from executable regression evidence
+- centralize the relevant constants in `nasa-app/app.py`
+- expose position, area, font path, font size, and formatting controls
+- add short comments telling the operator what to edit
 
 Supersedes:
-- older coordination entries that assumed `tests/test_boot_selector.py` already existed as a source file
+- the current scattered and underexplained layout values
+
+---
+
+DECISION ID: D-032
+Status: ACTIVE
+
+Topic:
+Delegation model
+
+Decision:
+Use Pathfinder for discovery, Switchboard for runtime implementation, Sentinel for validation, Curator for docs, and Framekeeper only if asset support becomes necessary.
+
+Reason:
+The active NASA work can be split cleanly by responsibility, but the core runtime work must stay serial because it centers on `nasa-app/app.py`.
+
+Implications:
+- parallelize read-heavy discovery and review
+- serialize implementation on the NASA runtime and tests
+- keep shell edits separate and minimal
+
+Supersedes:
+- the shell-slice delegation assignments

@@ -7,17 +7,22 @@
 - Theme persistence
 - Mode request handling
 - Tram render smoke tests
-- Pi-side shell validation is complete enough to hand off to app-specific debugging
+- Pi-side shell validation for the current shell slice is complete
 
 ## Commands
 
 ```sh
-python3 -m unittest tests.test_display_rotator tests.test_boot_selector
+python3 -m unittest tests.test_display_rotator
 python3 boot/boot_selector.py --dump-contracts --no-framebuffer --skip-gif
 python3 modules/trams/display.py --self-test
 ```
 
-## Remaining Manual Checks
+## Device Validation Evidence
 
-- App-specific debugging and validation
-- Any app-level Pi smoke checks that sit outside the shell baseline
+- Themes selector mapping confirmed on hardware
+- Right-side stripe/back behavior confirmed on hardware
+- Settings layout rendering confirmed on hardware
+
+## Notes
+
+- `tests/test_boot_selector.py` is not currently checked in, so shell acceptance for this slice relied on device validation plus targeted runtime checks.

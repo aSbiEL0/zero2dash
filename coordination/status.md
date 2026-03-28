@@ -6,90 +6,77 @@ Live status: ACTIVE
 
 ## Active Execution State
 
-- The active slice is Themes finalization, right-side back stripe behavior, and Settings layout stabilization.
-- NASA app work is deferred until this slice is complete.
-- Photos is out of active implementation scope for this slice.
+- The completed shell stabilization slice is now historical.
+- The active slice is NASA / ISS app stabilization and delivery.
+- Dashboards, Photos, and systemd/autostart remain preserved unless the operator explicitly reopens them.
 - Shell-first runtime remains accepted:
   - `boot/boot_selector.py` is the parent shell
-  - `display_rotator.py` is the dashboards child entrypoint
-  - `modules/photos/slideshow.py` is the Photos child entrypoint
+  - `display_rotator.py` remains the dashboards entrypoint
+  - `modules/photos/slideshow.py` remains the Photos entrypoint
+  - `nasa-app/app.py` remains a standalone child app
 
-## Device Snapshot
+## Verified NASA Reality
 
-- Host checked: `pihole`
-- Repo path: `/home/pihole/zero2dash`
-- Branch: `main`
-- Commit: `f7f2a71`
-- Repo status: clean
-- Uptime at check: 5 days
-- Confirmed running service from quick scan: `pihole-FTL.service`
-
-## Verified Code Reality
-
-- Device and local `boot/boot_selector.py` match in the key sections inspected for Themes routing, strip routing, and Settings status rendering.
-- The device `boot/boot_selector.py` contract dump reports:
-  - `theme_root`: `/home/pihole/zero2dash/themes`
-  - `default_theme`: `default`
-  - `active_theme`: `steele`
-  - discovered themes: `carbon`, `comic`, `frosty`, `steele`
-- `THEME_BUTTON_ORDER` in code is still:
-  - `carbon`
-  - `brushed_steel`
-  - `comic_book`
-  - `frosty`
-- Actual theme directory ids are:
-  - `carbon`
-  - `comic`
-  - `frosty`
-  - `steele`
-- Theme routing has been corrected locally and confirmed on hardware.
-- Shell back/return routing now uses the rightmost `20px` strip and has been confirmed on hardware.
-- Settings status rendering now exposes an explicit code-side tuning block for:
-  - title `x`, `y`, width, height, font path, and font size
-  - body `x`, `y`, width, height, font path, and font size
-  - line spacing and bottom margin
-- Settings status rendering now uses explicit font loading and pixel-width wrapping/truncation instead of `ImageFont.load_default()` plus character-count wrapping.
-- No checked-in `tests/test_boot_selector.py` source file exists locally or on the device; only compiled `__pycache__` artifacts are present.
+- NASA launch wiring already exists in `boot/boot_selector.py`.
+- The root menu already routes the page-1 bottom-left tile to NASA.
+- The NASA app already supports safe preview and self-test modes.
+- The app already has separate location and crew caches.
+- The current app is partially stabilized, and the remaining defects are now narrower:
+  - startup is still too slow and lacks an immediate useful first frame
+  - flyover/pass support still needs restoring
+  - final automated validation is blocked locally by a broken Python install
 
 ## Active Segments
 
-- `S-001` control-plane reset: COMPLETE locally.
-- `S-002` Themes verification: COMPLETE.
-  Evidence:
-  - actual installed theme ids verified from filesystem and `--dump-contracts`
-  - actual button-order mismatch identified in code
-- `S-003` Themes plus right-side back stripe implementation: COMPLETE.
-  Completed in this segment:
-  - `THEME_BUTTON_ORDER` now uses live ids and swaps `steele` and `frosty` while leaving the other working theme assignments intact
-  - on-device confirmation received that the Themes swap works correctly
-  - shell routing now treats the rightmost `20px` as the strip hit area and uses the remaining `300px` as the active content width for stripe-based screens
-  - on-device confirmation received that the right-side stripe matches the updated touch-mapping references
-- `S-004` Settings layout stabilization and code-side tuning surface: OPEN.
-  Current state:
-  - local code now exposes the Settings/status layout knobs in `boot/boot_selector.py`
-  - local code now uses explicit title/body widths and heights plus font path/size controls
-  - hardware confirmation is still pending
-- `S-005` validation and closeout: OPEN.
-  Verified remaining work:
-  - determine whether test source files must be restored or created before meaningful regression coverage can be updated
-  - record final `themes.png` deployment step on device
+- `N-001` control-plane reset: COMPLETE.
+- `N-002` NASA discovery baseline: COMPLETE.
+- `N-003` NASA runtime fixes: IN PROGRESS.
+  Completed in the current slice:
+  - map assets switched to `map.png` / `map-error.png`
+  - plotting moved to explicit configured map bounds
+  - operator-editable layout/font controls centralized in `nasa-app/app.py`
+  - crew page now renders a visible page badge
+  Remaining:
+  - pass/flyover restoration
+  - startup speed/loading improvements
+- `N-004` NASA validation expansion: IN PROGRESS.
+  Completed in the current slice:
+  - duplicate NASA test-module execution removed
+  - deterministic render-path tests added for map asset routing, details display-name use, crew badge labeling, and overflow sequencing
+  Remaining:
+  - run the automated checks in a working Python environment
+  - add tests for later pass/flyover and loading behavior after those features land
+- `N-005` NASA docs alignment: QUEUED.
+- `N-006` asset support: CONDITIONAL.
 
 ## Current Progress
 
-- Local `PLAN.md` now reflects actual code findings instead of the stale markdown-only story.
-- Local `AGENTS.md` has been narrowed to the active shell slice.
-- The old supporting plan file has been removed locally to avoid split guidance.
-- Segment `S-004` is now in active implementation with local code changes ready for device verification.
-- Device control-plane files remain outdated relative to the local control plane.
+- `PLAN.md` now reflects the NASA slice, not the completed shell slice.
+- `AGENTS.md` now points at NASA stabilization as current priority.
+- The first runtime correction slice in `nasa-app/app.py` is review-clean.
+- The first deterministic NASA test slice in `nasa-app/tests/test_nasa_app.py` is review-clean.
+- NASA-specific control-plane decisions are now explicit:
+  - `wheretheiss.at` remains primary telemetry
+  - Corquaid remains primary crew source
+  - Open Notify is used to restore observer pass/flyover behavior
+  - cached stale pass data is preferred over blanking the feature entirely
+  - startup should show a useful first frame quickly, with a loading screen if needed
 
 ## Validation Snapshot
 
-- Code inspection succeeded locally and on the device for the relevant `boot/boot_selector.py` sections.
-- Device `python3 boot/boot_selector.py --dump-contracts --skip-gif --no-framebuffer` succeeded and exposed the live theme ids and shell contract.
-- No new shell tests were run in this pass because the expected checked-in test source files are absent.
+- Current NASA validation surface is stronger than before, but it is still not final.
+- What exists now:
+  - `nasa-app/app.py --self-test`
+  - page preview rendering via `--page ... --no-framebuffer --output ...`
+  - a NASA-specific unittest file with deterministic render-path coverage for the first runtime slice
+- What is still missing:
+  - pass-cache and stale-pass coverage
+  - loading/runtime branch coverage after the loading slice lands
+  - final device validation evidence for the corrected NASA behavior
+  - a working local Python interpreter in this workspace for direct automated execution
 
 ## Open Notes
 
-- The remaining open runtime question is whether the new Settings layout defaults look correct on hardware.
-- If further tuning is needed, the values to edit now live together near the top of `boot/boot_selector.py`.
-- Regression source files for shell behavior are still missing, so final validation remains partly device-led.
+- Shell changes are expected to be minimal or unnecessary unless device evidence proves the visible NASA tile/launch contract is wrong.
+- Existing NASA assets may be usable after runtime fixes; asset replacement is conditional, not assumed.
+- Local attempts to run `C:\ISS\.venv\Scripts\python.exe` fail because it resolves to `...\Python313\python.exe` and returns `Access is denied`.
