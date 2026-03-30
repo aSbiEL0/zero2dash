@@ -79,15 +79,14 @@ HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 LEFT_STRIP_WIDTH = 32
-PAGE_CYCLE_SECS = 10.0
-# notes: change `PAGE_CYCLE_SECS` to control how long each page stays on
+PAGE_CYCLE_SECS = 5.0                                       # notes: change `PAGE_CYCLE_SECS` to control how long each page stays on
 # screen before the app advances to the next page.
 LOCATION_REFRESH_SECS = 120.0
 TOUCH_SETTLE_SECS = 0.20
 TOUCH_DEBOUNCE_SECS = 0.20
 HOLD_TO_EXIT_SECS = 2.0
 HTTP_TIMEOUT_SECS = 3.0
-LIVE_FETCH_RETRIES = 1
+LIVE_FETCH_RETRIES = 2
 TEXT_RGB = (245, 245, 245)
 MUTED_RGB = (163, 176, 194)
 WARNING_RGB = (255, 198, 64)
@@ -1405,11 +1404,10 @@ def render_error_page() -> Image.Image:
 def render_loading_page(stage: str = "position") -> Image.Image:
     image = load_asset_candidates(LOADING_TEMPLATE_PATH, MAP_TEMPLATE_PATH, DETAILS_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    title_font = load_font(18, bold=True, name=DETAILS_TITLE_FONT_NAME)
-    body_font = load_font(12, bold=False)
+    title_font = load_font(14, bold=True, name=DETAILS_TITLE_FONT_NAME)
+    body_font = load_font(10, bold=False)
     title, body, foot = LOADING_STAGE_MESSAGES.get(stage, LOADING_STAGE_MESSAGES["position"])
     # notes: change this rectangle to move or resize the loading text box.
-    draw.rounded_rectangle((34, 82, CANVAS_WIDTH - 34, 176), radius=16, fill=(14, 18, 38), outline=(120, 148, 192), width=2)
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 100), title, font=title_font, fill=(245, 245, 252))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 130), body, font=body_font, fill=(228, 230, 238))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 148), foot, font=body_font, fill=(228, 230, 238))
