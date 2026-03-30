@@ -165,19 +165,19 @@ DETAILS_LABEL_WIDTH = 120
 DETAILS_VALUE_X = 170
 DETAILS_VALUE_WIDTH = 120
 DETAILS_LABEL_FONT_NAME = "Stencil.ttf"
-DETAILS_LABEL_FONT_SIZE = 15
+DETAILS_LABEL_FONT_SIZE = 14
 DETAILS_VALUE_FONT_NAME = "NotoSans-Regular.ttf"
-DETAILS_VALUE_FONT_SIZE = 15
+DETAILS_VALUE_FONT_SIZE = 14
 # notes: the stale badge is independent from the two columns. Move it with
 # `DETAILS_STALE_BADGE_X` and `DETAILS_STALE_BADGE_Y`.
-DETAILS_STALE_BADGE_X = 228
+DETAILS_STALE_BADGE_X = 238
 DETAILS_STALE_BADGE_Y = 28
 DETAILS_STALE_BADGE_WIDTH = 58
 DETAILS_STALE_BADGE_HEIGHT = 18
 
 # Crew page text block and page badge.
 CREW_NAME_FONT_NAME = DETAILS_TITLE_FONT_NAME
-CREW_NAME_FONT_SIZE = 16
+CREW_NAME_FONT_SIZE = 15
 CREW_DETAIL_FONT_NAME = "NotoSans-Regular.ttf"
 CREW_DETAIL_FONT_SIZE = 11
 CREW_CONTENT_X = 30
@@ -1407,7 +1407,7 @@ def render_loading_page(stage: str = "position") -> Image.Image:
     title_font = load_font(14, bold=True, name=DETAILS_TITLE_FONT_NAME)
     body_font = load_font(10, bold=False)
     title, body, foot = LOADING_STAGE_MESSAGES.get(stage, LOADING_STAGE_MESSAGES["position"])
-    # notes: change this rectangle to move or resize the loading text box.
+    # notes: change this rectangle to move or resize the loading text box. /// Text box removed 30/03/2026 and font sizes adjusted
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 100), title, font=title_font, fill=(245, 245, 252))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 130), body, font=body_font, fill=(228, 230, 238))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 148), foot, font=body_font, fill=(228, 230, 238))
