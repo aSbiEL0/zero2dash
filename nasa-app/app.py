@@ -64,6 +64,7 @@ FONTS_DIR = SCRIPT_DIR / "fonts"
 COUNTRY_MAP_PATH = SCRIPT_DIR / "country_codes.json"
 LOCATION_CACHE_PATH = SCRIPT_DIR / "location_cache.json"
 CREW_CACHE_PATH = SCRIPT_DIR / "crew_cache.json"
+API_FAILURE_STATE_PATH = SCRIPT_DIR / "api_failure_state.json"
 MAP_TEMPLATE_PATH = ASSETS_DIR / "map.png"
 MAP_STALE_TEMPLATE_PATH = ASSETS_DIR / "map-error.png"
 DETAILS_TEMPLATE_PATH = ASSETS_DIR / "iss-background.png"
@@ -82,6 +83,7 @@ LEFT_STRIP_WIDTH = 32
 PAGE_CYCLE_SECS = 7.0                                       # notes: change `PAGE_CYCLE_SECS` to control how long each page stays on
 # screen before the app advances to the next page.
 LOCATION_REFRESH_SECS = 90.0
+API_FAILURE_GRACE_SECS = 600
 TOUCH_SETTLE_SECS = 0.20
 TOUCH_DEBOUNCE_SECS = 0.20
 HOLD_TO_EXIT_SECS = 2.0
@@ -251,6 +253,12 @@ class HealthCheckResult:
     name: str
     status: str
     detail: str
+
+
+@dataclass(frozen=True)
+class ApiFailureState:
+    location_since: int | None
+    crew_since: int | None
 
 
 def request_stop(_signum: int, _frame: object) -> None:
@@ -700,6 +708,71 @@ def write_json_file(path: Path, payload: dict[str, Any]) -> None:
     temp_path = path.with_suffix(path.suffix + ".tmp")
     temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     temp_path.replace(path)
+
+
+def load_api_failure_state(path: Path) -> ApiFailureState:
+    payload = load_json_file(path) or {}
+    return ApiFailureState(
+        location_since=safe_int(payload.get("location_since")),
+        crew_since=safe_int(payload.get("crew_since")),
+    )
+
+
+def serialize_api_failure_state(state: ApiFailureState) -> dict[str, Any]:
+    return {
+        "location_since": state.location_since,
+        "crew_since": state.crew_since,
+    }
+
+
+def update_failure_since(existing_since: int | None, failing: bool, now_ts: int) -> int | None:
+    if not failing:
+        return None
+    return existing_since if existing_since is not None else now_ts
+
+
+def failure_grace_elapsed(failure_since: int | None, now_ts: int) -> bool:
+    return failure_since is not None and (now_ts - failure_since) >= API_FAILURE_GRACE_SECS
+
+
+def update_api_failure_state(
+    path: Path,
+    *,
+    now_ts: int,
+    location_failure: bool,
+    crew_failure: bool,
+) -> ApiFailureState:
+    current = load_api_failure_state(path)
+    updated = ApiFailureState(
+        location_since=update_failure_since(current.location_since, location_failure, now_ts),
+        crew_since=update_failure_since(current.crew_since, crew_failure, now_ts),
+    )
+    write_json_file(path, serialize_api_failure_state(updated))
+    return updated
+
+
+def build_runtime_pages(
+    location: LocationSnapshot | None,
+    crew_snapshot: CrewSnapshot | None,
+    *,
+    location_ok: bool,
+    map_stale: bool,
+    details_stale: bool,
+    crew_stale: bool,
+    location_failure_ui: bool,
+    crew_failure_ui: bool,
+) -> list[PageState]:
+    if not location_ok or location is None:
+        if location_failure_ui:
+            return [PageState(image=render_error_page(), kind="error", stale=True)]
+        return [PageState(image=render_loading_page("position"), kind="loading", stale=False)]
+    return build_pages(
+        location,
+        crew_snapshot,
+        map_stale=map_stale and location_failure_ui,
+        details_stale=details_stale and location_failure_ui,
+        crew_stale=crew_stale and crew_failure_ui,
+    )
 
 
 def clean_location_text(value: Any, *, uppercase: bool = False) -> str:
@@ -1591,9 +1664,26 @@ def run_preview(args: argparse.Namespace, country_map: dict[str, str]) -> int:
         return 0
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
-    location, _location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
+    failure_state_path = expand_path(str(API_FAILURE_STATE_PATH))
+    location, location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
     crew_snapshot, crew_stale = resolve_crew(crew_path, args.offline)
-    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+    now_ts = current_unix_time()
+    failure_state = update_api_failure_state(
+        failure_state_path,
+        now_ts=now_ts,
+        location_failure=(location is None) or map_stale or details_stale,
+        crew_failure=crew_stale,
+    )
+    pages = build_runtime_pages(
+        location,
+        crew_snapshot,
+        location_ok=location_ok,
+        map_stale=map_stale,
+        details_stale=details_stale,
+        crew_stale=crew_stale,
+        location_failure_ui=failure_grace_elapsed(failure_state.location_since, now_ts),
+        crew_failure_ui=failure_grace_elapsed(failure_state.crew_since, now_ts),
+    )
     image = render_single_page(args.page or "map", pages)
     save_preview(image, args.output)
     return 0
@@ -1602,6 +1692,7 @@ def run_preview(args: argparse.Namespace, country_map: dict[str, str]) -> int:
 def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
     location_path = expand_path(args.location_cache)
     crew_path = expand_path(args.crew_cache)
+    failure_state_path = expand_path(str(API_FAILURE_STATE_PATH))
 
     framebuffer = None
     if not args.no_framebuffer:
@@ -1620,10 +1711,23 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
     crew_snapshot, crew_stale = resolve_crew(crew_path, args.offline)
     if framebuffer is not None:
         framebuffer.write_frame(render_loading_page("render").resize((args.width, args.height), RESAMPLING_LANCZOS))
-    if not location_ok or location is None:
-        pages = [PageState(image=render_error_page(), kind="error", stale=True)]
-    else:
-        pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+    now_ts = current_unix_time()
+    failure_state = update_api_failure_state(
+        failure_state_path,
+        now_ts=now_ts,
+        location_failure=(not location_ok) or (location is None) or map_stale or details_stale,
+        crew_failure=crew_stale,
+    )
+    pages = build_runtime_pages(
+        location,
+        crew_snapshot,
+        location_ok=location_ok,
+        map_stale=map_stale,
+        details_stale=details_stale,
+        crew_stale=crew_stale,
+        location_failure_ui=failure_grace_elapsed(failure_state.location_since, now_ts),
+        crew_failure_ui=failure_grace_elapsed(failure_state.crew_since, now_ts),
+    )
     if args.output and args.no_framebuffer:
         save_preview(pages[0].image, args.output)
         return 0
@@ -1647,18 +1751,46 @@ def run_live(args: argparse.Namespace, country_map: dict[str, str]) -> int:
             now = time.monotonic()
             if now >= next_crew_refresh_at:
                 crew_snapshot, crew_stale = resolve_crew(crew_path, args.offline)
-                if location is not None:
-                    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
+                now_ts = current_unix_time()
+                failure_state = update_api_failure_state(
+                    failure_state_path,
+                    now_ts=now_ts,
+                    location_failure=(not location_ok) or (location is None) or map_stale or details_stale,
+                    crew_failure=crew_stale,
+                )
+                pages = build_runtime_pages(
+                    location,
+                    crew_snapshot,
+                    location_ok=location_ok,
+                    map_stale=map_stale,
+                    details_stale=details_stale,
+                    crew_stale=crew_stale,
+                    location_failure_ui=failure_grace_elapsed(failure_state.location_since, now_ts),
+                    crew_failure_ui=failure_grace_elapsed(failure_state.crew_since, now_ts),
+                )
                 page_index = min(page_index, len(pages) - 1)
                 last_rendered_index = -1
                 next_crew_refresh_at = now + LOCATION_REFRESH_SECS
 
             if now >= next_refresh_at:
                 location, location_ok, map_stale, details_stale = resolve_location(country_map, location_path, args.offline)
-                if location_ok and location is not None:
-                    pages = build_pages(location, crew_snapshot, map_stale=map_stale, details_stale=details_stale, crew_stale=crew_stale)
-                else:
-                    pages = [PageState(image=render_error_page(), kind="error", stale=True)]
+                now_ts = current_unix_time()
+                failure_state = update_api_failure_state(
+                    failure_state_path,
+                    now_ts=now_ts,
+                    location_failure=(not location_ok) or (location is None) or map_stale or details_stale,
+                    crew_failure=crew_stale,
+                )
+                pages = build_runtime_pages(
+                    location,
+                    crew_snapshot,
+                    location_ok=location_ok,
+                    map_stale=map_stale,
+                    details_stale=details_stale,
+                    crew_stale=crew_stale,
+                    location_failure_ui=failure_grace_elapsed(failure_state.location_since, now_ts),
+                    crew_failure_ui=failure_grace_elapsed(failure_state.crew_since, now_ts),
+                )
                 page_index = min(page_index, len(pages) - 1)
                 last_rendered_index = -1
                 next_refresh_at = now + LOCATION_REFRESH_SECS

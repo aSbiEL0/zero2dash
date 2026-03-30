@@ -278,6 +278,90 @@ class NasaAppTests(unittest.TestCase):
         self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
         draw_page_dots.assert_called_once_with(ANY, page_number=2, total_pages=5)
 
+    def test_update_api_failure_state_starts_and_clears_timers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "api_failure_state.json"
+            started = NASA_APP.update_api_failure_state(
+                state_path,
+                now_ts=100,
+                location_failure=True,
+                crew_failure=False,
+            )
+            self.assertEqual(started.location_since, 100)
+            self.assertIsNone(started.crew_since)
+
+            continued = NASA_APP.update_api_failure_state(
+                state_path,
+                now_ts=250,
+                location_failure=True,
+                crew_failure=True,
+            )
+            self.assertEqual(continued.location_since, 100)
+            self.assertEqual(continued.crew_since, 250)
+
+            cleared = NASA_APP.update_api_failure_state(
+                state_path,
+                now_ts=400,
+                location_failure=False,
+                crew_failure=False,
+            )
+            self.assertIsNone(cleared.location_since)
+            self.assertIsNone(cleared.crew_since)
+
+    def test_build_runtime_pages_shows_loading_before_error_grace_expires(self) -> None:
+        pages = NASA_APP.build_runtime_pages(
+            None,
+            None,
+            location_ok=False,
+            map_stale=True,
+            details_stale=True,
+            crew_stale=False,
+            location_failure_ui=False,
+            crew_failure_ui=False,
+        )
+        self.assertEqual([page.kind for page in pages], ["loading"])
+        self.assertFalse(pages[0].stale)
+
+    def test_build_runtime_pages_shows_error_after_error_grace_expires(self) -> None:
+        pages = NASA_APP.build_runtime_pages(
+            None,
+            None,
+            location_ok=False,
+            map_stale=True,
+            details_stale=True,
+            crew_stale=False,
+            location_failure_ui=True,
+            crew_failure_ui=False,
+        )
+        self.assertEqual([page.kind for page in pages], ["error"])
+        self.assertTrue(pages[0].stale)
+
+    def test_build_runtime_pages_suppresses_stale_badges_before_grace_expires(self) -> None:
+        pages = NASA_APP.build_runtime_pages(
+            self.build_location(),
+            self.build_crew_snapshot(count=2),
+            location_ok=True,
+            map_stale=True,
+            details_stale=True,
+            crew_stale=True,
+            location_failure_ui=False,
+            crew_failure_ui=False,
+        )
+        self.assertEqual([page.stale for page in pages], [False, False, False])
+
+    def test_build_runtime_pages_applies_stale_badges_after_grace_expires(self) -> None:
+        pages = NASA_APP.build_runtime_pages(
+            self.build_location(),
+            self.build_crew_snapshot(count=2),
+            location_ok=True,
+            map_stale=True,
+            details_stale=True,
+            crew_stale=True,
+            location_failure_ui=True,
+            crew_failure_ui=True,
+        )
+        self.assertEqual([page.stale for page in pages], [True, True, True])
+
     def test_build_pages_keeps_overflow_crew_pages(self) -> None:
         crew_snapshot = self.build_crew_snapshot(count=4)
         location = self.build_location()
@@ -301,6 +385,98 @@ class NasaAppTests(unittest.TestCase):
             image = NASA_APP.render_single_page("loading", [])
         self.assertIs(image, loading_image)
         render_loading_page.assert_called_once_with("render")
+
+    def test_update_api_failure_state_tracks_and_clears_continuous_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "api_failure_state.json"
+            first = NASA_APP.update_api_failure_state(
+                state_path,
+                now_ts=1000,
+                location_failure=True,
+                crew_failure=False,
+            )
+            second = NASA_APP.update_api_failure_state(
+                state_path,
+                now_ts=1200,
+                location_failure=True,
+                crew_failure=True,
+            )
+            cleared = NASA_APP.update_api_failure_state(
+                state_path,
+                now_ts=1300,
+                location_failure=False,
+                crew_failure=False,
+            )
+        self.assertEqual(first.location_since, 1000)
+        self.assertIsNone(first.crew_since)
+        self.assertEqual(second.location_since, 1000)
+        self.assertEqual(second.crew_since, 1200)
+        self.assertIsNone(cleared.location_since)
+        self.assertIsNone(cleared.crew_since)
+
+    def test_build_runtime_pages_delays_error_page_until_failure_grace(self) -> None:
+        with patch.object(NASA_APP, "render_loading_page", return_value=NASA_APP.Image.new("RGB", (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))) as render_loading_page:
+            pages = NASA_APP.build_runtime_pages(
+                None,
+                None,
+                location_ok=False,
+                map_stale=False,
+                details_stale=False,
+                crew_stale=False,
+                location_failure_ui=False,
+                crew_failure_ui=False,
+            )
+        self.assertEqual([page.kind for page in pages], ["loading"])
+        render_loading_page.assert_called_once_with("position")
+
+    def test_build_runtime_pages_shows_error_page_after_failure_grace(self) -> None:
+        with patch.object(NASA_APP, "render_error_page", return_value=NASA_APP.Image.new("RGB", (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))) as render_error_page:
+            pages = NASA_APP.build_runtime_pages(
+                None,
+                None,
+                location_ok=False,
+                map_stale=False,
+                details_stale=False,
+                crew_stale=False,
+                location_failure_ui=True,
+                crew_failure_ui=False,
+            )
+        self.assertEqual([page.kind for page in pages], ["error"])
+        render_error_page.assert_called_once()
+
+    def test_build_runtime_pages_gates_stale_flags_until_failure_grace(self) -> None:
+        location = self.build_location()
+        crew_snapshot = self.build_crew_snapshot(count=2)
+        with patch.object(NASA_APP, "build_pages", return_value=[]) as build_pages:
+            NASA_APP.build_runtime_pages(
+                location,
+                crew_snapshot,
+                location_ok=True,
+                map_stale=True,
+                details_stale=True,
+                crew_stale=True,
+                location_failure_ui=False,
+                crew_failure_ui=False,
+            )
+            NASA_APP.build_runtime_pages(
+                location,
+                crew_snapshot,
+                location_ok=True,
+                map_stale=True,
+                details_stale=True,
+                crew_stale=True,
+                location_failure_ui=True,
+                crew_failure_ui=True,
+            )
+        self.assertEqual(build_pages.call_count, 2)
+        first_call = build_pages.call_args_list[0]
+        second_call = build_pages.call_args_list[1]
+        self.assertEqual(first_call.kwargs["map_stale"], False)
+        self.assertEqual(first_call.kwargs["details_stale"], False)
+        self.assertEqual(first_call.kwargs["crew_stale"], False)
+        self.assertEqual(second_call.kwargs["map_stale"], True)
+        self.assertEqual(second_call.kwargs["details_stale"], True)
+        self.assertEqual(second_call.kwargs["crew_stale"], True)
 
     def test_build_live_location_keeps_details_fresh_for_partial_enrichment_fallbacks(self) -> None:
         cached = self.build_location()
