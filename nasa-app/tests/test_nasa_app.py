@@ -1,7 +1,7 @@
 import importlib.util
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 from pathlib import Path
 import tempfile
 
@@ -264,20 +264,19 @@ class NasaAppTests(unittest.TestCase):
             NASA_APP.ERROR_TEMPLATE_PATH,
         )
 
-    def test_render_crew_page_changes_with_page_badge(self) -> None:
+    def test_render_crew_page_changes_with_page_dots(self) -> None:
         crew_page = self.build_crew_snapshot(count=4).crew[:2]
         page_one = NASA_APP.render_crew_page(crew_page, 1, 2, stale=False)
         page_two = NASA_APP.render_crew_page(crew_page, 2, 2, stale=False)
         self.assertEqual(page_one.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
         self.assertNotEqual(page_one.tobytes(), page_two.tobytes())
 
-    def test_render_crew_page_passes_page_badge_label(self) -> None:
+    def test_render_crew_page_uses_bottom_dots_as_page_indicator(self) -> None:
         crew_page = self.build_crew_snapshot(count=4).crew[:2]
-        with patch.object(NASA_APP, "draw_badge") as draw_badge:
+        with patch.object(NASA_APP, "draw_page_dots") as draw_page_dots:
             image = NASA_APP.render_crew_page(crew_page, 2, 5, stale=False)
         self.assertEqual(image.size, (NASA_APP.CANVAS_WIDTH, NASA_APP.CANVAS_HEIGHT))
-        draw_badge.assert_called_once()
-        self.assertEqual(draw_badge.call_args.args[2], "2/5")
+        draw_page_dots.assert_called_once_with(ANY, page_number=2, total_pages=5)
 
     def test_build_pages_keeps_overflow_crew_pages(self) -> None:
         crew_snapshot = self.build_crew_snapshot(count=4)

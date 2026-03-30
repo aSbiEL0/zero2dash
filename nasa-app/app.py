@@ -177,9 +177,9 @@ DETAILS_STALE_BADGE_HEIGHT = 18
 
 # Crew page text block and page badge.
 CREW_NAME_FONT_NAME = DETAILS_TITLE_FONT_NAME
-CREW_NAME_FONT_SIZE = 15
+CREW_NAME_FONT_SIZE = 22
 CREW_DETAIL_FONT_NAME = "NotoSans-Regular.ttf"
-CREW_DETAIL_FONT_SIZE = 11
+CREW_DETAIL_FONT_SIZE = 15
 CREW_CONTENT_X = 30
 CREW_CONTENT_WIDTH = 260
 CREW_PAGE_BADGE_X = 228
@@ -190,7 +190,7 @@ CREW_HEADER_FONT_NAME = DETAILS_TITLE_FONT_NAME
 CREW_HEADER_FONT_SIZE = 17
 CREW_HEADER_Y = 31
 # Edit these centre points to move each visible crew row vertically.
-CREW_SLOT_NAME_CENTRES = (88, 160)
+CREW_SLOT_NAME_CENTRES = (105, 160)
 CREW_SLOT_DETAIL_1_CENTRES = (108, 180)
 CREW_SLOT_DETAIL_2_CENTRES = (124, 196)
 
@@ -1349,20 +1349,8 @@ def render_details_page(location: LocationSnapshot, *, stale: bool) -> Image.Ima
 def render_crew_page(crew_page: list[CrewMember], page_number: int, total_pages: int, *, stale: bool) -> Image.Image:
     image = load_asset_candidates(CREW_STALE_TEMPLATE_PATH if stale else CREW_TEMPLATE_PATH, CREW_TEMPLATE_PATH, ERROR_TEMPLATE_PATH)
     draw = ImageDraw.Draw(image)
-    header_font = load_font(CREW_HEADER_FONT_SIZE, bold=True, name=CREW_HEADER_FONT_NAME)
     name_font = load_font(CREW_NAME_FONT_SIZE, bold=True, name=CREW_NAME_FONT_NAME)
     detail_font = load_font(CREW_DETAIL_FONT_SIZE, bold=False, name=CREW_DETAIL_FONT_NAME)
-    page_label = f"{page_number}/{total_pages}"
-    header_text = f"Crew {page_label}"
-    header_x = (CANVAS_WIDTH - draw.textbbox((0, 0), header_text, font=header_font)[2]) // 2
-    draw.text((header_x, centred_text_y(header_font, header_text, CREW_HEADER_Y)), header_text, font=header_font, fill=TEXT_RGB)
-    draw_badge(
-        draw,
-        overlay_bounds(CREW_PAGE_BADGE_X, CREW_PAGE_BADGE_Y, CREW_PAGE_BADGE_WIDTH, CREW_PAGE_BADGE_HEIGHT),
-        page_label,
-        fill=(19, 31, 55),
-        text_fill=TEXT_RGB,
-    )
     draw_page_dots(draw, page_number=page_number, total_pages=total_pages)
     if not crew_page:
         empty_text = "Crew data unavailable"
@@ -1407,10 +1395,10 @@ def render_loading_page(stage: str = "position") -> Image.Image:
     title_font = load_font(14, bold=True, name=DETAILS_TITLE_FONT_NAME)
     body_font = load_font(10, bold=False)
     title, body, foot = LOADING_STAGE_MESSAGES.get(stage, LOADING_STAGE_MESSAGES["position"])
-    # notes: change this rectangle to move or resize the loading text box. /// Text box removed 30/03/2026 and font sizes adjusted
-    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 100), title, font=title_font, fill=(245, 245, 252))
-    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 130), body, font=body_font, fill=(228, 230, 238))
-    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 148), foot, font=body_font, fill=(228, 230, 238))
+    # notes: text box removed 30/03/2026; adjust these Y values to tighten or loosen the loading text stack.
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 112), title, font=title_font, fill=(245, 245, 252))
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 120), body, font=body_font, fill=(228, 230, 238))
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 128), foot, font=body_font, fill=(228, 230, 238))
     return image
 
 
