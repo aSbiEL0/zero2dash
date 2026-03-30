@@ -79,9 +79,9 @@ HEIGHT_DEFAULT = int(os.environ.get("FB_HEIGHT", "240"))
 CANVAS_WIDTH = 320
 CANVAS_HEIGHT = 240
 LEFT_STRIP_WIDTH = 32
-PAGE_CYCLE_SECS = 5.0                                       # notes: change `PAGE_CYCLE_SECS` to control how long each page stays on
+PAGE_CYCLE_SECS = 7.0                                       # notes: change `PAGE_CYCLE_SECS` to control how long each page stays on
 # screen before the app advances to the next page.
-LOCATION_REFRESH_SECS = 120.0
+LOCATION_REFRESH_SECS = 90.0
 TOUCH_SETTLE_SECS = 0.20
 TOUCH_DEBOUNCE_SECS = 0.20
 HOLD_TO_EXIT_SECS = 2.0
@@ -176,7 +176,7 @@ DETAILS_STALE_BADGE_WIDTH = 58
 DETAILS_STALE_BADGE_HEIGHT = 18
 
 # Crew page text block and page badge.
-CREW_NAME_FONT_NAME = DETAILS_TITLE_FONT_NAME
+CREW_NAME_FONT_NAME = "Stencil.ttf"
 CREW_NAME_FONT_SIZE = 22
 CREW_DETAIL_FONT_NAME = "NotoSans-Regular.ttf"
 CREW_DETAIL_FONT_SIZE = 15
@@ -190,9 +190,9 @@ CREW_HEADER_FONT_NAME = DETAILS_TITLE_FONT_NAME
 CREW_HEADER_FONT_SIZE = 17
 CREW_HEADER_Y = 31
 # Edit these centre points to move each visible crew row vertically.
-CREW_SLOT_NAME_CENTRES = (105, 160)
-CREW_SLOT_DETAIL_1_CENTRES = (108, 180)
-CREW_SLOT_DETAIL_2_CENTRES = (124, 196)
+CREW_SLOT_NAME_CENTRES = (58, 160)
+CREW_SLOT_DETAIL_1_CENTRES = (88, 180)
+CREW_SLOT_DETAIL_2_CENTRES = (110, 196)
 
 @dataclass(frozen=True)
 class OrbitPoint:
