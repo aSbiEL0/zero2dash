@@ -27,8 +27,17 @@ class PlayerLogicTests(unittest.TestCase):
         files = player.list_supported_videos(Path("Z:/definitely/missing/path"))
         self.assertEqual(files, [])
 
-    def test_selection_title_is_blank_when_playlist_is_empty(self) -> None:
-        self.assertEqual(player.selection_title_text(player.PlaylistState([])), "")
+    def test_overlay_alpha_fades_in_and_out(self) -> None:
+        self.assertEqual(player.overlay_alpha(0.0), 0)
+        self.assertGreater(player.overlay_alpha(player.OVERLAY_FADE_SECS / 2.0), 0)
+        self.assertEqual(player.overlay_alpha(player.OVERLAY_SHOW_SECS / 2.0), 255)
+        self.assertGreater(player.overlay_alpha(player.OVERLAY_SHOW_SECS - (player.OVERLAY_FADE_SECS / 2.0)), 0)
+        self.assertEqual(player.overlay_alpha(player.OVERLAY_SHOW_SECS), 0)
+
+    def test_wait_until_returns_immediately_when_deadline_has_passed(self) -> None:
+        with mock.patch.object(player.time, "monotonic", return_value=10.0), mock.patch.object(player.time, "sleep") as sleep:
+            player.wait_until(9.0)
+        sleep.assert_not_called()
 
     def test_resolve_video_dir_prefers_existing_home_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -41,6 +50,13 @@ class PlayerLogicTests(unittest.TestCase):
         override = Path("/tmp/custom-vault")
         with mock.patch.dict(player.os.environ, {player.VAULT_DIR_ENV: str(override)}, clear=False):
             self.assertEqual(player.resolve_video_dir(player.PLAYER_MODE_VAULT), override)
+
+    def test_load_font_prefers_monospace_candidates_before_default(self) -> None:
+        with mock.patch.object(player.ImageFont, "truetype", side_effect=[OSError(), OSError(), "font"]) as truetype:
+            self.assertEqual(player.load_font(21), "font")
+        self.assertEqual(truetype.call_args_list[0].args[0], player.FONT_CANDIDATES[0])
+        self.assertEqual(truetype.call_args_list[1].args[0], player.FONT_CANDIDATES[1])
+        self.assertEqual(truetype.call_args_list[2].args[0], player.FONT_CANDIDATES[2])
 
     def test_playlist_scroll_does_not_wrap(self) -> None:
         files = [Path(f"file-{index}.mp4") for index in range(5)]

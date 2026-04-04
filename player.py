@@ -64,7 +64,10 @@ SCROLL_HOLD_DELAY_SECS = 0.5
 SCROLL_REPEAT_SECS = 1.0 / 3.0
 HOLD_TO_EXIT_SECS = 2.0
 LEFT_DOUBLE_TAP_WINDOW_SECS = 1.0
-OVERLAY_SHOW_SECS = 2.0
+OVERLAY_DELAY_SECS = 3.0
+OVERLAY_SHOW_SECS = 3.0
+OVERLAY_FADE_SECS = 0.18
+OVERLAY_FRAME_STEP_SECS = 0.05
 SYNTHETIC_TOUCH_TIMEOUT_SECS = 0.35
 SUPPORTED_VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".avi"}
 FFMPEG_FILTER = "fps=15,crop=320:240:(in_w-320)/2:0,format=rgb565le"
@@ -72,11 +75,6 @@ CREDITS_DIR_ENV = "ZERO2DASH_PLAYER_CREDITS_DIR"
 VAULT_DIR_ENV = "ZERO2DASH_PLAYER_VAULT_DIR"
 
 # Player UI layout. Adjust here if text or touch regions need tuning later.
-TITLE_X = 18
-TITLE_Y = 12
-TITLE_WIDTH = 260
-TITLE_HEIGHT = 24
-TITLE_FONT_SIZE = 18
 ROW_X = 40
 ROW_Y = 46
 ROW_WIDTH = 230
@@ -94,14 +92,23 @@ BACK_STRIP_X = WIDTH - 20
 BACK_STRIP_WIDTH = 20
 LIST_TEXT_X = ROW_X + 12
 LIST_TEXT_WIDTH = ROW_WIDTH - 24
-ROW_TEXT_FONT_SIZE = 18
-TEXT_FILL = (244, 247, 250)
-TEXT_SUBTLE_FILL = (204, 211, 220)
-TITLE_FILL = (232, 236, 242)
-HIGHLIGHT_FILL = (68, 165, 255, 92)
-HIGHLIGHT_OUTLINE = (68, 165, 255, 220)
+HIGHLIGHT_X = ROW_X - 10
+HIGHLIGHT_WIDTH = ROW_WIDTH
+ROW_TEXT_FONT_SIZE = 21
+TEXT_FILL = (0, 11, 61)
+TEXT_SUBTLE_FILL = (0, 11, 61)
+SELECTED_TEXT_FILL = (255, 255, 255)
+HIGHLIGHT_FILL = (2, 12, 69, 230)
+HIGHLIGHT_OUTLINE = (2, 12, 69, 255)
 NO_FILES_LABEL = "NO FILES"
 STOP_REQUESTED = False
+FONT_CANDIDATES = (
+    "cour.ttf",
+    "Courier New.ttf",
+    "DejaVuSansMono.ttf",
+    "LiberationMono-Regular.ttf",
+    "DejaVuSans.ttf",
+)
 
 
 def request_stop(_signum: int, _frame: object) -> None:
@@ -185,10 +192,12 @@ class PlaylistState:
 
 
 def load_font(size: int) -> ImageFont.ImageFont:
-    try:
-        return ImageFont.truetype("DejaVuSans.ttf", size)
-    except OSError:
-        return ImageFont.load_default()
+    for candidate in FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(candidate, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 def ellipsise(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> str:
@@ -241,12 +250,6 @@ def resolve_video_dir(mode: str) -> Path:
         if candidate.is_dir():
             return candidate
     return candidates[0]
-
-
-def selection_title_text(state: PlaylistState) -> str:
-    if not state.files:
-        return ""
-    return state.files[state.selected_index].name
 
 
 def load_assets(mode: str) -> PlayerAssets:
@@ -448,18 +451,29 @@ class FfmpegPlayback:
         return self.process.poll()
 
 
+def overlay_alpha(elapsed_secs: float) -> int:
+    if elapsed_secs <= 0.0 or elapsed_secs >= OVERLAY_SHOW_SECS:
+        return 0
+    fade_window = min(OVERLAY_FADE_SECS, OVERLAY_SHOW_SECS / 2.0)
+    if fade_window <= 0.0:
+        return 255
+    if elapsed_secs < fade_window:
+        return max(0, min(255, round((elapsed_secs / fade_window) * 255)))
+    fade_out_start = OVERLAY_SHOW_SECS - fade_window
+    if elapsed_secs > fade_out_start:
+        return max(0, min(255, round(((OVERLAY_SHOW_SECS - elapsed_secs) / fade_window) * 255)))
+    return 255
+
+
+def wait_until(deadline: float) -> None:
+    while not STOP_REQUESTED and time.monotonic() < deadline:
+        time.sleep(OVERLAY_FRAME_STEP_SECS)
+
+
 def render_selection_screen(framebuffer: FramebufferWriter, assets: PlayerAssets, state: PlaylistState) -> None:
     image = assets.background.copy()
     draw = ImageDraw.Draw(image, "RGBA")
-    title_font = load_font(TITLE_FONT_SIZE)
     row_font = load_font(ROW_TEXT_FONT_SIZE)
-    title_text = selection_title_text(state)
-    title_text = ellipsise(draw, title_text, title_font, TITLE_WIDTH)
-    if title_text:
-        title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
-        title_h = title_bbox[3] - title_bbox[1]
-        title_y = TITLE_Y + max(0, (TITLE_HEIGHT - title_h) // 2)
-        draw.text((TITLE_X, title_y), title_text, font=title_font, fill=TITLE_FILL)
 
     if not state.files:
         row = 1
@@ -480,7 +494,7 @@ def render_selection_screen(framebuffer: FramebufferWriter, assets: PlayerAssets
         bottom = top + ROW_HEIGHT - 1
         if index == state.selected_index:
             draw.rounded_rectangle(
-                (ROW_X, top, ROW_X + ROW_WIDTH - 1, bottom),
+                (HIGHLIGHT_X, top, HIGHLIGHT_X + HIGHLIGHT_WIDTH - 1, bottom),
                 radius=10,
                 fill=HIGHLIGHT_FILL,
                 outline=HIGHLIGHT_OUTLINE,
@@ -490,18 +504,40 @@ def render_selection_screen(framebuffer: FramebufferWriter, assets: PlayerAssets
         bbox = draw.textbbox((0, 0), label, font=row_font)
         label_h = bbox[3] - bbox[1]
         label_y = top + max(0, (ROW_HEIGHT - label_h) // 2)
-        draw.text((LIST_TEXT_X, label_y), label, font=row_font, fill=TEXT_FILL)
+        fill = SELECTED_TEXT_FILL if index == state.selected_index else TEXT_FILL
+        draw.text((LIST_TEXT_X, label_y), label, font=row_font, fill=fill)
 
     write_framebuffer_image(framebuffer, image.convert("RGB"))
 
 
-def show_overlay(framebuffer: FramebufferWriter, assets: PlayerAssets) -> None:
-    base = assets.background.copy()
-    composite = Image.alpha_composite(base, assets.overlay)
-    write_framebuffer_image(framebuffer, composite.convert("RGB"))
-    deadline = time.monotonic() + OVERLAY_SHOW_SECS
-    while not STOP_REQUESTED and time.monotonic() < deadline:
-        time.sleep(0.05)
+def show_overlay(framebuffer: FramebufferWriter, assets: PlayerAssets, playback: FfmpegPlayback | None = None) -> None:
+    wait_until(time.monotonic() + OVERLAY_DELAY_SECS)
+    if STOP_REQUESTED:
+        return
+
+    resume_after_overlay = False
+    if playback is not None and playback.process is not None and playback.poll() is None and not playback.paused:
+        playback.toggle_pause()
+        resume_after_overlay = True
+
+    started_at = time.monotonic()
+    while not STOP_REQUESTED:
+        elapsed = time.monotonic() - started_at
+        alpha = overlay_alpha(elapsed)
+        if alpha <= 0:
+            if elapsed >= OVERLAY_SHOW_SECS:
+                return
+            wait_until(time.monotonic() + OVERLAY_FRAME_STEP_SECS)
+            continue
+        base = assets.background.copy()
+        overlay = assets.overlay.copy()
+        overlay.putalpha(alpha)
+        composite = Image.alpha_composite(base, overlay)
+        write_framebuffer_image(framebuffer, composite.convert("RGB"))
+        wait_until(time.monotonic() + OVERLAY_FRAME_STEP_SECS)
+
+    if resume_after_overlay and playback is not None and playback.process is not None and playback.poll() is None and playback.paused:
+        playback.toggle_pause()
 
 
 def run_pre_play_hook() -> None:
@@ -610,7 +646,6 @@ def run_selection_mode(framebuffer: FramebufferWriter, assets: PlayerAssets, sta
                 continue
             if in_play_button(sample.x, sample.y) and state.has_files():
                 state.start_from_selection()
-                show_overlay(framebuffer, assets)
                 return True
             row = row_for_point(sample.x, sample.y, state)
             if row is not None and state.select_visible_row(row):
@@ -628,6 +663,7 @@ def run_playback_mode(framebuffer: FramebufferWriter, assets: PlayerAssets, stat
     playback = FfmpegPlayback(fbdev)
     try:
         playback.start(state.current_file())
+        show_overlay(framebuffer, assets, playback)
         left_tap_at = 0.0
         touch_started_at = 0.0
         touch_active = False
