@@ -179,11 +179,11 @@ DETAILS_STALE_BADGE_HEIGHT = 18
 
 # Crew page text block and page badge.
 CREW_NAME_FONT_NAME = "Stencil.ttf"
-CREW_NAME_FONT_SIZE = 22
+CREW_NAME_FONT_SIZE = 20
 CREW_DETAIL_FONT_NAME = "NotoSans-Regular.ttf"
-CREW_DETAIL_FONT_SIZE = 15
-CREW_CONTENT_X = 30
-CREW_CONTENT_WIDTH = 260
+CREW_DETAIL_FONT_SIZE = 16
+CREW_CONTENT_X = 30    #Move text left or right
+CREW_CONTENT_WIDTH = 280
 CREW_PAGE_BADGE_X = 228
 CREW_PAGE_BADGE_Y = 28
 CREW_PAGE_BADGE_WIDTH = 58
@@ -192,9 +192,9 @@ CREW_HEADER_FONT_NAME = DETAILS_TITLE_FONT_NAME
 CREW_HEADER_FONT_SIZE = 17
 CREW_HEADER_Y = 31
 # Edit these centre points to move each visible crew row vertically.
-CREW_SLOT_NAME_CENTRES = (58, 160)
-CREW_SLOT_DETAIL_1_CENTRES = (88, 180)
-CREW_SLOT_DETAIL_2_CENTRES = (110, 196)
+CREW_SLOT_NAME_CENTRES = (58, 143)
+CREW_SLOT_DETAIL_1_CENTRES = (85, 170)
+CREW_SLOT_DETAIL_2_CENTRES = (105, 190)
 
 @dataclass(frozen=True)
 class OrbitPoint:
@@ -1470,7 +1470,7 @@ def render_loading_page(stage: str = "position") -> Image.Image:
     title, body, foot = LOADING_STAGE_MESSAGES.get(stage, LOADING_STAGE_MESSAGES["position"])
     # notes: text box removed 30/03/2026; adjust these Y values to tighten or loosen the loading text stack.
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 102), title, font=title_font, fill=(245, 245, 252))
-    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 120), body, font=body_font, fill=(228, 230, 238))
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 124), body, font=body_font, fill=(228, 230, 238))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 138), foot, font=body_font, fill=(228, 230, 238))
     return image
 
