@@ -68,6 +68,8 @@ OVERLAY_SHOW_SECS = 2.0
 SYNTHETIC_TOUCH_TIMEOUT_SECS = 0.35
 SUPPORTED_VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".avi"}
 FFMPEG_FILTER = "fps=15,crop=320:240:(in_w-320)/2:0,format=rgb565le"
+CREDITS_DIR_ENV = "ZERO2DASH_PLAYER_CREDITS_DIR"
+VAULT_DIR_ENV = "ZERO2DASH_PLAYER_VAULT_DIR"
 
 # Player UI layout. Adjust here if text or touch regions need tuning later.
 TITLE_X = 18
@@ -218,7 +220,33 @@ def resolve_mode() -> str:
 
 
 def resolve_video_dir(mode: str) -> Path:
-    return Path.home() / ("x" if mode == PLAYER_MODE_VAULT else "vid")
+    subdir = "x" if mode == PLAYER_MODE_VAULT else "vid"
+    override_env = VAULT_DIR_ENV if mode == PLAYER_MODE_VAULT else CREDITS_DIR_ENV
+    override = os.environ.get(override_env, "").strip()
+    if override:
+        return Path(override).expanduser()
+
+    candidates: list[Path] = []
+    home_env = os.environ.get("HOME", "").strip()
+    if home_env:
+        candidates.append(Path(home_env) / subdir)
+    candidates.append(Path.home() / subdir)
+    candidates.append(Path("/home/pihole") / subdir)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.is_dir():
+            return candidate
+    return candidates[0]
+
+
+def selection_title_text(state: PlaylistState) -> str:
+    if not state.files:
+        return ""
+    return state.files[state.selected_index].name
 
 
 def load_assets(mode: str) -> PlayerAssets:
@@ -425,12 +453,13 @@ def render_selection_screen(framebuffer: FramebufferWriter, assets: PlayerAssets
     draw = ImageDraw.Draw(image, "RGBA")
     title_font = load_font(TITLE_FONT_SIZE)
     row_font = load_font(ROW_TEXT_FONT_SIZE)
-    title_text = NO_FILES_LABEL if not state.files else state.files[state.selected_index].name
+    title_text = selection_title_text(state)
     title_text = ellipsise(draw, title_text, title_font, TITLE_WIDTH)
-    title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
-    title_h = title_bbox[3] - title_bbox[1]
-    title_y = TITLE_Y + max(0, (TITLE_HEIGHT - title_h) // 2)
-    draw.text((TITLE_X, title_y), title_text, font=title_font, fill=TITLE_FILL)
+    if title_text:
+        title_bbox = draw.textbbox((0, 0), title_text, font=title_font)
+        title_h = title_bbox[3] - title_bbox[1]
+        title_y = TITLE_Y + max(0, (TITLE_HEIGHT - title_h) // 2)
+        draw.text((TITLE_X, title_y), title_text, font=title_font, fill=TITLE_FILL)
 
     if not state.files:
         row = 1
@@ -701,6 +730,7 @@ def main() -> int:
 
     video_dir = resolve_video_dir(mode)
     state = PlaylistState(list_supported_videos(video_dir))
+    print(f"[player] mode={mode} video_dir={video_dir} file_count={len(state.files)}", flush=True)
     touch_input = TouchInput(WIDTH, HEIGHT)
     if not touch_input.is_available():
         print(f"[player] No usable touch device found ({touch_input.reason}).", file=sys.stderr, flush=True)

@@ -27,6 +27,21 @@ class PlayerLogicTests(unittest.TestCase):
         files = player.list_supported_videos(Path("Z:/definitely/missing/path"))
         self.assertEqual(files, [])
 
+    def test_selection_title_is_blank_when_playlist_is_empty(self) -> None:
+        self.assertEqual(player.selection_title_text(player.PlaylistState([])), "")
+
+    def test_resolve_video_dir_prefers_existing_home_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            home = Path(tmp_dir)
+            (home / "vid").mkdir()
+            with mock.patch.dict(player.os.environ, {"HOME": str(home)}, clear=False):
+                self.assertEqual(player.resolve_video_dir(player.PLAYER_MODE_CREDITS), home / "vid")
+
+    def test_resolve_video_dir_honors_explicit_override(self) -> None:
+        override = Path("/tmp/custom-vault")
+        with mock.patch.dict(player.os.environ, {player.VAULT_DIR_ENV: str(override)}, clear=False):
+            self.assertEqual(player.resolve_video_dir(player.PLAYER_MODE_VAULT), override)
+
     def test_playlist_scroll_does_not_wrap(self) -> None:
         files = [Path(f"file-{index}.mp4") for index in range(5)]
         state = player.PlaylistState(files)
