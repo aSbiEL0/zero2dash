@@ -52,7 +52,8 @@ THEMES_DIR = BASE_DIR / "themes"
 DEFAULT_STARTUP_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", str(BOOT_DIR / "startup.gif"))
 DEFAULT_CREDITS_GIF_PATH = os.environ.get("BOOT_SELECTOR_INFO_GIF", str(BOOT_DIR / "credits.gif"))
 DEFAULT_SHUTDOWN_COMMAND = os.environ.get("BOOT_SELECTOR_SHUTDOWN_COMMAND", "systemctl poweroff")
-DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", f"{sys.executable} -u {BASE_DIR / 'player.py'}")
+CANONICAL_PLAYER_COMMAND = f"{sys.executable} -u {BASE_DIR / 'player.py'}"
+DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", CANONICAL_PLAYER_COMMAND)
 DEFAULT_NASA_COMMAND = os.environ.get("BOOT_SELECTOR_NASA_COMMAND", "python3 -u /home/pihole/zero2dash/nasa-app/app.py")
 DEFAULT_PIN = os.environ.get("BOOT_SELECTOR_PIN", "")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
@@ -562,6 +563,13 @@ def _is_deprecated_player_command(command: list[str]) -> bool:
         return False
     target = command[0].replace("\\", "/").lower()
     return target.endswith("/player.sh") or target.endswith("player.sh")
+
+
+def normalize_player_command(command_text: str) -> tuple[str, bool]:
+    command = player_command_args(command_text)
+    if _is_deprecated_player_command(command):
+        return CANONICAL_PLAYER_COMMAND, True
+    return command_text, False
 
 
 def _command_for_service(service_name: str, fallback_command: list[str]) -> tuple[str, ...]:
@@ -1244,9 +1252,6 @@ def validate_args(args: argparse.Namespace) -> int | None:
     if not player_command_args(args.player_command):
         print("Player command cannot be empty.", file=sys.stderr)
         return 1
-    if _is_deprecated_player_command(player_command_args(args.player_command)):
-        print("Player command must target player.py; player.sh is deprecated for credits/vault playback.", file=sys.stderr)
-        return 1
     if not player_command_args(args.nasa_command):
         print("NASA command cannot be empty.", file=sys.stderr)
         return 1
@@ -1660,9 +1665,12 @@ def run_main_screen_shell(
 
 def main() -> int:
     args = parse_args()
+    args.player_command, player_command_was_normalized = normalize_player_command(args.player_command)
     validation_error = validate_args(args)
     if validation_error is not None:
         return validation_error
+    if player_command_was_normalized:
+        print("[boot-selector] BOOT_SELECTOR_PLAYER_COMMAND pointed at deprecated player.sh; falling back to player.py.", file=sys.stderr, flush=True)
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
