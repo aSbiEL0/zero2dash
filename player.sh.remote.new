@@ -1,0 +1,257 @@
+#!/bin/sh
+set -eu
+
+FBDEV="${FBDEV:-/dev/fb1}"
+VIDEO_DIR="${VIDEO_DIR:-$HOME/vid}"
+PID_FILE="${PLAYER_PID_FILE:-/tmp/player.sh.pid}"
+FFMPEG_PID_FILE="${PLAYER_FFMPEG_PID_FILE:-/tmp/player.sh.ffmpeg.pid}"
+
+ffmpeg_pid=""
+list_file=""
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  ./player.sh --dir /path/to/video-folder
+  ./player.sh /path/to/video-folder
+  ./player.sh
+  ./player.sh --pause
+  ./player.sh --play
+  ./player.sh --next
+  ./player.sh --stop
+
+Behavior:
+  - Starts playback immediately
+  - Plays all compatible videos in the selected folder in sorted order
+  - Center-crops 426x240 to 320x240 (53 px removed from each side)
+  - Repeats the whole folder forever until you stop it (Ctrl+C)
+  - --pause pauses the active ffmpeg playback process
+  - --play resumes the active ffmpeg playback process
+  - --next skips the current video and advances to the next one
+  - --stop stops the running player instance
+USAGE
+}
+
+collect_videos_to_list() {
+  dir="$1"
+  list_target="$2"
+
+  if [ ! -d "$dir" ]; then
+    echo "Video directory not found: $dir" >&2
+    exit 1
+  fi
+
+  find "$dir" -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.mov' -o -iname '*.avi' \) \
+    | sort > "$list_target"
+
+  if [ ! -s "$list_target" ]; then
+    echo "No videos found in: $dir" >&2
+    exit 1
+  fi
+}
+
+read_live_pid() {
+  pid_file="$1"
+
+  if [ ! -f "$pid_file" ]; then
+    return 1
+  fi
+
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [ -z "$pid" ]; then
+    rm -f "$pid_file"
+    return 1
+  fi
+
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pid_file"
+    return 1
+  fi
+
+  printf '%s\n' "$pid"
+}
+
+require_player_pid() {
+  pid="$(read_live_pid "$PID_FILE" || true)"
+  if [ -z "$pid" ]; then
+    echo "No running player instance found." >&2
+    exit 1
+  fi
+  printf '%s\n' "$pid"
+}
+
+require_ffmpeg_pid() {
+  player_pid="$(require_player_pid)"
+  child_pid="$(read_live_pid "$FFMPEG_PID_FILE" || true)"
+  if [ -z "$child_pid" ]; then
+    echo "Player is running (PID $player_pid) but no active video playback process was found." >&2
+    exit 1
+  fi
+  printf '%s\n' "$child_pid"
+}
+
+stop_player() {
+  player_pid="$(require_player_pid)"
+  kill "$player_pid"
+  echo "Stopped player instance: $player_pid"
+}
+
+pause_player() {
+  child_pid="$(require_ffmpeg_pid)"
+  kill -STOP "$child_pid"
+  echo "Paused video playback: $child_pid"
+}
+
+play_player() {
+  child_pid="$(require_ffmpeg_pid)"
+  kill -CONT "$child_pid"
+  echo "Resumed video playback: $child_pid"
+}
+
+next_video() {
+  child_pid="$(require_ffmpeg_pid)"
+  kill "$child_pid"
+  echo "Stopped current video and advancing to next: $child_pid"
+}
+
+cleanup() {
+  if [ -n "$ffmpeg_pid" ] && kill -0 "$ffmpeg_pid" 2>/dev/null; then
+    kill "$ffmpeg_pid" 2>/dev/null || true
+    wait "$ffmpeg_pid" 2>/dev/null || true
+  fi
+
+  if [ -f "$FFMPEG_PID_FILE" ] && [ "$(cat "$FFMPEG_PID_FILE" 2>/dev/null || true)" = "$ffmpeg_pid" ]; then
+    rm -f "$FFMPEG_PID_FILE"
+  fi
+
+  if [ -f "$PID_FILE" ] && [ "$(cat "$PID_FILE" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$PID_FILE"
+  fi
+
+  if [ -n "$list_file" ]; then
+    rm -f "$list_file"
+  fi
+}
+
+control_action=""
+TARGET_DIR="$VIDEO_DIR"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --pause)
+      control_action="pause"
+      shift
+      ;;
+    --play)
+      control_action="play"
+      shift
+      ;;
+    --next)
+      control_action="next"
+      shift
+      ;;
+    --stop)
+      control_action="stop"
+      shift
+      ;;
+    --dir)
+      if [ -n "$control_action" ]; then
+        echo "--dir cannot be combined with control actions." >&2
+        exit 1
+      fi
+      if [ -z "${2:-}" ]; then
+        echo "Missing directory path after --dir" >&2
+        usage
+        exit 1
+      fi
+      TARGET_DIR="$2"
+      shift 2
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+    *)
+      if [ -n "$control_action" ]; then
+        echo "Playback control actions do not accept a path argument." >&2
+        exit 1
+      fi
+      TARGET_DIR="$1"
+      shift
+      ;;
+  esac
+done
+
+case "$control_action" in
+  pause)
+    pause_player
+    exit 0
+    ;;
+  play)
+    play_player
+    exit 0
+    ;;
+  next)
+    next_video
+    exit 0
+    ;;
+  stop)
+    stop_player
+    exit 0
+    ;;
+esac
+
+if [ ! -e "$FBDEV" ]; then
+  echo "Framebuffer device not found: $FBDEV" >&2
+  exit 1
+fi
+
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "ffmpeg is required but not installed." >&2
+  exit 1
+fi
+
+existing_pid="$(read_live_pid "$PID_FILE" || true)"
+if [ -n "$existing_pid" ]; then
+  echo "Player is already running with PID $existing_pid. Use --stop first." >&2
+  exit 1
+fi
+
+echo "$$" > "$PID_FILE"
+trap 'cleanup' EXIT INT TERM HUP
+
+if [ -x /usr/local/bin/pihole-display-pre.sh ]; then
+  /usr/local/bin/pihole-display-pre.sh || true
+fi
+
+auto_crop_filter="fps=15,crop=320:240:(in_w-320)/2:0,format=rgb565le"
+
+echo "Playing all videos on $FBDEV from: $TARGET_DIR"
+
+list_file="$(mktemp)"
+
+while true; do
+  collect_videos_to_list "$TARGET_DIR" "$list_file"
+
+  while IFS= read -r video; do
+    [ -n "$video" ] || continue
+    echo "Now playing: $video"
+    ffmpeg -hide_banner -loglevel error -stats \
+      -re \
+      -threads 2 \
+      -i "$video" \
+      -vf "$auto_crop_filter" \
+      -an -sn -dn \
+      -f fbdev "$FBDEV" &
+    ffmpeg_pid=$!
+    echo "$ffmpeg_pid" > "$FFMPEG_PID_FILE"
+    wait "$ffmpeg_pid" || true
+    ffmpeg_pid=""
+    rm -f "$FFMPEG_PID_FILE"
+  done < "$list_file"
+done
