@@ -6,7 +6,9 @@
 
 This AGENTS.md is the source of truth for AI coding agents working in this repository.
 
-Current priority: finish the active NASA / ISS stabilization slice defined in `PLAN.md`.
+Current priority:
+- if `PLAN.md` contains an active task, follow it
+- if `PLAN.md` is in reset/idle state, ask the requester what the next task is and use repo reality plus the new request as source of truth
 
 This work MUST preserve existing behaviours for:
 - dashboards / rotator
@@ -43,7 +45,7 @@ Dashboards are module-based by default:
 - Each module typically lives under `modules/<name>/`.
 - The rotator typically expects `modules/<name>/display.py` as an entrypoint unless configured otherwise.
 
-For the active NASA slice:
+For NASA app work:
 - keep `boot/boot_selector.py` as the shell parent
 - keep `display_rotator.py` out of scope unless the operator explicitly reopens it
 - keep Photos out of active implementation scope
@@ -113,10 +115,10 @@ When you change behaviour, you must:
 - Avoid “cleanup” refactors unless requested.
 - Keep code readable and consistent with existing conventions.
 
-## Definition of done (for the active NASA slice)
+## Definition of done
 
-Done means the acceptance criteria in `PLAN.md` are met, AND:
+Done means the acceptance criteria in the active `PLAN.md` are met, AND:
 - no regressions to dashboards/Photos/systemd/autostart were introduced
-- NASA pages are validated hardware-free where possible
+- hardware-free validation was used where possible
 - any device-only follow-up is recorded explicitly
 - shell edits remain minimal and justified by evidence

@@ -1604,7 +1604,7 @@ def draw_page_dots(draw: ImageDraw.ImageDraw, *, page_number: int, total_pages: 
     for index in range(total_pages):
         left = start_x + (index * (dot_diameter + gap))
         top = y
-        fill = ACCENT_RGB if index + 1 == page_number else (70, 86, 108)
+        fill = (68, 165, 255) if index + 1 == page_number else (70, 86, 108)
         draw.ellipse((left, top, left + dot_diameter, top + dot_diameter), fill=fill)
 
 

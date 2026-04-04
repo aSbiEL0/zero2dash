@@ -52,7 +52,7 @@ THEMES_DIR = BASE_DIR / "themes"
 DEFAULT_STARTUP_GIF_PATH = os.environ.get("BOOT_SELECTOR_GIF_PATH", str(BOOT_DIR / "startup.gif"))
 DEFAULT_CREDITS_GIF_PATH = os.environ.get("BOOT_SELECTOR_INFO_GIF", str(BOOT_DIR / "credits.gif"))
 DEFAULT_SHUTDOWN_COMMAND = os.environ.get("BOOT_SELECTOR_SHUTDOWN_COMMAND", "systemctl poweroff")
-DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", "/home/pihole/zero2dash/player.sh")
+DEFAULT_PLAYER_COMMAND = os.environ.get("BOOT_SELECTOR_PLAYER_COMMAND", f"{sys.executable} -u {BASE_DIR / 'player.py'}")
 DEFAULT_NASA_COMMAND = os.environ.get("BOOT_SELECTOR_NASA_COMMAND", "python3 -u /home/pihole/zero2dash/nasa-app/app.py")
 DEFAULT_PIN = os.environ.get("BOOT_SELECTOR_PIN", "")
 DEFAULT_DAY_SERVICE = os.environ.get("BOOT_SELECTOR_DAY_SERVICE", "display.service")
@@ -123,6 +123,7 @@ APP_ID_THEMES = "themes"
 APP_ID_SETTINGS = "settings"
 APP_ID_SHUTDOWN = "shutdown"
 APP_ID_LOCKED_CONTENT = "locked_content"
+APP_ID_LOCKED_CONTENT_PLAYER = "locked_content_player"
 APP_ID_NETWORK = "network"
 APP_ID_PI_STATS = "pi_stats"
 APP_ID_LOGS = "logs"
@@ -141,7 +142,7 @@ THEME_IMAGE_FILES = {
     LOGS_STATUS: "stats.png",
     ISS_PLACEHOLDER: "stats.png",
 }
-THEME_REQUIRED_FILES = set(THEME_IMAGE_FILES.values()) | {"granted.gif", "denied.gif"}
+THEME_REQUIRED_FILES = set(THEME_IMAGE_FILES.values()) | {"granted.gif", "denied.gif", "player.png", "overlay.png"}
 
 FG = (244, 247, 250)
 ACCENT = (90, 180, 255)
@@ -575,20 +576,28 @@ def _shell_child_env_overrides(mode_request_path: str | Path) -> tuple[tuple[str
     )
 
 
+def _player_child_env_overrides(mode_request_path: str | Path, player_mode: str) -> tuple[tuple[str, str], ...]:
+    return _shell_child_env_overrides(mode_request_path) + (("ZERO2DASH_PLAYER_MODE", player_mode),)
+
+
 def build_app_registry(args: argparse.Namespace) -> dict[str, AppSpec]:
     day_command = _command_for_service(args.day_service, [sys.executable, "-u", str(BASE_DIR / "display_rotator.py")])
     night_command = _command_for_service(args.night_service, [sys.executable, "-u", str(BASE_DIR / "modules" / "blackout" / "blackout.py")])
     nasa_command = tuple(player_command_args(args.nasa_command))
     child_env = _shell_child_env_overrides(getattr(args, "mode_request_path", DEFAULT_MODE_REQUEST_PATH))
+    player_command = tuple(player_command_args(args.player_command))
+    credits_env = _player_child_env_overrides(getattr(args, "mode_request_path", DEFAULT_MODE_REQUEST_PATH), "credits")
+    vault_env = _player_child_env_overrides(getattr(args, "mode_request_path", DEFAULT_MODE_REQUEST_PATH), "vault")
     return {
         APP_ID_DASHBOARDS: AppSpec(APP_ID_DASHBOARDS, "Dashboards", APP_KIND_CHILD_PROCESS, day_command, "day-night.png", True, ROOT_MENU_1, False, child_env),
         APP_ID_PHOTOS: AppSpec(APP_ID_PHOTOS, "Photos", APP_KIND_CHILD_PROCESS, (sys.executable, "-u", str(BASE_DIR / "modules" / "photos" / "slideshow.py")), "mainmenu1.png", True, ROOT_MENU_1, False, child_env),
         APP_ID_NIGHT: AppSpec(APP_ID_NIGHT, "Night", APP_KIND_CHILD_PROCESS, night_command, "day-night.png", True, DASHBOARDS_MENU, False, child_env),
-        APP_ID_CREDITS: AppSpec(APP_ID_CREDITS, "Credits", APP_KIND_SHELL_SCREEN, (), "credits.gif", False, ROOT_MENU_2),
+        APP_ID_CREDITS: AppSpec(APP_ID_CREDITS, "Credits", APP_KIND_CHILD_PROCESS, player_command, "player.png", True, ROOT_MENU_2, False, credits_env),
         APP_ID_THEMES: AppSpec(APP_ID_THEMES, "Themes", APP_KIND_SHELL_SCREEN, (), "themes.png", False, ROOT_MENU_2),
         APP_ID_SETTINGS: AppSpec(APP_ID_SETTINGS, "Settings", APP_KIND_SHELL_SCREEN, (), "settings.png", False, ROOT_MENU_2),
         APP_ID_SHUTDOWN: AppSpec(APP_ID_SHUTDOWN, "Shutdown", APP_KIND_SHELL_SCREEN, (), "yes-no.png", False, ROOT_MENU_2),
         APP_ID_LOCKED_CONTENT: AppSpec(APP_ID_LOCKED_CONTENT, "Locked Content", APP_KIND_SHELL_SCREEN, (), "keypad.png", False, ROOT_MENU_1),
+        APP_ID_LOCKED_CONTENT_PLAYER: AppSpec(APP_ID_LOCKED_CONTENT_PLAYER, "Locked Content Player", APP_KIND_CHILD_PROCESS, player_command, "player.png", True, ROOT_MENU_1, False, vault_env),
         APP_ID_NETWORK: AppSpec(APP_ID_NETWORK, "Network", APP_KIND_SHELL_SCREEN, (), "stats.png", False, SETTINGS_MENU),
         APP_ID_PI_STATS: AppSpec(APP_ID_PI_STATS, "Pi Stats", APP_KIND_SHELL_SCREEN, (), "stats.png", False, SETTINGS_MENU),
         APP_ID_LOGS: AppSpec(APP_ID_LOGS, "Logs", APP_KIND_SHELL_SCREEN, (), "stats.png", False, SETTINGS_MENU),
@@ -1202,7 +1211,7 @@ def build_contract_snapshot(
         "themes": sorted(theme_catalog),
         "apps": {app_id: app.to_contract_dict() for app_id, app in app_registry.items()},
         "night_app": night_app.to_contract_dict(),
-        "screens": [ROOT_MENU_1, ROOT_MENU_2, DASHBOARDS_MENU, SETTINGS_MENU, SHUTDOWN_CONFIRM, PIN_KEYPAD, THEMES_MENU, NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS, ISS_PLACEHOLDER, CREDITS_SCREEN, ACCESS_GRANTED, ACCESS_DENIED],
+        "screens": [ROOT_MENU_1, ROOT_MENU_2, DASHBOARDS_MENU, SETTINGS_MENU, SHUTDOWN_CONFIRM, PIN_KEYPAD, THEMES_MENU, NETWORK_STATUS, PI_STATS_STATUS, LOGS_STATUS, ISS_PLACEHOLDER, ACCESS_GRANTED, ACCESS_DENIED],
     }
 
 
@@ -1474,27 +1483,12 @@ def run_main_screen_shell(
             current_screen = RUNNING_APP if handle_mode_request(next_mode, app_registry, app_registry[APP_ID_NIGHT], child_manager) == RUNNING_APP else session_root_page
             continue
 
-        if current_screen == CREDITS_SCREEN:
-            playback_gif(
-                framebuffer,
-                Path(DEFAULT_CREDITS_GIF_PATH),
-                args.width,
-                args.height,
-                args.gif_speed,
-                None,
-                None,
-                touch_reader=touch_reader,
-                touch_settle_secs=args.touch_settle_secs,
-                touch_debounce_secs=args.touch_debounce_secs,
-                skip_action="skip_credits",
-            )
-            current_screen = ROOT_MENU_2
-            continue
-
         if current_screen == ACCESS_GRANTED:
             playback_gif(framebuffer, shell_images.granted_gif, args.width, args.height, args.gif_speed, None, None)
-            run_player(args.player_command)
-            current_screen = session_root_page
+            if child_manager.start_app(app_registry[APP_ID_LOCKED_CONTENT_PLAYER]):
+                current_screen = RUNNING_APP
+            else:
+                current_screen = session_root_page
             continue
 
         if current_screen == ACCESS_DENIED:
@@ -1585,7 +1579,8 @@ def run_main_screen_shell(
                 session_root_page = ROOT_MENU_1
                 current_screen = ROOT_MENU_1
             elif action == "credits":
-                current_screen = CREDITS_SCREEN
+                if child_manager.start_app(app_registry[APP_ID_CREDITS]):
+                    current_screen = RUNNING_APP
             elif action == "themes":
                 current_screen = THEMES_MENU
             elif action == "settings":

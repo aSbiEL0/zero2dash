@@ -15,6 +15,7 @@
 - `display_rotator.py` remains the Dashboards child entrypoint
 - `modules/photos/slideshow.py` remains the Photos child entrypoint
 - `modules/blackout/blackout.py` remains the Night compatibility path
+- `player.py` is the foreground credits/vault video player child
 
 ## Touch and Return
 
@@ -28,10 +29,18 @@
 
 - `mainmenu1.png` and `mainmenu2.png` are the root screens
 - `day-night.png`, `settings.png`, `themes.png`, `yes-no.png`, `keypad.png`, and `stats.png` drive child screens and placeholders
-- `credits.gif` and `startup.gif` remain shared boot assets
+- `player.png` and `overlay.png` are required per-theme player assets
+- `themes/global_images/vault.png` is the fixed vault-mode background override
+- `credits.gif` remains on disk in `boot/`, but the normal Credits button flow no longer uses it
 - Verified installed theme directories are `carbon`, `comic`, `frosty`, and `steele`
 - `yes-no.png` maps `tick` to confirm and `red X` to cancel
 - `keypad.png` uses the real 4x3 layout, and only consecutive failed keypad submissions count toward shutdown
+
+## Player Flow
+
+- Credits launch the foreground player against `~/vid`
+- Correct PIN entry launches the same player against `~/x`
+- The player owns touch while running and exits back to the shell on its own back-strip / hold gestures
 
 ## Settings Layout
 

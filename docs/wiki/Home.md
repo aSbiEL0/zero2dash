@@ -1,16 +1,16 @@
 # zero2dash Wiki
 
-`PLAN.md` is the active source of truth for the current shell slice.
+`PLAN.md` is the active source of truth only when a task is open.
 
 ## Current Runtime
 
 - `boot/boot_selector.py` is the parent shell
 - `display_rotator.py` is the Dashboards child entrypoint
 - `modules/photos/slideshow.py` is the Photos child entrypoint
+- `player.py` is the credits/vault framebuffer player child
 - Shell modes are `menu`, `dashboards`, `photos`, and `night`
 - The shell baseline is working on the Pi
-- The current shell stabilization slice is complete
-- NASA app work is deferred to a later slice
+- Active task state belongs in `PLAN.md`
 
 ## Theme Contract
 
@@ -24,7 +24,8 @@
 ## Validation
 
 - `python3 boot/boot_selector.py --dump-contracts --no-framebuffer --skip-gif`
-- `python3 -m unittest tests.test_display_rotator`
+- `python3 player.py --self-test`
+- `python3 -m unittest discover -s tests -v`
 - `python3 modules/trams/display.py --self-test`
 
 Shell acceptance for the finished slice is based on device confirmation for Themes mapping, right-side stripe behavior, and Settings layout.
