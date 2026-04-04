@@ -1112,7 +1112,7 @@ def resolve_location(country_map: dict[str, str], cache_path: Path, offline: boo
         pass
     if cached is not None:
         return cached, True, True, True
-    return None, False, True, True
+    return None, False, False, False
 
 def _parse_launch_epoch(value: Any) -> int | None:
     epoch = safe_int(value)
@@ -1469,9 +1469,9 @@ def render_loading_page(stage: str = "position") -> Image.Image:
     body_font = load_font(10, bold=False)
     title, body, foot = LOADING_STAGE_MESSAGES.get(stage, LOADING_STAGE_MESSAGES["position"])
     # notes: text box removed 30/03/2026; adjust these Y values to tighten or loosen the loading text stack.
-    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 112), title, font=title_font, fill=(245, 245, 252))
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 102), title, font=title_font, fill=(245, 245, 252))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 120), body, font=body_font, fill=(228, 230, 238))
-    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 128), foot, font=body_font, fill=(228, 230, 238))
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 138), foot, font=body_font, fill=(228, 230, 238))
     return image
 
 
