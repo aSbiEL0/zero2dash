@@ -62,6 +62,11 @@ APP_NAME = "NASA ISS"
 ASSETS_DIR = SCRIPT_DIR / "assets"
 FONTS_DIR = SCRIPT_DIR / "fonts"
 COUNTRY_MAP_PATH = SCRIPT_DIR / "country_codes.json"
+COUNTRY_BOUNDARIES_DIR = ASSETS_DIR / "countries"
+COUNTRY_BOUNDARY_BASENAME = "geoBoundariesCGAZ_ADM0"
+COUNTRY_BOUNDARY_SHP_PATH = COUNTRY_BOUNDARIES_DIR / f"{COUNTRY_BOUNDARY_BASENAME}.shp"
+COUNTRY_BOUNDARY_SHX_PATH = COUNTRY_BOUNDARIES_DIR / f"{COUNTRY_BOUNDARY_BASENAME}.shx"
+COUNTRY_BOUNDARY_DBF_PATH = COUNTRY_BOUNDARIES_DIR / f"{COUNTRY_BOUNDARY_BASENAME}.dbf"
 LOCATION_CACHE_PATH = SCRIPT_DIR / "location_cache.json"
 CREW_CACHE_PATH = SCRIPT_DIR / "crew_cache.json"
 API_FAILURE_STATE_PATH = SCRIPT_DIR / "api_failure_state.json"
@@ -261,6 +266,13 @@ class ApiFailureState:
     crew_since: int | None
 
 
+@dataclass(frozen=True)
+class CountryBoundary:
+    name: str
+    bbox: tuple[float, float, float, float]
+    rings: tuple[tuple[tuple[float, float], ...], ...]
+
+
 def request_stop(_signum: int, _frame: object) -> None:
     global _STOP_REQUESTED
     _STOP_REQUESTED = True
@@ -369,6 +381,168 @@ def load_country_map() -> dict[str, str]:
     if not isinstance(payload, dict):
         return {}
     return {str(key).upper(): str(value) for key, value in payload.items()}
+
+
+def read_dbf_field_names(payload: bytes, header_length: int) -> list[tuple[str, int]]:
+    fields: list[tuple[str, int]] = []
+    for offset in range(32, header_length - 1, 32):
+        descriptor = payload[offset:offset + 32]
+        if not descriptor or descriptor[0] == 0x0D:
+            break
+        name = descriptor[:11].split(b"\x00", 1)[0].decode("ascii", errors="ignore").strip()
+        if not name:
+            continue
+        fields.append((name, descriptor[16]))
+    return fields
+
+
+def load_country_names_from_dbf(path: Path) -> list[str]:
+    try:
+        payload = path.read_bytes()
+    except Exception:
+        return []
+    if len(payload) < 32:
+        return []
+    record_count = struct.unpack("<I", payload[4:8])[0]
+    header_length = struct.unpack("<H", payload[8:10])[0]
+    record_length = struct.unpack("<H", payload[10:12])[0]
+    fields = read_dbf_field_names(payload, header_length)
+    if not fields or record_length <= 1:
+        return []
+    field_offsets: dict[str, tuple[int, int]] = {}
+    cursor = 1
+    for name, width in fields:
+        field_offsets[name] = (cursor, width)
+        cursor += width
+    name_field = next((name for name in field_offsets if name.lower() == "shapename"), "")
+    if not name_field:
+        return []
+    start, width = field_offsets[name_field]
+    names: list[str] = []
+    for index in range(record_count):
+        record_offset = header_length + (index * record_length)
+        record = payload[record_offset:record_offset + record_length]
+        if len(record) < record_length or record[0] == 0x2A:
+            continue
+        raw_name = record[start:start + width]
+        names.append(raw_name.decode("utf-8", errors="ignore").strip())
+    return names
+
+
+def load_shx_offsets(path: Path) -> list[int]:
+    try:
+        payload = path.read_bytes()
+    except Exception:
+        return []
+    if len(payload) < 100:
+        return []
+    offsets: list[int] = []
+    for cursor in range(100, len(payload), 8):
+        chunk = payload[cursor:cursor + 8]
+        if len(chunk) < 8:
+            break
+        offsets.append(struct.unpack(">i", chunk[:4])[0] * 2)
+    return offsets
+
+
+def parse_polygon_rings(content: bytes) -> tuple[tuple[float, float, float, float], tuple[tuple[tuple[float, float], ...], ...]] | None:
+    if len(content) < 44:
+        return None
+    shape_type = struct.unpack("<i", content[:4])[0]
+    if shape_type == 0:
+        return None
+    if shape_type not in (5, 15, 25):
+        return None
+    min_x, min_y, max_x, max_y = struct.unpack("<4d", content[4:36])
+    num_parts, num_points = struct.unpack("<2i", content[36:44])
+    if num_parts <= 0 or num_points <= 0:
+        return None
+    parts_end = 44 + (num_parts * 4)
+    points_end = parts_end + (num_points * 16)
+    if len(content) < points_end:
+        return None
+    part_indices = list(struct.unpack(f"<{num_parts}i", content[44:parts_end]))
+    points_blob = content[parts_end:points_end]
+    points: list[tuple[float, float]] = []
+    for cursor in range(0, len(points_blob), 16):
+        x, y = struct.unpack("<2d", points_blob[cursor:cursor + 16])
+        points.append((x, y))
+    rings: list[tuple[tuple[float, float], ...]] = []
+    for index, start in enumerate(part_indices):
+        end = part_indices[index + 1] if index + 1 < len(part_indices) else len(points)
+        ring = tuple(points[start:end])
+        if len(ring) >= 3:
+            rings.append(ring)
+    if not rings:
+        return None
+    return (min_x, min_y, max_x, max_y), tuple(rings)
+
+
+@lru_cache(maxsize=1)
+def load_offline_country_boundaries() -> tuple[CountryBoundary, ...]:
+    required_paths = (
+        COUNTRY_BOUNDARY_SHP_PATH,
+        COUNTRY_BOUNDARY_SHX_PATH,
+        COUNTRY_BOUNDARY_DBF_PATH,
+    )
+    if not all(path.exists() for path in required_paths):
+        return ()
+    names = load_country_names_from_dbf(COUNTRY_BOUNDARY_DBF_PATH)
+    offsets = load_shx_offsets(COUNTRY_BOUNDARY_SHX_PATH)
+    if not names or not offsets:
+        return ()
+    boundaries: list[CountryBoundary] = []
+    try:
+        with COUNTRY_BOUNDARY_SHP_PATH.open("rb") as handle:
+            for index, offset in enumerate(offsets):
+                handle.seek(offset)
+                record_header = handle.read(8)
+                if len(record_header) < 8:
+                    break
+                content_words = struct.unpack(">i", record_header[4:8])[0]
+                content = handle.read(content_words * 2)
+                parsed = parse_polygon_rings(content)
+                if parsed is None:
+                    continue
+                bbox, rings = parsed
+                raw_name = names[index] if index < len(names) else ""
+                name = clean_location_text(raw_name)
+                if not name:
+                    continue
+                boundaries.append(CountryBoundary(name=name, bbox=bbox, rings=rings))
+    except Exception:
+        return ()
+    return tuple(boundaries)
+
+
+def point_in_ring(longitude: float, latitude: float, ring: tuple[tuple[float, float], ...]) -> bool:
+    inside = False
+    previous_x, previous_y = ring[-1]
+    for current_x, current_y in ring:
+        crosses_latitude = (current_y > latitude) != (previous_y > latitude)
+        if crosses_latitude:
+            denominator = previous_y - current_y
+            if denominator:
+                intersect_x = ((previous_x - current_x) * (latitude - current_y) / denominator) + current_x
+                if longitude < intersect_x:
+                    inside = not inside
+        previous_x, previous_y = current_x, current_y
+    return inside
+
+
+@lru_cache(maxsize=256)
+def lookup_offline_country_name(latitude: float, longitude: float) -> str:
+    for boundary in load_offline_country_boundaries():
+        min_x, min_y, max_x, max_y = boundary.bbox
+        if longitude < min_x or longitude > max_x or latitude < min_y or latitude > max_y:
+            continue
+        inside = False
+        for ring in boundary.rings:
+            if point_in_ring(longitude, latitude, ring):
+                inside = not inside
+        if inside:
+            return boundary.name
+    return ""
 
 
 def save_preview(image: Image.Image, output_path: str | None) -> None:
@@ -964,22 +1138,21 @@ def extract_geoapify_water_label(properties: dict[str, Any]) -> str:
     return ""
 
 
+def cardinal_suffix(value: float, positive: str, negative: str) -> str:
+    return positive if value >= 0 else negative
+
+
+def coordinate_location_label(latitude: float, longitude: float) -> str:
+    lat_value = abs(latitude)
+    lon_value = abs(longitude)
+    return f"{lat_value:.1f}{cardinal_suffix(latitude, 'N', 'S')} {lon_value:.1f}{cardinal_suffix(longitude, 'E', 'W')}"
+
+
 def resolve_geoapify_location(snapshot: LocationSnapshot, country_map: dict[str, str], cached: LocationSnapshot | None) -> tuple[str, str, str, bool]:
-    try:
-        geocode = retry_call(lambda: fetch_geoapify_reverse_geocode(snapshot.latitude, snapshot.longitude))
-        properties = first_geoapify_result(geocode)
-        country_code = clean_location_text(properties.get("country_code", ""), uppercase=True)
-        country_name = clean_location_text(properties.get("country", "")) or iso_country_name(country_code, country_map)
-        return country_code, country_name, extract_geoapify_water_label(properties), False
-    except Exception:
-        if cached is not None and coordinates_match(snapshot, cached):
-            return (
-                clean_location_text(cached.country_code, uppercase=True),
-                clean_location_text(cached.country_name),
-                clean_location_text(cached.location_label),
-                True,
-            )
-        return "", "", "", True
+    offline_country_name = lookup_offline_country_name(snapshot.latitude, snapshot.longitude)
+    if offline_country_name:
+        return "", offline_country_name, "", False
+    return "", "", "Ocean", False
 
 
 def normalise_day_night(value: Any) -> str:
@@ -1062,7 +1235,8 @@ def build_live_location(country_map: dict[str, str], cached: LocationSnapshot | 
     if not visibility:
         visibility = "TBA"
 
-    country_code, country_name, location_label, _geocode_stale = resolve_geoapify_location(snapshot, country_map, cached)
+    country_code, country_name, location_label, geocode_stale = resolve_geoapify_location(snapshot, country_map, cached)
+    details_stale = geocode_stale
 
     try:
         trail = fetch_trail(snapshot.position_timestamp)
