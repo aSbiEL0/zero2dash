@@ -17,6 +17,7 @@ import shutil
 import signal
 import struct
 import sys
+import threading
 import time
 from typing import Any
 import urllib.parse
@@ -67,6 +68,7 @@ COUNTRY_BOUNDARY_BASENAME = "geoBoundariesCGAZ_ADM0"
 COUNTRY_BOUNDARY_SHP_PATH = COUNTRY_BOUNDARIES_DIR / f"{COUNTRY_BOUNDARY_BASENAME}.shp"
 COUNTRY_BOUNDARY_SHX_PATH = COUNTRY_BOUNDARIES_DIR / f"{COUNTRY_BOUNDARY_BASENAME}.shx"
 COUNTRY_BOUNDARY_DBF_PATH = COUNTRY_BOUNDARIES_DIR / f"{COUNTRY_BOUNDARY_BASENAME}.dbf"
+COUNTRY_BOUNDARY_MAX_RING_POINTS = 192
 LOCATION_CACHE_PATH = SCRIPT_DIR / "location_cache.json"
 CREW_CACHE_PATH = SCRIPT_DIR / "crew_cache.json"
 API_FAILURE_STATE_PATH = SCRIPT_DIR / "api_failure_state.json"
@@ -111,6 +113,10 @@ USER_AGENT = 'zero2dash-nasa/1.0'
 DETAILS_TITLE_FONT_NAME = 'Stay On The Ground Distressed.ttf'
 
 _STOP_REQUESTED = False
+_OFFLINE_BOUNDARY_CACHE: tuple[CountryBoundary, ...] | None = None
+_OFFLINE_BOUNDARY_LOAD_THREAD: threading.Thread | None = None
+_OFFLINE_BOUNDARY_LOAD_LOCK = threading.Lock()
+_OFFLINE_BOUNDARY_LOAD_FAILED = False
 
 EV_KEY = 0x01
 EV_ABS = 0x03
@@ -470,7 +476,7 @@ def parse_polygon_rings(content: bytes) -> tuple[tuple[float, float, float, floa
     rings: list[tuple[tuple[float, float], ...]] = []
     for index, start in enumerate(part_indices):
         end = part_indices[index + 1] if index + 1 < len(part_indices) else len(points)
-        ring = tuple(points[start:end])
+        ring = simplify_polygon_ring(tuple(points[start:end]))
         if len(ring) >= 3:
             rings.append(ring)
     if not rings:
@@ -478,8 +484,19 @@ def parse_polygon_rings(content: bytes) -> tuple[tuple[float, float, float, floa
     return (min_x, min_y, max_x, max_y), tuple(rings)
 
 
-@lru_cache(maxsize=1)
-def load_offline_country_boundaries() -> tuple[CountryBoundary, ...]:
+def simplify_polygon_ring(ring: tuple[tuple[float, float], ...]) -> tuple[tuple[float, float], ...]:
+    if len(ring) <= COUNTRY_BOUNDARY_MAX_RING_POINTS:
+        return ring
+    step = max(1, len(ring) // COUNTRY_BOUNDARY_MAX_RING_POINTS)
+    simplified = ring[::step]
+    if simplified[-1] != ring[-1]:
+        simplified = simplified + (ring[-1],)
+    if len(simplified) < 3:
+        return ring
+    return simplified
+
+
+def _read_offline_country_boundaries() -> tuple[CountryBoundary, ...]:
     required_paths = (
         COUNTRY_BOUNDARY_SHP_PATH,
         COUNTRY_BOUNDARY_SHX_PATH,
@@ -515,6 +532,47 @@ def load_offline_country_boundaries() -> tuple[CountryBoundary, ...]:
     return tuple(boundaries)
 
 
+def _load_offline_country_boundaries_worker() -> None:
+    global _OFFLINE_BOUNDARY_CACHE, _OFFLINE_BOUNDARY_LOAD_FAILED, _OFFLINE_BOUNDARY_LOAD_THREAD
+    boundaries = _read_offline_country_boundaries()
+    with _OFFLINE_BOUNDARY_LOAD_LOCK:
+        _OFFLINE_BOUNDARY_CACHE = boundaries
+        _OFFLINE_BOUNDARY_LOAD_FAILED = not bool(boundaries)
+        _OFFLINE_BOUNDARY_LOAD_THREAD = None
+
+
+def _start_offline_boundary_loader() -> None:
+    global _OFFLINE_BOUNDARY_LOAD_THREAD
+    with _OFFLINE_BOUNDARY_LOAD_LOCK:
+        if _OFFLINE_BOUNDARY_CACHE is not None or _OFFLINE_BOUNDARY_LOAD_FAILED:
+            return
+        if _OFFLINE_BOUNDARY_LOAD_THREAD is not None and _OFFLINE_BOUNDARY_LOAD_THREAD.is_alive():
+            return
+        loader = threading.Thread(
+            target=_load_offline_country_boundaries_worker,
+            name="nasa-country-boundaries",
+            daemon=True,
+        )
+        _OFFLINE_BOUNDARY_LOAD_THREAD = loader
+        loader.start()
+
+
+def load_offline_country_boundaries(*, blocking: bool = True) -> tuple[CountryBoundary, ...]:
+    global _OFFLINE_BOUNDARY_CACHE, _OFFLINE_BOUNDARY_LOAD_FAILED
+    if _OFFLINE_BOUNDARY_CACHE is not None:
+        return _OFFLINE_BOUNDARY_CACHE
+    if _OFFLINE_BOUNDARY_LOAD_FAILED:
+        return ()
+    if not blocking:
+        _start_offline_boundary_loader()
+        return ()
+    boundaries = _read_offline_country_boundaries()
+    with _OFFLINE_BOUNDARY_LOAD_LOCK:
+        _OFFLINE_BOUNDARY_CACHE = boundaries
+        _OFFLINE_BOUNDARY_LOAD_FAILED = not bool(boundaries)
+    return boundaries
+
+
 def point_in_ring(longitude: float, latitude: float, ring: tuple[tuple[float, float], ...]) -> bool:
     inside = False
     previous_x, previous_y = ring[-1]
@@ -530,9 +588,8 @@ def point_in_ring(longitude: float, latitude: float, ring: tuple[tuple[float, fl
     return inside
 
 
-@lru_cache(maxsize=256)
 def lookup_offline_country_name(latitude: float, longitude: float) -> str:
-    for boundary in load_offline_country_boundaries():
+    for boundary in load_offline_country_boundaries(blocking=False):
         min_x, min_y, max_x, max_y = boundary.bbox
         if longitude < min_x or longitude > max_x or latitude < min_y or latitude > max_y:
             continue
@@ -2006,6 +2063,7 @@ def main() -> int:
         return run_health_check()
 
     country_map = load_country_map()
+    _start_offline_boundary_loader()
     if args.page:
         return run_preview(args, country_map)
     return run_live(args, country_map)
