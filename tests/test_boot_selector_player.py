@@ -40,6 +40,22 @@ class BootSelectorPlayerContractTests(unittest.TestCase):
         self.assertFalse(app.shell_handles_home_gesture)
         self.assertIn(("ZERO2DASH_PLAYER_MODE", "vault"), app.env_overrides)
 
+    def test_validate_args_rejects_deprecated_player_shell_wrapper(self) -> None:
+        args = self._args()
+        args.width = 320
+        args.height = 240
+        args.touch_settle_secs = 0.35
+        args.touch_debounce_secs = 0.35
+        args.child_stop_grace_secs = 3.0
+        args.home_gesture_hold_secs = 2.0
+        args.home_gesture_corner_width = 64
+        args.home_gesture_corner_height = 48
+        args.gif_speed = 0.5
+        args.shutdown_command = "systemctl poweroff"
+        args.player_command = "/home/pihole/zero2dash/player.sh"
+
+        self.assertEqual(boot_selector.validate_args(args), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

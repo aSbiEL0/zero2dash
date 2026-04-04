@@ -550,11 +550,18 @@ def request_stop(_signum: int, _frame: object) -> None:
 
 
 def shutdown_command_args(command_text: str) -> list[str]:
-    return shlex.split(command_text)
+    return shlex.split(command_text, posix=os.name != "nt")
 
 
 def player_command_args(command_text: str) -> list[str]:
-    return shlex.split(command_text)
+    return shlex.split(command_text, posix=os.name != "nt")
+
+
+def _is_deprecated_player_command(command: list[str]) -> bool:
+    if not command:
+        return False
+    target = command[0].replace("\\", "/").lower()
+    return target.endswith("/player.sh") or target.endswith("player.sh")
 
 
 def _command_for_service(service_name: str, fallback_command: list[str]) -> tuple[str, ...]:
@@ -1236,6 +1243,9 @@ def validate_args(args: argparse.Namespace) -> int | None:
         return 1
     if not player_command_args(args.player_command):
         print("Player command cannot be empty.", file=sys.stderr)
+        return 1
+    if _is_deprecated_player_command(player_command_args(args.player_command)):
+        print("Player command must target player.py; player.sh is deprecated for credits/vault playback.", file=sys.stderr)
         return 1
     if not player_command_args(args.nasa_command):
         print("NASA command cannot be empty.", file=sys.stderr)

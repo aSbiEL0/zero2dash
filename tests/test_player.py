@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import tempfile
 import unittest
 from pathlib import Path
@@ -77,7 +78,10 @@ class TouchHandoffTests(unittest.TestCase):
             def is_touch_active(self) -> bool:
                 return active_states.pop(0) if active_states else False
 
-        monotonic_values = iter([0.00, 0.00, 0.05, 0.10, 0.15, 0.21, 0.26, 0.31, 0.36, 0.41])
+        monotonic_values = itertools.chain(
+            [0.00, 0.00, 0.05, 0.10, 0.15, 0.21, 0.26, 0.31, 0.36, 0.41, 0.46, 0.51],
+            itertools.count(0.56, 0.05),
+        )
         with mock.patch.object(player.time, "monotonic", side_effect=lambda: next(monotonic_values)):
             player.wait_for_touch_idle(FakeTouchInput(), idle_secs=0.20, max_wait_secs=1.50)
 
