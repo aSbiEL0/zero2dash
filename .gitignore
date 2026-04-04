@@ -17,3 +17,5 @@ logs/*
 .env.save
 stop.sh
 rendering.sh
+nasa-app/assets/countries/*
+!nasa-app/assets/countries/.gitkeep

@@ -196,6 +196,10 @@ class NasaAppTests(unittest.TestCase):
         placeholder_location = self.build_location(country_code="??", country_name="??", location_label="??")
         self.assertEqual(NASA_APP.location_display_name(placeholder_location), "Unknown")
 
+    def test_coordinate_location_label_returns_compact_cardinal_text(self) -> None:
+        self.assertEqual(NASA_APP.coordinate_location_label(51.5, -0.12), "51.5N 0.1W")
+        self.assertEqual(NASA_APP.coordinate_location_label(-3.3323, 158.0283), "3.3S 158.0E")
+
     def test_build_details_entries_match_requested_rows(self) -> None:
         entries = NASA_APP.build_details_entries(self.build_location())
         self.assertEqual(
@@ -501,11 +505,29 @@ class NasaAppTests(unittest.TestCase):
                     with patch.object(NASA_APP, "fetch_trail", return_value=[]):
                         location, map_stale, details_stale = NASA_APP.build_live_location({}, cached)
         self.assertFalse(map_stale)
-        self.assertFalse(details_stale)
+        self.assertTrue(details_stale)
         self.assertEqual(location.altitude_km, cached.altitude_km)
         self.assertEqual(location.velocity_kmh, cached.velocity_kmh)
         self.assertEqual(location.visibility, cached.visibility)
         self.assertEqual(location.country_name, "United Kingdom")
+
+    def test_resolve_geoapify_location_returns_ocean_when_not_on_land(self) -> None:
+        snapshot = self.build_location(country_code="", country_name="", location_label="")
+        with patch.object(NASA_APP, "lookup_offline_country_name", return_value=""):
+            country_code, country_name, location_label, stale = NASA_APP.resolve_geoapify_location(snapshot, {}, None)
+        self.assertEqual(country_code, "")
+        self.assertEqual(country_name, "")
+        self.assertEqual(location_label, "Ocean")
+        self.assertFalse(stale)
+
+    def test_resolve_geoapify_location_uses_offline_country_lookup_when_available(self) -> None:
+        snapshot = self.build_location(country_code="", country_name="", location_label="")
+        with patch.object(NASA_APP, "lookup_offline_country_name", return_value="United Kingdom"):
+            country_code, country_name, location_label, stale = NASA_APP.resolve_geoapify_location(snapshot, {}, None)
+        self.assertEqual(country_code, "")
+        self.assertEqual(country_name, "United Kingdom")
+        self.assertEqual(location_label, "")
+        self.assertFalse(stale)
 
     def test_resolve_location_prefers_open_notify_before_cache(self) -> None:
         cached = self.build_location(country_name="", location_label="")
