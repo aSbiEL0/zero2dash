@@ -192,9 +192,9 @@ CREW_HEADER_FONT_NAME = DETAILS_TITLE_FONT_NAME
 CREW_HEADER_FONT_SIZE = 17
 CREW_HEADER_Y = 31
 # Edit these centre points to move each visible crew row vertically.
-CREW_SLOT_NAME_CENTRES = (58, 143)
-CREW_SLOT_DETAIL_1_CENTRES = (85, 170)
-CREW_SLOT_DETAIL_2_CENTRES = (105, 190)
+CREW_SLOT_NAME_CENTRES = (58, 138)
+CREW_SLOT_DETAIL_1_CENTRES = (85, 165)
+CREW_SLOT_DETAIL_2_CENTRES = (105, 185)
 
 @dataclass(frozen=True)
 class OrbitPoint:
@@ -1470,7 +1470,7 @@ def render_loading_page(stage: str = "position") -> Image.Image:
     title, body, foot = LOADING_STAGE_MESSAGES.get(stage, LOADING_STAGE_MESSAGES["position"])
     # notes: text box removed 30/03/2026; adjust these Y values to tighten or loosen the loading text stack.
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), title, font=title_font)[2]) // 2, 102), title, font=title_font, fill=(245, 245, 252))
-    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 124), body, font=body_font, fill=(228, 230, 238))
+    draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), body, font=body_font)[2]) // 2, 122), body, font=body_font, fill=(228, 230, 238))
     draw.text(((CANVAS_WIDTH - draw.textbbox((0, 0), foot, font=body_font)[2]) // 2, 138), foot, font=body_font, fill=(228, 230, 238))
     return image
 
