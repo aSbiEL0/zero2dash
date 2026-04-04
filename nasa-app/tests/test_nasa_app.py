@@ -529,6 +529,30 @@ class NasaAppTests(unittest.TestCase):
         self.assertEqual(location_label, "")
         self.assertFalse(stale)
 
+    def test_load_offline_country_boundaries_non_blocking_starts_background_loader(self) -> None:
+        original_cache = NASA_APP._OFFLINE_BOUNDARY_CACHE
+        original_thread = NASA_APP._OFFLINE_BOUNDARY_LOAD_THREAD
+        original_failed = NASA_APP._OFFLINE_BOUNDARY_LOAD_FAILED
+        NASA_APP._OFFLINE_BOUNDARY_CACHE = None
+        NASA_APP._OFFLINE_BOUNDARY_LOAD_THREAD = None
+        NASA_APP._OFFLINE_BOUNDARY_LOAD_FAILED = False
+        try:
+            with patch.object(NASA_APP, "_start_offline_boundary_loader") as start_loader:
+                boundaries = NASA_APP.load_offline_country_boundaries(blocking=False)
+            self.assertEqual(boundaries, ())
+            start_loader.assert_called_once_with()
+        finally:
+            NASA_APP._OFFLINE_BOUNDARY_CACHE = original_cache
+            NASA_APP._OFFLINE_BOUNDARY_LOAD_THREAD = original_thread
+            NASA_APP._OFFLINE_BOUNDARY_LOAD_FAILED = original_failed
+
+    def test_simplify_polygon_ring_caps_large_rings(self) -> None:
+        ring = tuple((float(index), float(index)) for index in range(NASA_APP.COUNTRY_BOUNDARY_MAX_RING_POINTS * 3))
+        simplified = NASA_APP.simplify_polygon_ring(ring)
+        self.assertLessEqual(len(simplified), NASA_APP.COUNTRY_BOUNDARY_MAX_RING_POINTS + 1)
+        self.assertEqual(simplified[0], ring[0])
+        self.assertEqual(simplified[-1], ring[-1])
+
     def test_resolve_location_prefers_open_notify_before_cache(self) -> None:
         cached = self.build_location(country_name="", location_label="")
         fallback = self.build_location(country_name="North Sea", location_label="North Sea")
