@@ -58,6 +58,8 @@ THEME_ROOT_DEFAULT = Path(os.environ.get("BOOT_SELECTOR_THEME_ROOT", str(DEFAULT
 THEME_STATE_PATH_DEFAULT = Path(os.environ.get("BOOT_SELECTOR_THEME_STATE_PATH", str(DEFAULT_THEME_STATE_PATH)))
 VAULT_BACKGROUND_PATH = BASE_DIR / "themes" / "global_images" / "vault.png"
 TOUCH_SETTLE_SECS = float(os.environ.get("ZERO2DASH_PLAYER_TOUCH_SETTLE_SECS", "0.20"))
+STARTUP_TOUCH_IDLE_SECS = 0.20
+STARTUP_TOUCH_MAX_WAIT_SECS = 1.50
 SCROLL_HOLD_DELAY_SECS = 0.5
 SCROLL_REPEAT_SECS = 1.0 / 3.0
 HOLD_TO_EXIT_SECS = 2.0
@@ -259,6 +261,9 @@ class TouchInput:
 
     def is_available(self) -> bool:
         return self.device is not None
+
+    def is_touch_active(self) -> bool:
+        return self._touch_down
 
     def close(self) -> None:
         if self._fd is not None:
@@ -515,8 +520,30 @@ def playback_zone(x: int) -> str:
     return "right"
 
 
+def wait_for_touch_idle(
+    touch_input: TouchInput,
+    idle_secs: float = STARTUP_TOUCH_IDLE_SECS,
+    max_wait_secs: float = STARTUP_TOUCH_MAX_WAIT_SECS,
+) -> None:
+    """Discard inherited shell touch events before the player becomes interactive."""
+    started_at = time.monotonic()
+    idle_started_at: float | None = None
+    while not STOP_REQUESTED and (time.monotonic() - started_at) < max_wait_secs:
+        sample = touch_input.poll(0.05)
+        now = time.monotonic()
+        if sample is not None or touch_input.is_touch_active():
+            idle_started_at = None
+            continue
+        if idle_started_at is None:
+            idle_started_at = now
+            continue
+        if (now - idle_started_at) >= idle_secs:
+            return
+
+
 def run_selection_mode(framebuffer: FramebufferWriter, assets: PlayerAssets, state: PlaylistState, touch_input: TouchInput) -> bool:
     render_selection_screen(framebuffer, assets, state)
+    wait_for_touch_idle(touch_input)
     down_at = None
     scroll_direction = None
     repeated_scroll = False

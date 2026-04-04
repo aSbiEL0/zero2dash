@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import player
 
@@ -62,6 +63,23 @@ class PlayerLogicTests(unittest.TestCase):
         self.assertEqual(state.current_file(), files[0])
         self.assertEqual(state.advance(-1), 2)
         self.assertEqual(state.current_file(), files[2])
+
+
+class TouchHandoffTests(unittest.TestCase):
+    def test_wait_for_touch_idle_consumes_inherited_press_before_returning(self) -> None:
+        samples = [object(), object(), None, None, None, None, None, None]
+        active_states = [True, True, False, False, False, False, False, False]
+
+        class FakeTouchInput:
+            def poll(self, _timeout_secs: float):
+                return samples.pop(0) if samples else None
+
+            def is_touch_active(self) -> bool:
+                return active_states.pop(0) if active_states else False
+
+        monotonic_values = iter([0.00, 0.00, 0.05, 0.10, 0.15, 0.21, 0.26, 0.31, 0.36, 0.41])
+        with mock.patch.object(player.time, "monotonic", side_effect=lambda: next(monotonic_values)):
+            player.wait_for_touch_idle(FakeTouchInput(), idle_secs=0.20, max_wait_secs=1.50)
 
 
 if __name__ == "__main__":
