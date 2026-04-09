@@ -1005,6 +1005,7 @@ THEME_BUTTON_ORDER = (
     "steele",
     "comic",
     "frosty",
+    "matrix",
 )
 
 def theme_picker_targets(theme_ids: dict[str, ThemeAssets] | tuple[str, ...] | list[str]) -> tuple[str, ...]:
