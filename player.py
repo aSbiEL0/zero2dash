@@ -64,10 +64,6 @@ SCROLL_HOLD_DELAY_SECS = 0.5
 SCROLL_REPEAT_SECS = 1.0 / 3.0
 HOLD_TO_EXIT_SECS = 2.0
 LEFT_DOUBLE_TAP_WINDOW_SECS = 1.0
-OVERLAY_DELAY_SECS = 3.0
-OVERLAY_SHOW_SECS = 3.0
-OVERLAY_FADE_SECS = 0.18
-OVERLAY_FRAME_STEP_SECS = 0.05
 SYNTHETIC_TOUCH_TIMEOUT_SECS = 0.35
 SUPPORTED_VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".avi"}
 FFMPEG_FILTER = "fps=15,crop=320:240:(in_w-320)/2:0,format=rgb565le"
@@ -75,8 +71,8 @@ CREDITS_DIR_ENV = "ZERO2DASH_PLAYER_CREDITS_DIR"
 VAULT_DIR_ENV = "ZERO2DASH_PLAYER_VAULT_DIR"
 
 # Player UI layout. Adjust here if text or touch regions need tuning later.
-ROW_X = 40
-ROW_Y = 46
+ROW_X = 35
+ROW_Y = 56
 ROW_WIDTH = 230
 ROW_HEIGHT = 40
 VISIBLE_ROWS = 3
@@ -92,7 +88,7 @@ BACK_STRIP_X = WIDTH - 20
 BACK_STRIP_WIDTH = 20
 LIST_TEXT_X = ROW_X + 12
 LIST_TEXT_WIDTH = ROW_WIDTH - 24
-HIGHLIGHT_X = ROW_X - 10
+HIGHLIGHT_X = ROW_X - 14
 HIGHLIGHT_WIDTH = ROW_WIDTH
 ROW_TEXT_FONT_SIZE = 21
 TEXT_FILL = (0, 11, 61)
@@ -120,7 +116,6 @@ def request_stop(_signum: int, _frame: object) -> None:
 class PlayerAssets:
     theme_id: str
     background: Image.Image
-    overlay: Image.Image
 
 
 @dataclass(frozen=True)
@@ -264,11 +259,9 @@ def load_assets(mode: str) -> PlayerAssets:
         background_path = VAULT_BACKGROUND_PATH
         if not background_path.exists():
             raise FileNotFoundError(f"Vault background is missing: {background_path}")
-    overlay_path = theme_assets.root / "overlay.png"
     return PlayerAssets(
         theme_id=theme_id,
         background=Image.open(background_path).convert("RGBA").resize((WIDTH, HEIGHT)),
-        overlay=Image.open(overlay_path).convert("RGBA").resize((WIDTH, HEIGHT)),
     )
 
 
@@ -451,25 +444,6 @@ class FfmpegPlayback:
         return self.process.poll()
 
 
-def overlay_alpha(elapsed_secs: float) -> int:
-    if elapsed_secs <= 0.0 or elapsed_secs >= OVERLAY_SHOW_SECS:
-        return 0
-    fade_window = min(OVERLAY_FADE_SECS, OVERLAY_SHOW_SECS / 2.0)
-    if fade_window <= 0.0:
-        return 255
-    if elapsed_secs < fade_window:
-        return max(0, min(255, round((elapsed_secs / fade_window) * 255)))
-    fade_out_start = OVERLAY_SHOW_SECS - fade_window
-    if elapsed_secs > fade_out_start:
-        return max(0, min(255, round(((OVERLAY_SHOW_SECS - elapsed_secs) / fade_window) * 255)))
-    return 255
-
-
-def wait_until(deadline: float) -> None:
-    while not STOP_REQUESTED and time.monotonic() < deadline:
-        time.sleep(OVERLAY_FRAME_STEP_SECS)
-
-
 def render_selection_screen(framebuffer: FramebufferWriter, assets: PlayerAssets, state: PlaylistState) -> None:
     image = assets.background.copy()
     draw = ImageDraw.Draw(image, "RGBA")
@@ -508,38 +482,6 @@ def render_selection_screen(framebuffer: FramebufferWriter, assets: PlayerAssets
         draw.text((LIST_TEXT_X, label_y), label, font=row_font, fill=fill)
 
     write_framebuffer_image(framebuffer, image.convert("RGB"))
-
-
-def show_overlay(framebuffer: FramebufferWriter, assets: PlayerAssets, playback: FfmpegPlayback | None = None) -> None:
-    wait_until(time.monotonic() + OVERLAY_DELAY_SECS)
-    if STOP_REQUESTED:
-        return
-
-    resume_after_overlay = False
-    if playback is not None and playback.process is not None and playback.poll() is None and not playback.paused:
-        playback.toggle_pause()
-        resume_after_overlay = True
-
-    started_at = time.monotonic()
-    while not STOP_REQUESTED:
-        elapsed = time.monotonic() - started_at
-        alpha = overlay_alpha(elapsed)
-        if alpha <= 0:
-            if elapsed >= OVERLAY_SHOW_SECS:
-                return
-            wait_until(time.monotonic() + OVERLAY_FRAME_STEP_SECS)
-            continue
-        base = assets.background.copy()
-        overlay = assets.overlay.copy()
-        overlay.putalpha(alpha)
-        composite = Image.alpha_composite(base, overlay)
-        write_framebuffer_image(framebuffer, composite.convert("RGB"))
-        wait_until(time.monotonic() + OVERLAY_FRAME_STEP_SECS)
-
-    if resume_after_overlay and playback is not None and playback.process is not None and playback.poll() is None and playback.paused:
-        playback.toggle_pause()
-
-
 def run_pre_play_hook() -> None:
     hook = Path("/usr/local/bin/pihole-display-pre.sh")
     if hook.exists() and os.access(hook, os.X_OK):
@@ -567,7 +509,7 @@ def scroll_direction_for_point(x: int, y: int) -> int | None:
 
 
 def row_for_point(x: int, y: int, state: PlaylistState) -> int | None:
-    if not (ROW_X <= x < (ROW_X + ROW_WIDTH)):
+    if not (HIGHLIGHT_X <= x < (ROW_X + ROW_WIDTH)):
         return None
     if not (ROW_Y <= y < (ROW_Y + (ROW_HEIGHT * VISIBLE_ROWS))):
         return None
@@ -663,7 +605,6 @@ def run_playback_mode(framebuffer: FramebufferWriter, assets: PlayerAssets, stat
     playback = FfmpegPlayback(fbdev)
     try:
         playback.start(state.current_file())
-        show_overlay(framebuffer, assets, playback)
         left_tap_at = 0.0
         touch_started_at = 0.0
         touch_active = False

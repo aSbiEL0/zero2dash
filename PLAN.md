@@ -1,14 +1,14 @@
 # PLAN
 
-Status: active
-Updated: 2026-04-04
+Status: completed
+Updated: 2026-04-05
 
 Task: replace the split credits / vault video playback flow with a single Python framebuffer player that integrates into the shell and keeps `~/x` reachable only through the vault path.
 
 Acceptance criteria:
 - Credits launch the new player against `~/vid`
 - Vault success launches the same player against `~/x`
-- Normal launches use the active theme `player.png` and `overlay.png`
+- Normal launches use the active theme `player.png`
 - Vault mode overrides only the background image with `themes/global_images/vault.png`
 - File list, scroll strip, play button, back strip, and playback gestures match the approved contract
 - Playback stays foreground and returns cleanly to the shell on exit
@@ -29,3 +29,7 @@ Validation plan:
 - `python3 player.py --self-test`
 - `python3 -m unittest discover -s tests -v`
 - Pi manual checks for credits, vault, scrolling, playback gestures, and exit behavior
+
+Completion note:
+- This slice has been completed and accepted by the operator.
+- Recorded closeout: `coordination/archive/2026-04-05-player-unification-closeout.md`

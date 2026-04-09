@@ -91,6 +91,13 @@ STATUS_BODY_FONT_PATH = os.environ.get("BOOT_SELECTOR_STATUS_BODY_FONT", "")
 STATUS_BODY_FONT_SIZE = int(os.environ.get("BOOT_SELECTOR_STATUS_BODY_FONT_SIZE", "18"))
 STATUS_LINE_SPACING = 18
 STATUS_BOTTOM_MARGIN = 12
+KEYPAD_ECHO_SECS = float(os.environ.get("BOOT_SELECTOR_KEYPAD_ECHO_SECS", "1.0"))
+KEYPAD_ECHO_FONT_PATH = os.environ.get("BOOT_SELECTOR_KEYPAD_ECHO_FONT", "")
+KEYPAD_ECHO_FONT_SIZE = int(os.environ.get("BOOT_SELECTOR_KEYPAD_ECHO_FONT_SIZE", "30"))
+KEYPAD_ECHO_PAD_X = 16
+KEYPAD_ECHO_PAD_Y = 10
+KEYPAD_ECHO_RADIUS = 10
+KEYPAD_ECHO_MARGIN_TOP = 12
 
 ROOT_MENU_1 = "main_menu_1"
 ROOT_MENU_2 = "main_menu_2"
@@ -143,7 +150,7 @@ THEME_IMAGE_FILES = {
     LOGS_STATUS: "stats.png",
     ISS_PLACEHOLDER: "stats.png",
 }
-THEME_REQUIRED_FILES = set(THEME_IMAGE_FILES.values()) | {"granted.gif", "denied.gif", "player.png", "overlay.png"}
+THEME_REQUIRED_FILES = set(THEME_IMAGE_FILES.values()) | {"granted.gif", "denied.gif", "player.png"}
 
 FG = (244, 247, 250)
 ACCENT = (90, 180, 255)
@@ -913,6 +920,54 @@ def draw_status_screen(base_image: Image.Image, screen_name: str, status_text: s
     return frame
 
 
+def keypad_feedback_active(screen_name: str, digit: str | None, visible_until: float, now: float | None = None) -> bool:
+    if screen_name != PIN_KEYPAD or not digit:
+        return False
+    return (time.monotonic() if now is None else now) < visible_until
+
+
+def keypad_feedback_timeout(screen_name: str, digit: str | None, visible_until: float, now: float | None = None) -> float | None:
+    current_time = time.monotonic() if now is None else now
+    if not keypad_feedback_active(screen_name, digit, visible_until, current_time):
+        return None
+    return max(0.0, visible_until - current_time)
+
+
+def draw_keypad_feedback(base_image: Image.Image, digit: str) -> Image.Image:
+    frame = base_image.copy()
+    draw = ImageDraw.Draw(frame)
+    font = _load_ui_font(KEYPAD_ECHO_FONT_PATH, KEYPAD_ECHO_FONT_SIZE)
+    left, top, right, bottom = draw.textbbox((0, 0), digit, font=font)
+    text_width = right - left
+    text_height = bottom - top
+    box_width = text_width + (KEYPAD_ECHO_PAD_X * 2)
+    box_height = text_height + (KEYPAD_ECHO_PAD_Y * 2)
+    box_left = max(0, (frame.width - box_width) // 2)
+    box_top = KEYPAD_ECHO_MARGIN_TOP
+    box_right = min(frame.width - 1, box_left + box_width)
+    box_bottom = min(frame.height - 1, box_top + box_height)
+    draw.rounded_rectangle((box_left, box_top, box_right, box_bottom), radius=KEYPAD_ECHO_RADIUS, fill=(8, 14, 48), outline=ACCENT, width=2)
+    text_x = box_left + ((box_right - box_left - text_width) // 2) - left
+    text_y = box_top + ((box_bottom - box_top - text_height) // 2) - top
+    draw.text((text_x, text_y), digit, font=font, fill=FG)
+    return frame
+
+
+def draw_shell_screen(
+    shell_images: ShellImages,
+    screen_name: str,
+    *,
+    keypad_digit: str | None = None,
+    keypad_visible_until: float = 0.0,
+    now: float | None = None,
+) -> Image.Image:
+    frame = _screen_image(shell_images, screen_name)
+    current_time = time.monotonic() if now is None else now
+    if keypad_feedback_active(screen_name, keypad_digit, keypad_visible_until, current_time):
+        return draw_keypad_feedback(frame, keypad_digit or "")
+    return frame
+
+
 def annotate_touch_regions(image: Image.Image, regions: list[TouchRegion], title: str) -> Image.Image:
     frame = image.copy()
     draw = ImageDraw.Draw(frame)
@@ -1090,10 +1145,14 @@ def wait_for_shell_action_or_mode(
     touch_settle_secs: float,
     touch_debounce_secs: float,
     mode_store: ModeSwitchRequestStore,
+    timeout_secs: float | None = None,
 ) -> tuple[str | None, str | None]:
     ready_after = time.monotonic() + max(0.0, touch_settle_secs)
+    deadline = None if timeout_secs is None else time.monotonic() + max(0.0, timeout_secs)
     announced = False
     while not STOP_REQUESTED:
+        if deadline is not None and time.monotonic() >= deadline:
+            return None, None
         requested_mode = mode_store.consume_request()
         if requested_mode is not None:
             return None, requested_mode
@@ -1101,12 +1160,18 @@ def wait_for_shell_action_or_mode(
             if not announced:
                 print("[boot-selector] No touch device found; waiting for shell mode requests only.", flush=True)
                 announced = True
-            time.sleep(POLL_TIMEOUT_SECS)
+            sleep_window = POLL_TIMEOUT_SECS if deadline is None else min(POLL_TIMEOUT_SECS, max(0.0, deadline - time.monotonic()))
+            if sleep_window <= 0.0:
+                return None, None
+            time.sleep(sleep_window)
             continue
         if not announced:
             print(f"[boot-selector] Waiting for {label} on {touch_reader.describe()}.", flush=True)
             announced = True
-        action = touch_reader.read_action(resolver, ready_after, touch_debounce_secs, timeout_secs=POLL_TIMEOUT_SECS)
+        poll_timeout = POLL_TIMEOUT_SECS if deadline is None else min(POLL_TIMEOUT_SECS, max(0.0, deadline - time.monotonic()))
+        if poll_timeout <= 0.0:
+            return None, None
+        action = touch_reader.read_action(resolver, ready_after, touch_debounce_secs, timeout_secs=poll_timeout)
         if action is not None:
             return action, None
     return None, None
@@ -1483,6 +1548,8 @@ def run_main_screen_shell(
     consecutive_pin_failures = 0
     entered_pin = ""
     pending_pin_shutdown = False
+    last_keypad_digit: str | None = None
+    last_keypad_feedback_until = 0.0
 
     requested_mode = mode_store.consume_request()
     if requested_mode is not None:
@@ -1550,7 +1617,18 @@ def run_main_screen_shell(
             continue
 
         if framebuffer is not None:
-            write_framebuffer_image(framebuffer, _screen_image(shell_images, current_screen))
+            current_time = time.monotonic()
+            write_framebuffer_image(
+                framebuffer,
+                draw_shell_screen(
+                    shell_images,
+                    current_screen,
+                    keypad_digit=last_keypad_digit,
+                    keypad_visible_until=last_keypad_feedback_until,
+                    now=current_time,
+                ),
+            )
+        wait_timeout = keypad_feedback_timeout(current_screen, last_keypad_digit, last_keypad_feedback_until)
         action, requested_mode = wait_for_shell_action_or_mode(
             touch_reader,
             f"{current_screen} selection",
@@ -1558,12 +1636,22 @@ def run_main_screen_shell(
             args.touch_settle_secs,
             args.touch_debounce_secs,
             mode_store,
+            timeout_secs=wait_timeout,
         )
+        if action is None and requested_mode is None and current_screen == PIN_KEYPAD and last_keypad_digit is not None:
+            if not keypad_feedback_active(current_screen, last_keypad_digit, last_keypad_feedback_until):
+                last_keypad_digit = None
+                last_keypad_feedback_until = 0.0
+                continue
         if should_reset_pin_failures(current_screen, action, requested_mode):
             consecutive_pin_failures = 0
             pending_pin_shutdown = False
             entered_pin = ""
+            last_keypad_digit = None
+            last_keypad_feedback_until = 0.0
         if requested_mode is not None:
+            last_keypad_digit = None
+            last_keypad_feedback_until = 0.0
             if requested_mode == SHELL_MODE_MENU:
                 child_manager.stop_current(reason="menu mode request")
                 current_screen = session_root_page
@@ -1589,6 +1677,8 @@ def run_main_screen_shell(
             elif action == APP_ID_LOCKED_CONTENT:
                 current_screen = PIN_KEYPAD
                 entered_pin = ""
+                last_keypad_digit = None
+                last_keypad_feedback_until = 0.0
         elif current_screen == ROOT_MENU_2:
             if action == ROOT_MENU_1:
                 session_root_page = ROOT_MENU_1
@@ -1642,12 +1732,18 @@ def run_main_screen_shell(
         elif current_screen == PIN_KEYPAD:
             if action in {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"}:
                 entered_pin += action
+                last_keypad_digit = action
+                last_keypad_feedback_until = time.monotonic() + KEYPAD_ECHO_SECS
             elif action == "cancel":
                 entered_pin = ""
+                last_keypad_digit = None
+                last_keypad_feedback_until = 0.0
                 current_screen = session_root_page
             elif action == "ok":
                 result, consecutive_pin_failures = evaluate_pin_entry(entered_pin, args.pin, consecutive_pin_failures)
                 entered_pin = ""
+                last_keypad_digit = None
+                last_keypad_feedback_until = 0.0
                 if result == "success":
                     pending_pin_shutdown = False
                     current_screen = ACCESS_GRANTED

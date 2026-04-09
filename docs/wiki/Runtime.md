@@ -29,7 +29,7 @@
 
 - `mainmenu1.png` and `mainmenu2.png` are the root screens
 - `day-night.png`, `settings.png`, `themes.png`, `yes-no.png`, `keypad.png`, and `stats.png` drive child screens and placeholders
-- `player.png` and `overlay.png` are required per-theme player assets
+- `player.png` is the required per-theme player asset
 - `themes/global_images/vault.png` is the fixed vault-mode background override
 - `credits.gif` remains on disk in `boot/`, but the normal Credits button flow no longer uses it
 - Verified installed theme directories are `carbon`, `comic`, `frosty`, and `steele`

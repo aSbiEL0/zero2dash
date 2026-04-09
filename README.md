@@ -54,7 +54,6 @@ Each theme directory must provide:
 - `granted.gif`
 - `denied.gif`
 - `player.png`
-- `overlay.png`
 
 `keypad.png` uses a 4x3 layout:
 
@@ -71,7 +70,7 @@ Player assets and flows:
 
 - Credits now launch the Python framebuffer player against `~/vid`
 - Vault success now launches the same player against `~/x`
-- Normal player launches use the active theme `player.png` background plus `overlay.png`
+- Normal player launches use the active theme `player.png` background
 - Vault mode overrides only the background image with `themes/global_images/vault.png`
 
 ## Shell Modes

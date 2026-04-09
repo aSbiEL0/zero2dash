@@ -18,7 +18,6 @@ class BootSelectorPlayerContractTests(unittest.TestCase):
 
     def test_theme_assets_require_player_assets(self) -> None:
         self.assertIn("player.png", boot_selector.THEME_REQUIRED_FILES)
-        self.assertIn("overlay.png", boot_selector.THEME_REQUIRED_FILES)
 
     def test_credits_launches_player_child_in_credits_mode(self) -> None:
         registry = boot_selector.build_app_registry(self._args())

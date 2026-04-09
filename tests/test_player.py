@@ -27,17 +27,13 @@ class PlayerLogicTests(unittest.TestCase):
         files = player.list_supported_videos(Path("Z:/definitely/missing/path"))
         self.assertEqual(files, [])
 
-    def test_overlay_alpha_fades_in_and_out(self) -> None:
-        self.assertEqual(player.overlay_alpha(0.0), 0)
-        self.assertGreater(player.overlay_alpha(player.OVERLAY_FADE_SECS / 2.0), 0)
-        self.assertEqual(player.overlay_alpha(player.OVERLAY_SHOW_SECS / 2.0), 255)
-        self.assertGreater(player.overlay_alpha(player.OVERLAY_SHOW_SECS - (player.OVERLAY_FADE_SECS / 2.0)), 0)
-        self.assertEqual(player.overlay_alpha(player.OVERLAY_SHOW_SECS), 0)
+    def test_ffmpeg_command_uses_framebuffer_filter(self) -> None:
+        playback = player.FfmpegPlayback("/dev/fb1")
+        command = playback._command_for_video(Path("/tmp/video.mp4"))
 
-    def test_wait_until_returns_immediately_when_deadline_has_passed(self) -> None:
-        with mock.patch.object(player.time, "monotonic", return_value=10.0), mock.patch.object(player.time, "sleep") as sleep:
-            player.wait_until(9.0)
-        sleep.assert_not_called()
+        self.assertIn("-vf", command)
+        self.assertEqual(command[command.index("-vf") + 1], player.FFMPEG_FILTER)
+        self.assertEqual(command.count("-i"), 1)
 
     def test_resolve_video_dir_prefers_existing_home_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -57,6 +53,12 @@ class PlayerLogicTests(unittest.TestCase):
         self.assertEqual(truetype.call_args_list[0].args[0], player.FONT_CANDIDATES[0])
         self.assertEqual(truetype.call_args_list[1].args[0], player.FONT_CANDIDATES[1])
         self.assertEqual(truetype.call_args_list[2].args[0], player.FONT_CANDIDATES[2])
+
+    def test_row_for_point_accepts_left_highlight_extension(self) -> None:
+        files = [Path(f"file-{index}.mp4") for index in range(3)]
+        state = player.PlaylistState(files)
+
+        self.assertEqual(player.row_for_point(player.HIGHLIGHT_X, player.ROW_Y + 5, state), 0)
 
     def test_playlist_scroll_does_not_wrap(self) -> None:
         files = [Path(f"file-{index}.mp4") for index in range(5)]
