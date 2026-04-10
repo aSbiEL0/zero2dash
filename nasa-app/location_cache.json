@@ -3,11 +3,11 @@
   "country_code": "",
   "country_name": "",
   "details_timestamp": 1775442322,
-  "fetched_at": 1775763652,
-  "latitude": 34.2716,
+  "fetched_at": 1775846836,
+  "latitude": 13.8987,
   "location_label": "Ocean",
-  "longitude": 177.8337,
-  "position_timestamp": 1775763651,
+  "longitude": 164.1523,
+  "position_timestamp": 1775846836,
   "source": "open-notify",
   "trail": [
     {
